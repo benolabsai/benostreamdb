@@ -122,6 +122,111 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Validates that an identifier (table name, column name, or schema.table)
+/// contains only alphanumeric characters and underscores, preventing SQL injection.
+fn validate_sql_identifier(ident: &str) -> anyhow::Result<()> {
+    let trimmed = ident.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Identifier cannot be empty");
+    }
+    for part in trimmed.split('.') {
+        if part.is_empty() {
+            anyhow::bail!("Invalid identifier: empty component in '{}'", ident);
+        }
+        if !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            anyhow::bail!(
+                "Invalid identifier '{}': contains non-alphanumeric/underscore characters",
+                ident
+            );
+        }
+        if part.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            anyhow::bail!(
+                "Invalid identifier '{}': component cannot start with a digit",
+                ident
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Escapes a string literal for safe interpolation into single-quoted SQL strings.
+fn escape_sql_literal(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// Sanitizes a table name or filename so no SQL commands, shell injection,
+/// or invalid identifier characters can be formed.
+///
+/// Converts spaces, hyphens, and non-alphanumeric characters to '_', collapses
+/// repeated underscores, prefixes 't_' if starting with a digit, and lowercases.
+fn sanitize_table_name(raw: &str) -> String {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return "table".to_string();
+    }
+
+    // Preserve scratch. schema prefix if explicitly present; other dots (like in filenames .xlsx) belong to name_part
+    let (schema_prefix, name_part) = if raw.to_ascii_lowercase().starts_with("scratch.") {
+        (format!("{}.", SCRATCH_SCHEMA), &raw[8..])
+    } else {
+        ("".to_string(), raw)
+    };
+
+    let mut sanitized = String::with_capacity(name_part.len());
+    let mut last_was_underscore = false;
+
+    for c in name_part.chars() {
+        if c.is_ascii_alphanumeric() {
+            sanitized.push(c.to_ascii_lowercase());
+            last_was_underscore = false;
+        } else {
+            // Convert spaces, punctuation, dashes, quotes, semicolons to '_'
+            if !last_was_underscore && !sanitized.is_empty() {
+                sanitized.push('_');
+                last_was_underscore = true;
+            }
+        }
+    }
+
+    if sanitized.ends_with('_') {
+        sanitized.pop();
+    }
+
+    if sanitized.is_empty() {
+        sanitized = "table".to_string();
+    } else if sanitized
+        .chars()
+        .next()
+        .map_or(false, |c| c.is_ascii_digit())
+    {
+        sanitized = format!("t_{}", sanitized);
+    }
+
+    format!("{}{}", schema_prefix, sanitized)
+}
+
+/// Validates that a schema DDL string contains only valid column specifications
+/// and does not attempt to smuggle chained statements or commands.
+fn validate_schema_ddl(schema_ddl: &str) -> anyhow::Result<()> {
+    use sqlparser::ast::Statement;
+    use sqlparser::dialect::GenericDialect;
+    use sqlparser::parser::Parser;
+
+    let dialect = GenericDialect {};
+    let probe = format!("CREATE TABLE scratch._probe_val ({})", schema_ddl);
+    let statements = Parser::parse_sql(&dialect, &probe)
+        .map_err(|e| anyhow::anyhow!("Invalid schema DDL: {}", e))?;
+    if statements.len() != 1 {
+        anyhow::bail!(
+            "Schema DDL must contain only column specifications without chained statements"
+        );
+    }
+    match &statements[0] {
+        Statement::CreateTable(_) => Ok(()),
+        _ => anyhow::bail!("Schema DDL must be column specifications"),
+    }
+}
+
 pub struct McpServer {
     session: BenoStreamSession,
 }
@@ -236,6 +341,218 @@ impl McpServer {
         Ok(rows)
     }
 
+    async fn fetch_embedding(&self, text: &str) -> Option<Vec<f32>> {
+        let url = std::env::var("BSDB_EMBEDDING_URL")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let model =
+            std::env::var("BSDB_EMBEDDING_MODEL").unwrap_or_else(|_| "all-minilm".to_string());
+        let api_key = std::env::var("BSDB_EMBEDDING_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .ok()?;
+
+        let mut req = client.post(&url);
+        if let Some(key) = api_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+
+        let is_ollama = url.contains("ollama") || url.ends_with("/api/embeddings");
+        let body = if is_ollama {
+            json!({
+                "model": model,
+                "prompt": text
+            })
+        } else {
+            json!({
+                "model": model,
+                "input": text
+            })
+        };
+
+        let resp = req.json(&body).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let json_val: Value = resp.json().await.ok()?;
+
+        if let Some(arr) = json_val.get("embedding").and_then(|v| v.as_array()) {
+            let vec: Vec<f32> = arr
+                .iter()
+                .filter_map(|x| x.as_f64().map(|f| f as f32))
+                .collect();
+            if !vec.is_empty() {
+                return Some(vec);
+            }
+        }
+        if let Some(data) = json_val.get("data").and_then(|v| v.as_array()) {
+            if let Some(first) = data.first() {
+                if let Some(arr) = first.get("embedding").and_then(|v| v.as_array()) {
+                    let vec: Vec<f32> = arr
+                        .iter()
+                        .filter_map(|x| x.as_f64().map(|f| f as f32))
+                        .collect();
+                    if !vec.is_empty() {
+                        return Some(vec);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    async fn fetch_image_embedding(&self, image_base64: &str) -> Option<Vec<f32>> {
+        let url = std::env::var("BSDB_EMBEDDING_URL")
+            .ok()
+            .filter(|s| !s.is_empty())?;
+        let model =
+            std::env::var("BSDB_EMBEDDING_MODEL").unwrap_or_else(|_| "all-minilm".to_string());
+        let api_key = std::env::var("BSDB_EMBEDDING_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .ok()?;
+
+        let mut req = client.post(&url);
+        if let Some(key) = api_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+
+        let is_ollama = url.contains("ollama") || url.ends_with("/api/embeddings");
+        let body = if is_ollama {
+            json!({
+                "model": model,
+                "prompt": "",
+                "images": [image_base64]
+            })
+        } else {
+            json!({
+                "model": model,
+                "input": image_base64
+            })
+        };
+
+        let resp = req.json(&body).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let json_val: Value = resp.json().await.ok()?;
+
+        if let Some(arr) = json_val.get("embedding").and_then(|v| v.as_array()) {
+            let vec: Vec<f32> = arr
+                .iter()
+                .filter_map(|x| x.as_f64().map(|f| f as f32))
+                .collect();
+            if !vec.is_empty() {
+                return Some(vec);
+            }
+        }
+        if let Some(data) = json_val.get("data").and_then(|v| v.as_array()) {
+            if let Some(first) = data.first() {
+                if let Some(arr) = first.get("embedding").and_then(|v| v.as_array()) {
+                    let vec: Vec<f32> = arr
+                        .iter()
+                        .filter_map(|x| x.as_f64().map(|f| f as f32))
+                        .collect();
+                    if !vec.is_empty() {
+                        return Some(vec);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    async fn insert_records_internal(
+        &self,
+        full_table_name: &str,
+        records: &[Value],
+    ) -> Result<usize> {
+        if records.is_empty() {
+            return Ok(0);
+        }
+        let _ = self
+            .session
+            .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", SCRATCH_SCHEMA))
+            .await;
+
+        use std::io::Write;
+        let temp_file = tempfile::Builder::new().suffix(".json").tempfile()?;
+        {
+            let mut writer = std::io::BufWriter::new(temp_file.as_file());
+            for rec in records {
+                let _ = serde_json::to_writer(&mut writer, rec);
+                let _ = writer.write_all(b"\n");
+            }
+            let _ = writer.flush();
+        }
+
+        let path = temp_file.path().to_str().unwrap_or("").replace("\\", "/");
+        let temp_import_name = format!(
+            "{}.temp_import_{}",
+            SCRATCH_SCHEMA,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+
+        let query1 = format!(
+            "CREATE EXTERNAL TABLE {} STORED AS JSON LOCATION '{}'",
+            temp_import_name, path
+        );
+        self.session.sql(&query1).await?;
+
+        let table_check = self
+            .session
+            .sql(&format!("SELECT * FROM {} LIMIT 0", full_table_name))
+            .await;
+        let res = match table_check {
+            Ok((_, schema)) => {
+                let cols_str = schema
+                    .fields()
+                    .iter()
+                    .map(|f| format!("\"{}\"", f.name()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let query2 = if !cols_str.is_empty() {
+                    format!(
+                        "INSERT INTO {} ({}) SELECT {} FROM {}",
+                        full_table_name, cols_str, cols_str, temp_import_name
+                    )
+                } else {
+                    format!(
+                        "INSERT INTO {} SELECT * FROM {}",
+                        full_table_name, temp_import_name
+                    )
+                };
+                self.session.sql(&query2).await
+            }
+            Err(_) => {
+                let query_ctas = format!(
+                    "CREATE TABLE {} AS SELECT * FROM {}",
+                    full_table_name, temp_import_name
+                );
+                self.session.sql(&query_ctas).await
+            }
+        };
+
+        let _ = self
+            .session
+            .sql(&format!("DROP TABLE {}", temp_import_name))
+            .await;
+        res.map(|_| records.len())
+    }
+
     async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
         info!("Handling request method: {}", method);
         match method {
@@ -247,9 +564,124 @@ impl McpServer {
                 },
                 "capabilities": {
                     "tools": {},
-                    "resources": {}
+                    "resources": {},
+                    "prompts": {}
                 }
             })),
+            "prompts/list" => Ok(json!({
+                "prompts": [
+                    {
+                        "name": "benostreamdb_sql_expert",
+                        "description": "Guidance on writing performant BenoStreamDB SQL queries (Vector distance, HNSW indexes, Graph table functions, JSON extraction).",
+                        "arguments": [
+                            {
+                                "name": "topic",
+                                "description": "Specific SQL capability (e.g. 'vector', 'graph', 'json', 'hybrid')",
+                                "required": false
+                            }
+                        ]
+                    },
+                    {
+                        "name": "agent_memory_guide",
+                        "description": "Best practices for agent long-term memory management using store_memory and recall_memory.",
+                        "arguments": []
+                    },
+                    {
+                        "name": "code_rag_strategy",
+                        "description": "Hierarchical Code RAG and repository exploration strategy combining hybrid_search and graph_rag_search (DRIFT RAG).",
+                        "arguments": [
+                            {
+                                "name": "task",
+                                "description": "The coding or exploration task being performed",
+                                "required": false
+                            }
+                        ]
+                    }
+                ]
+            })),
+            "prompts/get" => {
+                let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                match name {
+                    "benostreamdb_sql_expert" => {
+                        let topic = params
+                            .get("arguments")
+                            .and_then(|a| a.get("topic"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("general");
+                        let prompt_text = format!(
+                            "You are an expert AI assistant operating with BenoStreamDB.\n\
+                            Key Capabilities:\n\
+                            - Vector Search: Use `l2_distance(col, '[0.1, ...]')` or `cosine_distance(...)` in ORDER BY ... LIMIT k.\n\
+                            - Vector Indexing: Accelerate scans using `CREATE INDEX idx ON scratch.table (col) USING hnsw`.\n\
+                            - Graph Traversal: Use `SELECT * FROM graph_neighbors('edges', '101', 2, 'auto')` and `graph_shortest_path`.\n\
+                            - Ephemeral Writes: All writes, temporary tables, and index creations MUST target the `scratch` schema (e.g. `scratch.my_table`).\n\
+                            - JSON Path: Use `json_extract_path(metadata, '$.key')`.\n\
+                            Focus topic: {}",
+                            topic
+                        );
+                        Ok(json!({
+                            "description": "BenoStreamDB SQL Expert Guide",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": {
+                                        "type": "text",
+                                        "text": prompt_text
+                                    }
+                                }
+                            ]
+                        }))
+                    }
+                    "agent_memory_guide" => {
+                        let prompt_text = "BenoStreamDB Agent Memory Workflow:\n\
+                        1. Whenever you discover key facts, architectural decisions, or user preferences, call `store_memory` with a descriptive `key`, `content`, and relevant `tags`.\n\
+                        2. At the start of complex tasks or when unsure about context, call `recall_memory` with your current task or query.\n\
+                        3. Memories are stored in `scratch.agent_memories` and are indexed with dense vectors (if BSDB_EMBEDDING_URL is active) and BM25 text search.";
+                        Ok(json!({
+                            "description": "Agent Memory Guide",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": {
+                                        "type": "text",
+                                        "text": prompt_text
+                                    }
+                                }
+                            ]
+                        }))
+                    }
+                    "code_rag_strategy" => {
+                        let task = params
+                            .get("arguments")
+                            .and_then(|a| a.get("task"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("repository analysis");
+                        let prompt_text = format!(
+                            "BenoStreamDB Code RAG Strategy for: {}\n\
+                            1. Dual-Path Retrieval:\n\
+                               - Use `hybrid_search` on code chunks combining exact symbol matches (BM25) and conceptual similarity (Vector).\n\
+                            2. Graph DRIFT Traversal:\n\
+                               - Once key files or function symbols are found, use `graph_rag_search` with mode 'neighbors' or 'subgraph' on call/import graphs to find callers, callees, and dependencies.\n\
+                            3. Synthesis & Ephemeral Prototyping:\n\
+                               - Store intermediate candidate findings into `scratch.findings` using `ingest_records` and join them with repository tables.",
+                            task
+                        );
+                        Ok(json!({
+                            "description": "Code RAG Strategy",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": {
+                                        "type": "text",
+                                        "text": prompt_text
+                                    }
+                                }
+                            ]
+                        }))
+                    }
+                    _ => Err(anyhow::anyhow!("Unknown prompt: {}", name)),
+                }
+            }
             "resources/list" => {
                 let mut resources = Vec::new();
                 if let Ok(rows) = self.query_to_json("SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema != 'information_schema'").await {
@@ -472,18 +904,6 @@ impl McpServer {
                             }
                         },
                         {
-                            "name": "insert_scratch_records",
-                            "description": "Appends JSON rows to an ephemeral scratch table.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "table_name": { "type": "string" },
-                                    "records": { "type": "array", "items": { "type": "object" } }
-                                },
-                                "required": ["table_name", "records"]
-                            }
-                        },
-                        {
                             "name": "export_table",
                             "description": "Exports any table (scratch or main catalog) to local disk as Parquet.",
                             "inputSchema": {
@@ -515,6 +935,94 @@ impl McpServer {
                                     "timeout_ms": { "type": "integer", "description": "Wait budget in ms (default 1000)." }
                                 },
                                 "required": ["table"]
+                            }
+                        },
+                        {
+                            "name": "hybrid_search",
+                            "description": "Performs hybrid search combining BM25 lexical search and dense vector similarity using Reciprocal Rank Fusion (RRF). If query_vector is omitted and BSDB_EMBEDDING_URL is configured, dense embeddings are auto-generated from query_text.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "table": { "type": "string", "description": "Target table name (e.g. 'code_chunks' or 'scratch.agent_memories')" },
+                                    "query_text": { "type": "string", "description": "Search query text for BM25 and vector embedding" },
+                                    "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed embedding vector" },
+                                    "vector_col": { "type": "string", "description": "Vector column name (default 'embedding')" },
+                                    "text_col": { "type": "string", "description": "Text column name (default 'content')" },
+                                    "top_k": { "type": "integer", "description": "Number of top results to return (default 10)" },
+                                    "rrf_k": { "type": "integer", "description": "RRF damping constant (default 60)" }
+                                },
+                                "required": ["table", "query_text"]
+                            }
+                        },
+                        {
+                            "name": "graph_rag_search",
+                            "description": "Performs regional graph retrieval (Graph RAG / DRIFT) around seed nodes using graph table functions (graph_neighbors, graph_subgraph, or graph_shortest_path).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "table": { "type": "string", "description": "Edge table name" },
+                                    "seeds": { "type": "array", "items": { "type": "string" }, "description": "Seed node identifiers" },
+                                    "hops": { "type": "integer", "description": "Traversal depth (default 2)" },
+                                    "mode": { "type": "string", "enum": ["neighbors", "shortest_path", "subgraph"], "description": "Graph retrieval mode (default 'neighbors')" },
+                                    "target": { "type": "string", "description": "Target node for shortest_path mode" },
+                                    "top_k": { "type": "integer", "description": "Max rows to return (default 50)" }
+                                },
+                                "required": ["table", "seeds"]
+                            }
+                        },
+                        {
+                            "name": "store_memory",
+                            "description": "Stores an agent memory, context note, or code insight into the persistent scratch table 'scratch.agent_memories'. Embeddings are auto-generated if BSDB_EMBEDDING_URL is set.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "key": { "type": "string", "description": "Unique key or topic label" },
+                                    "content": { "type": "string", "description": "Memory content or insight" },
+                                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional list of tags or categories" },
+                                    "embedding": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed embedding vector" }
+                                },
+                                "required": ["key", "content"]
+                            }
+                        },
+                        {
+                            "name": "recall_memory",
+                            "description": "Recalls agent memories from 'scratch.agent_memories' using vector similarity or lexical search.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": { "type": "string", "description": "Text query to recall memories for" },
+                                    "tag": { "type": "string", "description": "Optional tag filter" },
+                                    "top_k": { "type": "integer", "description": "Number of memories to recall (default 5)" },
+                                    "embedding": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed query vector" }
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "ingest_records",
+                            "description": "Ingests structured JSON records into a scratch table. Auto-creates the table if it does not exist, and optionally generates embeddings for a specified text column.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "table_name": { "type": "string", "description": "Destination table name (will be placed in scratch schema)" },
+                                    "records": { "type": "array", "items": { "type": "object" }, "description": "Array of JSON objects" },
+                                    "embed_col": { "type": "string", "description": "Optional text column to auto-embed into 'embedding' column" }
+                                },
+                                "required": ["table_name", "records"]
+                            }
+                        },
+                        {
+                            "name": "ingest_file",
+                            "description": "Ingests a local file (PDF documents, Excel .xlsx/.xls/.ods sheets, Images .png/.jpg/.webp, code, markdown, text, JSON, or Parquet) into a scratch table. Text and PDFs are chunked with line/chunk metadata; Excel sheets are converted to structured rows; Images are ingested as base64 Data URIs with optional multimodal embeddings.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "file_path": { "type": "string", "description": "Absolute path to local file" },
+                                    "table_name": { "type": "string", "description": "Target scratch table name (optional, defaults to sanitized file stem)" },
+                                    "chunk_size": { "type": "integer", "description": "Character chunk size for text/code/PDF (default 500)" },
+                                    "embed_chunks": { "type": "boolean", "description": "Whether to auto-generate embeddings for chunks or images (default false)" }
+                                },
+                                "required": ["file_path"]
                             }
                         }
                     ]
@@ -596,32 +1104,27 @@ impl McpServer {
                             .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", SCRATCH_SCHEMA))
                             .await;
 
-                        let full_table_name = if table_name.contains('.') {
-                            let parts: Vec<&str> = table_name.split('.').collect();
-                            let schema = parts
-                                .get(parts.len().saturating_sub(2))
-                                .copied()
-                                .unwrap_or("");
-                            if schema != SCRATCH_SCHEMA {
-                                return Ok(json!({
-                                    "content": [ { "type": "text", "text": format!(
-                                        "Scratch tables must be created in the '{}' schema (got '{}').",
-                                        SCRATCH_SCHEMA, table_name
-                                    ) } ],
-                                    "isError": true
-                                }));
-                            }
-                            table_name.to_string()
-                        } else {
-                            format!("{}.{}", SCRATCH_SCHEMA, table_name)
-                        };
+                        let clean_table = sanitize_table_name(table_name);
+                        let full_table_name =
+                            if clean_table.starts_with(&format!("{}.", SCRATCH_SCHEMA)) {
+                                clean_table
+                            } else {
+                                format!("{}.{}", SCRATCH_SCHEMA, clean_table)
+                            };
+
+                        if let Err(e) = validate_schema_ddl(schema_ddl) {
+                            return Ok(json!({
+                                "content": [ { "type": "text", "text": format!("Invalid schema DDL: {}", e) } ],
+                                "isError": true
+                            }));
+                        }
 
                         // A real BenoStream table (not a DataFusion listing table),
                         // so it carries table metadata and supports INSERT. It lives
                         // in a local scratch dir, not the warehouse.
                         let scratch_dir = std::env::temp_dir().join(format!(
                             "benostreamdb_scratch_{}_{}",
-                            table_name,
+                            full_table_name.replace('.', "_"),
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_nanos())
@@ -664,104 +1167,6 @@ impl McpServer {
                             })),
                         }
                     }
-                    "insert_scratch_records" => {
-                        let table_name = params
-                            .get("arguments")
-                            .and_then(|a| a.get("table_name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let records = params
-                            .get("arguments")
-                            .and_then(|a| a.get("records"))
-                            .and_then(|v| v.as_array());
-
-                        if let Some(records) = records {
-                            if records.is_empty() {
-                                return Ok(
-                                    json!({"content": [{"type": "text", "text": "No records to insert."}]}),
-                                );
-                            }
-                            // Write records to a temporary NDJSON file for DataFusion insertion
-                            use std::io::Write;
-                            match tempfile::Builder::new().suffix(".json").tempfile() {
-                                Ok(temp_file) => {
-                                    let mut writer = std::io::BufWriter::new(temp_file.as_file());
-                                    for rec in records {
-                                        let _ = serde_json::to_writer(&mut writer, rec);
-                                        let _ = writer.write_all(b"\n");
-                                    }
-                                    let _ = writer.flush();
-
-                                    let path =
-                                        temp_file.path().to_str().unwrap_or("").replace("\\", "/");
-                                    let temp_import_name = format!(
-                                        "{}.temp_import_{}",
-                                        SCRATCH_SCHEMA,
-                                        std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_nanos()
-                                    );
-
-                                    let full_table_name = if table_name.contains('.') {
-                                        table_name.to_string()
-                                    } else {
-                                        format!("{}.{}", SCRATCH_SCHEMA, table_name)
-                                    };
-
-                                    let query1 = format!(
-                                        "CREATE EXTERNAL TABLE {} STORED AS JSON LOCATION '{}'",
-                                        temp_import_name, path
-                                    );
-                                    let query2 = format!(
-                                        "INSERT INTO {} SELECT * FROM {}",
-                                        full_table_name, temp_import_name
-                                    );
-                                    let query3 = format!("DROP TABLE {}", temp_import_name);
-
-                                    let mut success = false;
-                                    let mut error_msg = String::new();
-                                    match self.session.sql(&query1).await {
-                                        Ok(_) => {
-                                            match self.session.sql(&query2).await {
-                                                Ok(_) => success = true,
-                                                Err(e) => {
-                                                    error_msg = format!("INSERT error: {}", e)
-                                                }
-                                            }
-                                            let _ = self.session.sql(&query3).await;
-                                        }
-                                        Err(e) => {
-                                            error_msg =
-                                                format!("CREATE EXTERNAL TABLE error: {}", e)
-                                        }
-                                    }
-
-                                    if success {
-                                        Ok(json!({
-                                            "content": [
-                                                { "type": "text", "text": format!("Inserted {} records into {}.", records.len(), table_name) }
-                                            ]
-                                        }))
-                                    } else {
-                                        Ok(json!({
-                                            "content": [
-                                                { "type": "text", "text": format!("Error inserting records into {}: {}", table_name, error_msg) }
-                                            ],
-                                            "isError": true
-                                        }))
-                                    }
-                                }
-                                Err(e) => Ok(
-                                    json!({"content": [{"type": "text", "text": format!("Failed to create temp file: {}", e)}], "isError": true}),
-                                ),
-                            }
-                        } else {
-                            Ok(
-                                json!({"content": [{"type": "text", "text": "Missing 'records' array."}], "isError": true}),
-                            )
-                        }
-                    }
                     "export_table" => {
                         let table_name = params
                             .get("arguments")
@@ -774,16 +1179,17 @@ impl McpServer {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
-                        let full_table_name = if table_name.contains('.') {
-                            table_name.to_string()
+                        let clean_table = sanitize_table_name(table_name);
+                        let full_table_name = if clean_table.contains('.') {
+                            clean_table
                         } else {
-                            format!("{}.{}", SCRATCH_SCHEMA, table_name)
+                            format!("{}.{}", SCRATCH_SCHEMA, clean_table)
                         };
 
+                        let esc_path = escape_sql_literal(&export_path.replace("\\", "/"));
                         let query = format!(
                             "COPY {} TO '{}' STORED AS PARQUET",
-                            full_table_name,
-                            export_path.replace("\\", "/")
+                            full_table_name, esc_path
                         );
                         match self.session.sql(&query).await {
                             Ok(_) => Ok(json!({
@@ -844,11 +1250,11 @@ impl McpServer {
                                 "isError": true
                             }));
                         }
-                        let esc = |s: &str| s.replace('\'', "''");
+                        let sanitized_table = sanitize_table_name(table);
                         let query = format!(
                             "SELECT * FROM subscribe_events('{}', '{}', {}, {})",
-                            esc(table),
-                            esc(filter),
+                            sanitized_table,
+                            escape_sql_literal(filter),
                             max_events,
                             timeout_ms
                         );
@@ -876,6 +1282,835 @@ impl McpServer {
                             }
                             Err(e) => Ok(json!({
                                 "content": [ { "type": "text", "text": format!("Error draining events: {}", e) } ],
+                                "isError": true
+                            })),
+                        }
+                    }
+                    "hybrid_search" => {
+                        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                        let table = args.get("table").and_then(|v| v.as_str()).unwrap_or("");
+                        let query_text = args
+                            .get("query_text")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let vector_col = args
+                            .get("vector_col")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("embedding");
+                        let text_col = args
+                            .get("text_col")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("content");
+                        let top_k =
+                            args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+                        let rrf_k = args.get("rrf_k").and_then(|v| v.as_u64()).unwrap_or(60);
+
+                        if table.is_empty() || query_text.is_empty() {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "hybrid_search requires 'table' and 'query_text'." }],
+                                "isError": true
+                            }));
+                        }
+
+                        let sanitized_table = sanitize_table_name(table);
+                        if let Err(e) = validate_sql_identifier(text_col) {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": format!("Invalid text column: {}", e) }],
+                                "isError": true
+                            }));
+                        }
+                        if let Err(e) = validate_sql_identifier(vector_col) {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": format!("Invalid vector column: {}", e) }],
+                                "isError": true
+                            }));
+                        }
+
+                        let query_vector: Option<Vec<f32>> = if let Some(arr) =
+                            args.get("query_vector").and_then(|v| v.as_array())
+                        {
+                            Some(
+                                arr.iter()
+                                    .filter_map(|x| x.as_f64().map(|f| f as f32))
+                                    .collect(),
+                            )
+                        } else {
+                            self.fetch_embedding(query_text).await
+                        };
+
+                        let esc_text = escape_sql_literal(query_text);
+                        let candidate_k = (top_k * 3).max(20);
+
+                        // 1. BM25 search
+                        let bm25_sql = format!(
+                            "SELECT *, bm25_score({}, '{}') AS _bm25_score FROM {} ORDER BY _bm25_score DESC LIMIT {}",
+                            text_col, esc_text, sanitized_table, candidate_k
+                        );
+                        let bm25_rows = self.query_to_json(&bm25_sql).await.unwrap_or_default();
+
+                        // 2. Vector search (if vector available)
+                        let vec_rows = if let Some(ref v) = query_vector {
+                            let vec_str = format!(
+                                "[{}]",
+                                v.iter()
+                                    .map(|f| f.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                            let vec_sql = format!(
+                                "SELECT *, l2_distance({}, '{}') AS _vec_dist FROM {} ORDER BY _vec_dist ASC LIMIT {}",
+                                vector_col, vec_str, sanitized_table, candidate_k
+                            );
+                            self.query_to_json(&vec_sql).await.unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
+
+                        // If no vector search occurred, return BM25 results up to top_k
+                        if vec_rows.is_empty() {
+                            let results: Vec<Value> = bm25_rows.into_iter().take(top_k).collect();
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&results).unwrap_or_default() }]
+                            }));
+                        }
+
+                        // 3. Merge with RRF
+                        let doc_key = |val: &Value| -> String {
+                            if let Some(id) = val.get("id").and_then(|v| {
+                                v.as_str()
+                                    .map(String::from)
+                                    .or_else(|| v.as_i64().map(|n| n.to_string()))
+                            }) {
+                                return id;
+                            }
+                            if let Some(key) = val.get("key").and_then(|v| v.as_str()) {
+                                return key.to_string();
+                            }
+                            if let (Some(path), Some(chunk)) = (
+                                val.get("path").and_then(|v| v.as_str()),
+                                val.get("chunk_index"),
+                            ) {
+                                return format!("{}:{}", path, chunk);
+                            }
+                            serde_json::to_string(val).unwrap_or_default()
+                        };
+
+                        let mut doc_map: std::collections::HashMap<
+                            String,
+                            (Value, Option<usize>, Option<usize>),
+                        > = std::collections::HashMap::new();
+
+                        for (i, row) in bm25_rows.into_iter().enumerate() {
+                            let k = doc_key(&row);
+                            doc_map.entry(k).or_insert((row, None, None)).1 = Some(i + 1);
+                        }
+                        for (i, row) in vec_rows.into_iter().enumerate() {
+                            let k = doc_key(&row);
+                            let entry = doc_map.entry(k).or_insert((row, None, None));
+                            entry.2 = Some(i + 1);
+                        }
+
+                        let rrf_k_f64 = rrf_k as f64;
+                        let mut fused: Vec<(Value, f64)> = doc_map
+                            .into_values()
+                            .map(|(mut row, bm_rank, v_rank)| {
+                                let mut score = 0.0f64;
+                                if let Some(r) = bm_rank {
+                                    score += 1.0 / (rrf_k_f64 + r as f64);
+                                }
+                                if let Some(r) = v_rank {
+                                    score += 1.0 / (rrf_k_f64 + r as f64);
+                                }
+                                if let Some(obj) = row.as_object_mut() {
+                                    obj.insert("_rrf_score".to_string(), json!(score));
+                                    if let Some(r) = bm_rank {
+                                        obj.insert("_bm25_rank".to_string(), json!(r));
+                                    }
+                                    if let Some(r) = v_rank {
+                                        obj.insert("_vec_rank".to_string(), json!(r));
+                                    }
+                                }
+                                (row, score)
+                            })
+                            .collect();
+
+                        fused.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        let results: Vec<Value> =
+                            fused.into_iter().take(top_k).map(|(r, _)| r).collect();
+
+                        Ok(json!({
+                            "content": [{ "type": "text", "text": serde_json::to_string_pretty(&results).unwrap_or_default() }]
+                        }))
+                    }
+                    "graph_rag_search" => {
+                        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                        let table = args.get("table").and_then(|v| v.as_str()).unwrap_or("");
+                        let seeds = args.get("seeds").and_then(|v| v.as_array());
+                        let hops = args.get("hops").and_then(|v| v.as_u64()).unwrap_or(2);
+                        let mode = args
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("neighbors");
+                        let target = args.get("target").and_then(|v| {
+                            v.as_str()
+                                .map(String::from)
+                                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                        });
+                        let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(50);
+
+                        if table.is_empty() || seeds.is_none() || seeds.as_ref().unwrap().is_empty()
+                        {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "graph_rag_search requires 'table' and non-empty 'seeds' array." }],
+                                "isError": true
+                            }));
+                        }
+                        let sanitized_table = sanitize_table_name(table);
+                        let seeds = seeds.unwrap();
+                        let mut all_rows = Vec::new();
+
+                        for seed_val in seeds {
+                            let seed_str = if let Some(s) = seed_val.as_str() {
+                                s.to_string()
+                            } else if let Some(n) = seed_val.as_i64() {
+                                n.to_string()
+                            } else {
+                                seed_val.to_string()
+                            };
+
+                            let query = match mode {
+                                "shortest_path" => {
+                                    let target_str =
+                                        escape_sql_literal(&target.clone().unwrap_or_default());
+                                    format!(
+                                        "SELECT * FROM graph_shortest_path('{}', '{}', '{}', 'auto') LIMIT {}",
+                                        sanitized_table, escape_sql_literal(&seed_str), target_str, top_k
+                                    )
+                                }
+                                "subgraph" => {
+                                    format!(
+                                        "SELECT * FROM graph_subgraph('{}', '{}', {}, 'auto') LIMIT {}",
+                                        sanitized_table, escape_sql_literal(&seed_str), hops, top_k
+                                    )
+                                }
+                                _ => {
+                                    format!(
+                                        "SELECT * FROM graph_neighbors('{}', '{}', {}, 'auto') LIMIT {}",
+                                        sanitized_table, escape_sql_literal(&seed_str), hops, top_k
+                                    )
+                                }
+                            };
+
+                            if let Ok(rows) = self.query_to_json(&query).await {
+                                all_rows.extend(rows);
+                                if all_rows.len() >= top_k as usize {
+                                    all_rows.truncate(top_k as usize);
+                                    break;
+                                }
+                            }
+                        }
+
+                        Ok(json!({
+                            "content": [{ "type": "text", "text": serde_json::to_string_pretty(&all_rows).unwrap_or_default() }]
+                        }))
+                    }
+                    "store_memory" => {
+                        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                        let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                        let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                        let tags = args.get("tags").and_then(|v| v.as_array());
+
+                        if key.is_empty() || content.is_empty() {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "store_memory requires 'key' and 'content'." }],
+                                "isError": true
+                            }));
+                        }
+
+                        let memory_table = format!("{}.agent_memories", SCRATCH_SCHEMA);
+
+                        // Auto-create memory table if needed
+                        let table_check = self
+                            .session
+                            .sql(&format!("SELECT * FROM {} LIMIT 0", memory_table))
+                            .await;
+                        if table_check.is_err() {
+                            let _ = self
+                                .session
+                                .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", SCRATCH_SCHEMA))
+                                .await;
+                            let create_ddl = format!(
+                                "CREATE TABLE {} (key VARCHAR, content VARCHAR, tags VARCHAR, created_at VARCHAR, embedding VARCHAR)",
+                                memory_table
+                            );
+                            let _ = self.session.sql(&create_ddl).await;
+                        }
+
+                        let embedding: Option<Vec<f32>> =
+                            if let Some(arr) = args.get("embedding").and_then(|v| v.as_array()) {
+                                Some(
+                                    arr.iter()
+                                        .filter_map(|x| x.as_f64().map(|f| f as f32))
+                                        .collect(),
+                                )
+                            } else {
+                                self.fetch_embedding(content).await
+                            };
+
+                        let tags_str = tags
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            })
+                            .unwrap_or_default();
+
+                        let created_at = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            .to_string();
+
+                        let embedding_str = embedding
+                            .as_ref()
+                            .map(|v| {
+                                format!(
+                                    "[{}]",
+                                    v.iter()
+                                        .map(|f| f.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )
+                            })
+                            .unwrap_or_default();
+
+                        let record = json!({
+                            "key": key,
+                            "content": content,
+                            "tags": tags_str,
+                            "created_at": created_at,
+                            "embedding": embedding_str
+                        });
+
+                        match self.insert_records_internal(&memory_table, &[record]).await {
+                            Ok(_) => Ok(json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": format!("Memory stored successfully with key: '{}' (embedding: {}).", key, embedding.is_some())
+                                }]
+                            })),
+                            Err(e) => Ok(json!({
+                                "content": [{ "type": "text", "text": format!("Error storing memory: {}", e) }],
+                                "isError": true
+                            })),
+                        }
+                    }
+                    "recall_memory" => {
+                        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                        let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                        let tag = args.get("tag").and_then(|v| v.as_str());
+                        let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5);
+
+                        if query.is_empty() {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "recall_memory requires 'query'." }],
+                                "isError": true
+                            }));
+                        }
+
+                        let memory_table = format!("{}.agent_memories", SCRATCH_SCHEMA);
+                        if self
+                            .session
+                            .sql(&format!("SELECT * FROM {} LIMIT 0", memory_table))
+                            .await
+                            .is_err()
+                        {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "[]" }]
+                            }));
+                        }
+
+                        let query_vector: Option<Vec<f32>> =
+                            if let Some(arr) = args.get("embedding").and_then(|v| v.as_array()) {
+                                Some(
+                                    arr.iter()
+                                        .filter_map(|x| x.as_f64().map(|f| f as f32))
+                                        .collect(),
+                                )
+                            } else {
+                                self.fetch_embedding(query).await
+                            };
+
+                        let esc_query = query.replace('\'', "''");
+                        let tag_filter = tag
+                            .map(|t| format!("AND tags LIKE '%{}%'", t.replace('\'', "''")))
+                            .unwrap_or_default();
+
+                        let sql = if let Some(v) = query_vector {
+                            let vec_str = format!(
+                                "[{}]",
+                                v.iter()
+                                    .map(|f| f.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                            format!(
+                                "SELECT key, content, tags, created_at, l2_distance(embedding, '{}') AS distance FROM {} WHERE length(embedding) > 0 {} ORDER BY distance ASC LIMIT {}",
+                                vec_str, memory_table, tag_filter, top_k
+                            )
+                        } else {
+                            format!(
+                                "SELECT key, content, tags, created_at, bm25_score(content, '{}') AS score FROM {} WHERE 1=1 {} ORDER BY score DESC LIMIT {}",
+                                esc_query, memory_table, tag_filter, top_k
+                            )
+                        };
+
+                        match self.query_to_json(&sql).await {
+                            Ok(rows) => Ok(json!({
+                                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&rows).unwrap_or_default() }]
+                            })),
+                            Err(e) => Ok(json!({
+                                "content": [{ "type": "text", "text": format!("Error recalling memory: {}", e) }],
+                                "isError": true
+                            })),
+                        }
+                    }
+                    "ingest_records" => {
+                        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                        let table_name = args
+                            .get("table_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let records = args.get("records").and_then(|v| v.as_array());
+                        let embed_col = args.get("embed_col").and_then(|v| v.as_str());
+
+                        if table_name.is_empty() || records.is_none() {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "ingest_records requires 'table_name' and 'records' array." }],
+                                "isError": true
+                            }));
+                        }
+                        let mut records = records.unwrap().clone();
+                        if records.is_empty() {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "No records to ingest." }]
+                            }));
+                        }
+
+                        let clean_table = sanitize_table_name(table_name);
+                        let full_table_name =
+                            if clean_table.starts_with(&format!("{}.", SCRATCH_SCHEMA)) {
+                                clean_table
+                            } else {
+                                format!("{}.{}", SCRATCH_SCHEMA, clean_table)
+                            };
+
+                        if let Some(col) = embed_col {
+                            if let Err(e) = validate_sql_identifier(col) {
+                                return Ok(json!({
+                                    "content": [{ "type": "text", "text": format!("Invalid embed column: {}", e) }],
+                                    "isError": true
+                                }));
+                            }
+                            for rec in &mut records {
+                                if let Some(obj) = rec.as_object_mut() {
+                                    if !obj.contains_key("embedding") {
+                                        if let Some(text) = obj.get(col).and_then(|v| v.as_str()) {
+                                            if let Some(vec) = self.fetch_embedding(text).await {
+                                                let vec_str = format!(
+                                                    "[{}]",
+                                                    vec.iter()
+                                                        .map(|f| f.to_string())
+                                                        .collect::<Vec<_>>()
+                                                        .join(", ")
+                                                );
+                                                obj.insert("embedding".to_string(), json!(vec_str));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        match self
+                            .insert_records_internal(&full_table_name, &records)
+                            .await
+                        {
+                            Ok(count) => Ok(json!({
+                                "content": [{ "type": "text", "text": format!("Ingested {} records into {}.", count, full_table_name) }]
+                            })),
+                            Err(e) => Ok(json!({
+                                "content": [{ "type": "text", "text": format!("Error ingesting records into {}: {}", full_table_name, e) }],
+                                "isError": true
+                            })),
+                        }
+                    }
+                    "ingest_file" => {
+                        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                        let file_path =
+                            args.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+                        let user_table_name = args
+                            .get("table_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let chunk_size = args
+                            .get("chunk_size")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(500) as usize;
+                        let embed_chunks = args
+                            .get("embed_chunks")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        if file_path.is_empty() {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "ingest_file requires 'file_path'." }],
+                                "isError": true
+                            }));
+                        }
+
+                        let p = std::path::Path::new(file_path);
+                        if !p.exists() {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": format!("File not found: {}", file_path) }],
+                                "isError": true
+                            }));
+                        }
+
+                        let clean_table = if !user_table_name.trim().is_empty() {
+                            sanitize_table_name(user_table_name.trim())
+                        } else {
+                            let stem = p
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("ingested_file");
+                            sanitize_table_name(stem)
+                        };
+
+                        let full_table_name =
+                            if clean_table.starts_with(&format!("{}.", SCRATCH_SCHEMA)) {
+                                clean_table
+                            } else {
+                                format!("{}.{}", SCRATCH_SCHEMA, clean_table)
+                            };
+
+                        let ext = p
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        let mut records = Vec::new();
+
+                        if ext == "json" {
+                            let content = std::fs::read_to_string(p)?;
+                            if let Ok(val) = serde_json::from_str::<Value>(&content) {
+                                if let Some(arr) = val.as_array() {
+                                    records = arr.clone();
+                                } else if val.is_object() {
+                                    records.push(val);
+                                }
+                            }
+                        } else if ext == "jsonl" || ext == "ndjson" {
+                            let content = std::fs::read_to_string(p)?;
+                            for line in content.lines() {
+                                if !line.trim().is_empty() {
+                                    if let Ok(val) = serde_json::from_str::<Value>(line) {
+                                        records.push(val);
+                                    }
+                                }
+                            }
+                        } else if ext == "pdf" {
+                            match pdf_extract::extract_text(p) {
+                                Ok(content) => {
+                                    let lines: Vec<&str> = content.lines().collect();
+                                    let mut cur_chunk = String::new();
+                                    let mut start_line = 1;
+                                    let mut chunk_idx = 0;
+
+                                    for (line_idx, line) in lines.iter().enumerate() {
+                                        if cur_chunk.len() + line.len() > chunk_size
+                                            && !cur_chunk.is_empty()
+                                        {
+                                            let mut rec = json!({
+                                                "path": file_path,
+                                                "chunk_index": chunk_idx,
+                                                "start_line": start_line,
+                                                "end_line": line_idx,
+                                                "content": cur_chunk.clone(),
+                                                "format": "pdf"
+                                            });
+                                            if embed_chunks {
+                                                if let Some(vec) =
+                                                    self.fetch_embedding(&cur_chunk).await
+                                                {
+                                                    let vec_str = format!(
+                                                        "[{}]",
+                                                        vec.iter()
+                                                            .map(|f| f.to_string())
+                                                            .collect::<Vec<_>>()
+                                                            .join(", ")
+                                                    );
+                                                    rec["embedding"] = json!(vec_str);
+                                                }
+                                            }
+                                            records.push(rec);
+                                            chunk_idx += 1;
+                                            cur_chunk.clear();
+                                            start_line = line_idx + 1;
+                                        }
+                                        cur_chunk.push_str(line);
+                                        cur_chunk.push('\n');
+                                    }
+
+                                    if !cur_chunk.is_empty() {
+                                        let mut rec = json!({
+                                            "path": file_path,
+                                            "chunk_index": chunk_idx,
+                                            "start_line": start_line,
+                                            "end_line": lines.len(),
+                                            "content": cur_chunk.clone(),
+                                            "format": "pdf"
+                                        });
+                                        if embed_chunks {
+                                            if let Some(vec) =
+                                                self.fetch_embedding(&cur_chunk).await
+                                            {
+                                                let vec_str = format!(
+                                                    "[{}]",
+                                                    vec.iter()
+                                                        .map(|f| f.to_string())
+                                                        .collect::<Vec<_>>()
+                                                        .join(", ")
+                                                );
+                                                rec["embedding"] = json!(vec_str);
+                                            }
+                                        }
+                                        records.push(rec);
+                                    }
+                                }
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "content": [{ "type": "text", "text": format!("Error extracting text from PDF '{}': {}", file_path, e) }],
+                                        "isError": true
+                                    }));
+                                }
+                            }
+                        } else if matches!(ext.as_str(), "xlsx" | "xls" | "xlsb" | "ods") {
+                            use calamine::Reader;
+                            match calamine::open_workbook_auto(p) {
+                                Ok(mut workbook) => {
+                                    let sheet_names = workbook.sheet_names().to_vec();
+                                    for sheet in sheet_names {
+                                        if let Ok(range) = workbook.worksheet_range(&sheet) {
+                                            let mut rows_iter = range.rows();
+                                            if let Some(header_row) = rows_iter.next() {
+                                                let headers: Vec<String> = header_row
+                                                    .iter()
+                                                    .enumerate()
+                                                    .map(|(idx, cell)| match cell {
+                                                        calamine::Data::String(s)
+                                                            if !s.trim().is_empty() =>
+                                                        {
+                                                            s.trim().to_string()
+                                                        }
+                                                        _ => format!("col_{}", idx + 1),
+                                                    })
+                                                    .collect();
+
+                                                for (row_idx, row) in rows_iter.enumerate() {
+                                                    let mut row_map = serde_json::Map::new();
+                                                    row_map
+                                                        .insert("sheet".to_string(), json!(sheet));
+                                                    row_map.insert(
+                                                        "row_index".to_string(),
+                                                        json!(row_idx + 2),
+                                                    );
+                                                    let mut row_text_buf = String::new();
+                                                    for (col_idx, cell) in row.iter().enumerate() {
+                                                        let col_name = headers
+                                                            .get(col_idx)
+                                                            .cloned()
+                                                            .unwrap_or_else(|| {
+                                                                format!("col_{}", col_idx + 1)
+                                                            });
+                                                        let val = match cell {
+                                                            calamine::Data::Empty => Value::Null,
+                                                            calamine::Data::String(s) => {
+                                                                row_text_buf.push_str(s);
+                                                                row_text_buf.push(' ');
+                                                                json!(s)
+                                                            }
+                                                            calamine::Data::Float(f) => json!(f),
+                                                            calamine::Data::Int(i) => json!(i),
+                                                            calamine::Data::Bool(b) => json!(b),
+                                                            calamine::Data::DateTime(d) => {
+                                                                json!(d.to_string())
+                                                            }
+                                                            calamine::Data::DateTimeIso(s) => {
+                                                                json!(s)
+                                                            }
+                                                            calamine::Data::DurationIso(s) => {
+                                                                json!(s)
+                                                            }
+                                                            calamine::Data::Error(e) => {
+                                                                json!(format!("{:?}", e))
+                                                            }
+                                                        };
+                                                        row_map.insert(col_name, val);
+                                                    }
+                                                    if embed_chunks
+                                                        && !row_text_buf.trim().is_empty()
+                                                    {
+                                                        if let Some(vec) = self
+                                                            .fetch_embedding(row_text_buf.trim())
+                                                            .await
+                                                        {
+                                                            let vec_str = format!(
+                                                                "[{}]",
+                                                                vec.iter()
+                                                                    .map(|f| f.to_string())
+                                                                    .collect::<Vec<_>>()
+                                                                    .join(", ")
+                                                            );
+                                                            row_map.insert(
+                                                                "embedding".to_string(),
+                                                                json!(vec_str),
+                                                            );
+                                                        }
+                                                    }
+                                                    records.push(Value::Object(row_map));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "content": [{ "type": "text", "text": format!("Error opening spreadsheet '{}': {}", file_path, e) }],
+                                        "isError": true
+                                    }));
+                                }
+                            }
+                        } else if matches!(
+                            ext.as_str(),
+                            "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg"
+                        ) {
+                            use base64::Engine;
+                            match std::fs::read(p) {
+                                Ok(img_bytes) => {
+                                    let b64 = base64::prelude::BASE64_STANDARD.encode(&img_bytes);
+                                    let mime_type = match ext.as_str() {
+                                        "jpg" | "jpeg" => "image/jpeg",
+                                        "png" => "image/png",
+                                        "webp" => "image/webp",
+                                        "gif" => "image/gif",
+                                        "svg" => "image/svg+xml",
+                                        _ => "image/png",
+                                    };
+                                    let data_uri = format!("data:{};base64,{}", mime_type, b64);
+                                    let mut rec = json!({
+                                        "path": file_path,
+                                        "format": ext,
+                                        "content": data_uri,
+                                        "size_bytes": img_bytes.len(),
+                                    });
+                                    if embed_chunks {
+                                        if let Some(vec) = self.fetch_image_embedding(&b64).await {
+                                            let vec_str = format!(
+                                                "[{}]",
+                                                vec.iter()
+                                                    .map(|f| f.to_string())
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            );
+                                            rec["embedding"] = json!(vec_str);
+                                        }
+                                    }
+                                    records.push(rec);
+                                }
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "content": [{ "type": "text", "text": format!("Error reading image '{}': {}", file_path, e) }],
+                                        "isError": true
+                                    }));
+                                }
+                            }
+                        } else {
+                            // Text / code chunking
+                            let content = std::fs::read_to_string(p)?;
+                            let lines: Vec<&str> = content.lines().collect();
+                            let mut cur_chunk = String::new();
+                            let mut start_line = 1;
+                            let mut chunk_idx = 0;
+
+                            for (line_idx, line) in lines.iter().enumerate() {
+                                if cur_chunk.len() + line.len() > chunk_size
+                                    && !cur_chunk.is_empty()
+                                {
+                                    let mut rec = json!({
+                                        "path": file_path,
+                                        "chunk_index": chunk_idx,
+                                        "start_line": start_line,
+                                        "end_line": line_idx,
+                                        "content": cur_chunk.clone()
+                                    });
+                                    if embed_chunks {
+                                        if let Some(vec) = self.fetch_embedding(&cur_chunk).await {
+                                            let vec_str = format!(
+                                                "[{}]",
+                                                vec.iter()
+                                                    .map(|f| f.to_string())
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            );
+                                            rec["embedding"] = json!(vec_str);
+                                        }
+                                    }
+                                    records.push(rec);
+                                    chunk_idx += 1;
+                                    cur_chunk.clear();
+                                    start_line = line_idx + 1;
+                                }
+                                cur_chunk.push_str(line);
+                                cur_chunk.push('\n');
+                            }
+
+                            if !cur_chunk.is_empty() {
+                                let mut rec = json!({
+                                    "path": file_path,
+                                    "chunk_index": chunk_idx,
+                                    "start_line": start_line,
+                                    "end_line": lines.len(),
+                                    "content": cur_chunk.clone()
+                                });
+                                if embed_chunks {
+                                    if let Some(vec) = self.fetch_embedding(&cur_chunk).await {
+                                        let vec_str = format!(
+                                            "[{}]",
+                                            vec.iter()
+                                                .map(|f| f.to_string())
+                                                .collect::<Vec<_>>()
+                                                .join(", ")
+                                        );
+                                        rec["embedding"] = json!(vec_str);
+                                    }
+                                }
+                                records.push(rec);
+                            }
+                        }
+
+                        match self
+                            .insert_records_internal(&full_table_name, &records)
+                            .await
+                        {
+                            Ok(count) => Ok(json!({
+                                "content": [{ "type": "text", "text": format!("Ingested {} records from '{}' into {}.", count, file_path, full_table_name) }]
+                            })),
+                            Err(e) => Ok(json!({
+                                "content": [{ "type": "text", "text": format!("Error ingesting file into {}: {}", full_table_name, e) }],
                                 "isError": true
                             })),
                         }
@@ -928,8 +2163,13 @@ mod tests {
         let tools = res["tools"].as_array().unwrap();
         assert!(tools.iter().any(|t| t["name"] == "execute_sql"));
         assert!(tools.iter().any(|t| t["name"] == "create_scratch_table"));
-        assert!(tools.iter().any(|t| t["name"] == "insert_scratch_records"));
         assert!(tools.iter().any(|t| t["name"] == "export_table"));
+        assert!(tools.iter().any(|t| t["name"] == "hybrid_search"));
+        assert!(tools.iter().any(|t| t["name"] == "graph_rag_search"));
+        assert!(tools.iter().any(|t| t["name"] == "store_memory"));
+        assert!(tools.iter().any(|t| t["name"] == "recall_memory"));
+        assert!(tools.iter().any(|t| t["name"] == "ingest_records"));
+        assert!(tools.iter().any(|t| t["name"] == "ingest_file"));
     }
 
     #[tokio::test]
@@ -972,12 +2212,12 @@ mod tests {
             .unwrap();
         assert!(res.get("isError").is_none());
 
-        // 2. Insert records
+        // 2. Insert records via ingest_records
         let res = server
             .handle_request(
                 "tools/call",
                 json!({
-                    "name": "insert_scratch_records",
+                    "name": "ingest_records",
                     "arguments": {
                         "table_name": "test_table",
                         "records": [
@@ -1028,7 +2268,7 @@ mod tests {
             .handle_request(
                 "tools/call",
                 json!({
-                    "name": "insert_scratch_records",
+                    "name": "ingest_records",
                     "arguments": { "table_name": "export_test", "records": [{"id": 42}] }
                 }),
             )
@@ -1210,5 +2450,592 @@ mod tests {
 
         let content = res["contents"][0]["text"].as_str().unwrap();
         assert!(content.contains("id"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_prompts() {
+        let server = McpServer::new();
+        let list_res = server
+            .handle_request("prompts/list", json!({}))
+            .await
+            .unwrap();
+        let prompts = list_res["prompts"].as_array().unwrap();
+        assert!(prompts
+            .iter()
+            .any(|p| p["name"] == "benostreamdb_sql_expert"));
+        assert!(prompts.iter().any(|p| p["name"] == "agent_memory_guide"));
+        assert!(prompts.iter().any(|p| p["name"] == "code_rag_strategy"));
+
+        let get_res = server
+            .handle_request(
+                "prompts/get",
+                json!({
+                    "name": "benostreamdb_sql_expert",
+                    "arguments": { "topic": "vector" }
+                }),
+            )
+            .await
+            .unwrap();
+        let msg = get_res["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(msg.contains("Vector Search"));
+        assert!(msg.contains("vector"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_agent_memory() {
+        let server = McpServer::new();
+
+        // 1. Store memory
+        let store_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "store_memory",
+                    "arguments": {
+                        "key": "user_pref_theme",
+                        "content": "User prefers dark mode and high contrast charts.",
+                        "tags": ["preferences", "ui"],
+                        "embedding": [0.1, 0.2, 0.3]
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(store_res.get("isError").is_none());
+
+        // 2. Recall memory
+        let recall_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "recall_memory",
+                    "arguments": {
+                        "query": "dark mode preferences",
+                        "tag": "preferences",
+                        "embedding": [0.1, 0.2, 0.3]
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let text = recall_res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("user_pref_theme"));
+        assert!(text.contains("dark mode"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_hybrid_search() {
+        let server = McpServer::new();
+
+        // Ingest sample records
+        server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_records",
+                    "arguments": {
+                        "table_name": "search_docs",
+                        "records": [
+                            {
+                                "id": "doc1",
+                                "content": "Fast HNSW vector indexing and distance search",
+                                "embedding": "[0.9, 0.1, 0.0]"
+                            },
+                            {
+                                "id": "doc2",
+                                "content": "Property graph traversal and shortest paths",
+                                "embedding": "[0.0, 0.8, 0.1]"
+                            }
+                        ]
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+
+        // Run hybrid search
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "hybrid_search",
+                    "arguments": {
+                        "table": "scratch.search_docs",
+                        "query_text": "vector search",
+                        "query_vector": [0.9, 0.1, 0.0],
+                        "top_k": 2
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("doc1"));
+        assert!(text.contains("_rrf_score"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_records_and_file() {
+        let server = McpServer::new();
+
+        // 1. Ingest JSON file
+        let mut temp = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+        use std::io::Write;
+        let data = json!([
+            {"id": "c1", "content": "function authenticate() { return true; }"},
+            {"id": "c2", "content": "function authorize() { return false; }"}
+        ]);
+        let _ = serde_json::to_writer(&mut temp, &data);
+        let _ = temp.flush();
+
+        let path = temp.path().to_str().unwrap().to_string();
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": path,
+                        "table_name": "file_code_chunks"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none());
+
+        // Verify via execute_sql
+        let sql_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT count(*) AS total FROM scratch.file_code_chunks"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let text = sql_res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"total\":2") || text.contains("\"total\": 2"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_image_files() {
+        let server = McpServer::new();
+        use std::io::Write;
+
+        // 1. PNG Image test
+        let mut png_temp = tempfile::Builder::new().suffix(".png").tempfile().unwrap();
+        let png_bytes: [u8; 67] = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+            0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, // IDAT
+            0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82, // IEND
+        ];
+        png_temp.write_all(&png_bytes).unwrap();
+        png_temp.flush().unwrap();
+
+        let path = png_temp.path().to_str().unwrap().to_string();
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": path,
+                        "table_name": "png_assets"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none(), "png ingest failed: {res}");
+
+        // Verify via execute_sql
+        let sql_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT format, size_bytes, substr(content, 1, 22) AS header FROM scratch.png_assets"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let text = sql_res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("png"));
+        assert!(text.contains("data:image/png;base64,"));
+
+        // 2. SVG Image test
+        let mut svg_temp = tempfile::Builder::new().suffix(".svg").tempfile().unwrap();
+        let svg_data = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle cx="5" cy="5" r="5" fill="blue"/></svg>"#;
+        svg_temp.write_all(svg_data).unwrap();
+        svg_temp.flush().unwrap();
+
+        let svg_path = svg_temp.path().to_str().unwrap().to_string();
+        let res2 = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": svg_path,
+                        "table_name": "svg_assets"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res2.get("isError").is_none(), "svg ingest failed: {res2}");
+
+        let sql_res2 = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT format, substr(content, 1, 26) AS header FROM scratch.svg_assets"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let text2 = sql_res2["content"][0]["text"].as_str().unwrap();
+        assert!(text2.contains("svg"));
+        assert!(text2.contains("data:image/svg+xml;base64,"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_text_and_code_chunking() {
+        let server = McpServer::new();
+        use std::io::Write;
+
+        let mut code_temp = tempfile::Builder::new().suffix(".rs").tempfile().unwrap();
+        let code_data = "fn compute_similarity(a: &[f32], b: &[f32]) -> f32 {\n    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();\n    dot\n}\n\nfn normalize(v: &mut [f32]) {\n    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();\n    for x in v.iter_mut() { *x /= norm; }\n}\n";
+        code_temp.write_all(code_data.as_bytes()).unwrap();
+        code_temp.flush().unwrap();
+
+        let path = code_temp.path().to_str().unwrap().to_string();
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": path,
+                        "table_name": "rust_code_chunks",
+                        "chunk_size": 100
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none(), "code chunking failed: {res}");
+
+        let sql_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT chunk_index, start_line, end_line, length(content) AS len FROM scratch.rust_code_chunks ORDER BY chunk_index"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let text = sql_res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"chunk_index\":0") || text.contains("\"chunk_index\": 0"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_pdf_and_spreadsheet_error_handling() {
+        let server = McpServer::new();
+        use std::io::Write;
+
+        // Ingest invalid/corrupted PDF returns a clean MCP error
+        let mut corrupt_pdf = tempfile::Builder::new().suffix(".pdf").tempfile().unwrap();
+        corrupt_pdf.write_all(b"not a valid pdf content").unwrap();
+        corrupt_pdf.flush().unwrap();
+
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": corrupt_pdf.path().to_str().unwrap(),
+                        "table_name": "bad_pdf"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res["isError"], true);
+        let err_msg = res["content"][0]["text"].as_str().unwrap();
+        assert!(err_msg.contains("Error extracting text from PDF"));
+
+        // Ingest invalid spreadsheet returns a clean MCP error
+        let mut corrupt_xlsx = tempfile::Builder::new().suffix(".xlsx").tempfile().unwrap();
+        corrupt_xlsx.write_all(b"not a valid xlsx archive").unwrap();
+        corrupt_xlsx.flush().unwrap();
+
+        let res_xlsx = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": corrupt_xlsx.path().to_str().unwrap(),
+                        "table_name": "bad_xlsx"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res_xlsx["isError"], true);
+        let err_msg_xlsx = res_xlsx["content"][0]["text"].as_str().unwrap();
+        assert!(err_msg_xlsx.contains("Error opening spreadsheet"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_file_default_table_name() {
+        let server = McpServer::new();
+
+        // Create a temp json file with a specific stem e.g. "audit_metrics.json"
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("audit_metrics.json");
+        let data = json!([
+            {"metric": "latency_p99", "value": 12.5},
+            {"metric": "error_rate", "value": 0.001}
+        ]);
+        std::fs::write(&file_path, serde_json::to_string(&data).unwrap()).unwrap();
+
+        // Call ingest_file WITHOUT table_name
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": file_path.to_str().unwrap()
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none(), "ingest failed: {res}");
+
+        // Verify table scratch.audit_metrics was created and populated
+        let sql_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT count(*) AS total FROM scratch.audit_metrics"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let text = sql_res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"total\":2") || text.contains("\"total\": 2"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_server_fuzz_resilience() {
+        let server = McpServer::new();
+
+        // 1. Unknown / malformed methods should return error without panicking
+        let bad_method_res = server
+            .handle_request("non_existent_method_xyz", json!({}))
+            .await;
+        assert!(bad_method_res.is_err());
+        assert!(bad_method_res
+            .unwrap_err()
+            .to_string()
+            .contains("Method not found"));
+
+        // 2. Tool calls with completely invalid arguments should return clean errors
+        let bad_tool_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "unknown_tool",
+                    "arguments": { "foo": "bar" }
+                }),
+            )
+            .await;
+        assert!(bad_tool_res.is_err());
+
+        // 3. Fuzzing execute_sql with garbage SQL strings
+        for bad_sql in [
+            "",
+            "   ",
+            ";;;",
+            "SELECT FROM WHERE",
+            "DROP SYSTEM EVERYTHING -- injection",
+            "1234567890",
+            "\0\0\0",
+        ] {
+            let res = server
+                .handle_request(
+                    "tools/call",
+                    json!({
+                        "name": "execute_sql",
+                        "arguments": { "query": bad_sql }
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res["isError"], true, "expected error for: {bad_sql}");
+        }
+
+        // 4. Verify server is still completely healthy and operational
+        let ok_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": { "query": "SELECT 1337 AS alive" }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(ok_res.get("isError").is_none());
+        assert!(ok_res["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("1337"));
+    }
+
+    #[test]
+    fn test_mcp_sanitize_table_name() {
+        assert_eq!(sanitize_table_name("my report 2024"), "my_report_2024");
+        assert_eq!(
+            sanitize_table_name("Q3-Audit (Final).xlsx"),
+            "q3_audit_final_xlsx"
+        );
+        assert_eq!(sanitize_table_name("2024_financials"), "t_2024_financials");
+        assert_eq!(
+            sanitize_table_name("audit; DROP TABLE scratch.audit; --"),
+            "audit_drop_table_scratch_audit"
+        );
+        assert_eq!(
+            sanitize_table_name("scratch.sales report 2024"),
+            "scratch.sales_report_2024"
+        );
+        assert_eq!(
+            sanitize_table_name("default.malicious"),
+            "default_malicious"
+        );
+        assert_eq!(sanitize_table_name("   "), "table");
+        assert_eq!(sanitize_table_name("___"), "table");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_injection_prevention() {
+        let server = McpServer::new();
+
+        // 1. Injected schema_ddl with chained DROP TABLE
+        let bad_ddl_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": {
+                        "table_name": "clean_tab",
+                        "schema_ddl": "id INT); DROP TABLE scratch.important; --"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_ddl_res["isError"], true,
+            "expected rejection of malicious schema_ddl: {bad_ddl_res}"
+        );
+
+        // 2. Injected table name with spaces and commands is sanitized into safe table
+        let space_table_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": {
+                        "table_name": "my financial statement 2024; SELECT 1",
+                        "schema_ddl": "id INT, note VARCHAR"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            space_table_res.get("isError").is_none(),
+            "table creation failed: {space_table_res}"
+        );
+        assert!(
+            space_table_res["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("scratch.my_financial_statement_2024_select_1"),
+            "expected sanitized name with spaces stripped to underscore"
+        );
+
+        // 3. Injected text_col in hybrid_search
+        let bad_search_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "hybrid_search",
+                    "arguments": {
+                        "table": "scratch.my_financial_statement_2024_select_1",
+                        "query_text": "audit",
+                        "text_col": "note) FROM scratch.x; DROP TABLE ...; --"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_search_res["isError"], true,
+            "expected rejection of malicious text_col: {bad_search_res}"
+        );
+
+        // 4. Ingest file with spaces in filename derives sanitized table name
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_with_spaces = temp_dir
+            .path()
+            .join("Company Q3 Earnings Report (Draft).txt");
+        std::fs::write(&file_with_spaces, "Revenue was up 25% year over year.").unwrap();
+
+        let ingest_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": file_with_spaces.to_str().unwrap()
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            ingest_res.get("isError").is_none(),
+            "ingest failed: {ingest_res}"
+        );
+        let ingest_text = ingest_res["content"][0]["text"].as_str().unwrap();
+        assert!(
+            ingest_text.contains("scratch.company_q3_earnings_report_draft"),
+            "expected spaces and parentheses replaced with underscores, got: {ingest_text}"
+        );
     }
 }

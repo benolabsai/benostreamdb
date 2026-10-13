@@ -130,13 +130,25 @@ pub fn all_json_udfs() -> Vec<ScalarUDF> {
 /// Returns all vector scalar UDFs for registration with DataFusion
 pub fn all_vector_udfs() -> Vec<ScalarUDF> {
     vec![
-        // Distance UDFs
+        // Distance UDFs (canonical and standard aliases)
         ScalarUDF::new_from_impl(L2DistUDF::new()),
+        ScalarUDF::new_from_impl(L2DistUDF::with_name("l2_distance")),
+        ScalarUDF::new_from_impl(L2DistUDF::with_name("vector_distance")),
         ScalarUDF::new_from_impl(CosineDistUDF::new()),
+        ScalarUDF::new_from_impl(CosineDistUDF::with_name("cosine_distance")),
+        ScalarUDF::new_from_impl(CosineDistUDF::with_name("vector_cosine_distance")),
         ScalarUDF::new_from_impl(IPDistUDF::new()),
+        ScalarUDF::new_from_impl(IPDistUDF::with_name("inner_product")),
+        ScalarUDF::new_from_impl(IPDistUDF::with_name("vector_inner_product")),
         ScalarUDF::new_from_impl(L1DistUDF::new()),
+        ScalarUDF::new_from_impl(L1DistUDF::with_name("l1_distance")),
+        ScalarUDF::new_from_impl(L1DistUDF::with_name("vector_l1_distance")),
         ScalarUDF::new_from_impl(HammingDistUDF::new()),
+        ScalarUDF::new_from_impl(HammingDistUDF::with_name("hamming_distance")),
+        ScalarUDF::new_from_impl(HammingDistUDF::with_name("vector_hamming_distance")),
         ScalarUDF::new_from_impl(JaccardDistUDF::new()),
+        ScalarUDF::new_from_impl(JaccardDistUDF::with_name("jaccard_distance")),
+        ScalarUDF::new_from_impl(JaccardDistUDF::with_name("vector_jaccard_distance")),
         // Element-wise binary ops
         ScalarUDF::new_from_impl(VectorAddUDF::new()),
         ScalarUDF::new_from_impl(VectorSubUDF::new()),

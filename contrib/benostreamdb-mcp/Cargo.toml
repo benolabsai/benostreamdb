@@ -17,3 +17,7 @@ arrow = "57.2.0"
 arrow-json = "57.2.0"
 tempfile = "3.10"
 sqlparser = { version = "0.55.0", features = ["visitor"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+pdf-extract = "0.7"
+calamine = "0.26"
+base64 = "0.22"

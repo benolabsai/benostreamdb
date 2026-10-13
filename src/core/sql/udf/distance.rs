@@ -147,11 +147,27 @@ where
     cpu_fn(v1, v2)
 }
 
+/// Helper to parse a vector from a string like "[0.1, 0.2, 0.3]"
+fn parse_vec_from_str(s: &str) -> Option<Vec<f32>> {
+    let s = s.trim();
+    let s = s
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(s);
+    if s.is_empty() {
+        return Some(Vec::new());
+    }
+    s.split(',')
+        .map(|part| part.trim().parse::<f32>().ok())
+        .collect()
+}
+
 /// Generic Macro to define vector distance UDFs
 macro_rules! make_vector_dist_udf {
     ($name:ident, $func_name:expr, $dist_fn:ident, $metric:expr) => {
         #[derive(Debug)]
         pub struct $name {
+            name: &'static str,
             signature: Signature,
         }
 
@@ -160,6 +176,14 @@ macro_rules! make_vector_dist_udf {
         impl $name {
             pub fn new() -> Self {
                 Self {
+                    name: $func_name,
+                    signature: Signature::any(2, Volatility::Immutable),
+                }
+            }
+
+            pub fn with_name(name: &'static str) -> Self {
+                Self {
+                    name,
                     signature: Signature::any(2, Volatility::Immutable),
                 }
             }
@@ -177,7 +201,7 @@ macro_rules! make_vector_dist_udf {
             }
 
             fn name(&self) -> &str {
-                $func_name
+                self.name
             }
 
             fn signature(&self) -> &Signature {
@@ -260,8 +284,68 @@ macro_rules! make_vector_dist_udf {
                                 ))
                             }
                         }
+                        DataType::Utf8View => {
+                            let str_arr = arr
+                                .as_any()
+                                .downcast_ref::<arrow::array::StringViewArray>()
+                                .ok_or_else(|| {
+                                    datafusion::error::DataFusionError::Execution(
+                                        "Failed to downcast to StringViewArray".to_string(),
+                                    )
+                                })?;
+                            if str_arr.is_null(idx) {
+                                return Ok(Vec::new());
+                            }
+                            let s = str_arr.value(idx);
+                            parse_vec_from_str(s).ok_or_else(|| {
+                                datafusion::error::DataFusionError::Execution(format!(
+                                    "Failed to parse vector from string: '{}'",
+                                    s
+                                ))
+                            })
+                        }
+                        DataType::Utf8 => {
+                            let str_arr = arr
+                                .as_any()
+                                .downcast_ref::<arrow::array::StringArray>()
+                                .ok_or_else(|| {
+                                    datafusion::error::DataFusionError::Execution(
+                                        "Failed to downcast to StringArray".to_string(),
+                                    )
+                                })?;
+                            if str_arr.is_null(idx) {
+                                return Ok(Vec::new());
+                            }
+                            let s = str_arr.value(idx);
+                            parse_vec_from_str(s).ok_or_else(|| {
+                                datafusion::error::DataFusionError::Execution(format!(
+                                    "Failed to parse vector from string: '{}'",
+                                    s
+                                ))
+                            })
+                        }
+                        DataType::LargeUtf8 => {
+                            let str_arr = arr
+                                .as_any()
+                                .downcast_ref::<arrow::array::LargeStringArray>()
+                                .ok_or_else(|| {
+                                    datafusion::error::DataFusionError::Execution(
+                                        "Failed to downcast to LargeStringArray".to_string(),
+                                    )
+                                })?;
+                            if str_arr.is_null(idx) {
+                                return Ok(Vec::new());
+                            }
+                            let s = str_arr.value(idx);
+                            parse_vec_from_str(s).ok_or_else(|| {
+                                datafusion::error::DataFusionError::Execution(format!(
+                                    "Failed to parse vector from string: '{}'",
+                                    s
+                                ))
+                            })
+                        }
                         _ => Err(datafusion::error::DataFusionError::Execution(format!(
-                            "Expected List or FixedSizeList, got {:?}",
+                            "Expected List, FixedSizeList, or Utf8 string, got {:?}",
                             arr.data_type()
                         ))),
                     }
@@ -270,6 +354,16 @@ macro_rules! make_vector_dist_udf {
                 // Helper to extract vector from scalar value
                 let extract_scalar_vec = |scalar: &ScalarValue| -> Result<Vec<f32>> {
                     match scalar {
+                        ScalarValue::Utf8(Some(s))
+                        | ScalarValue::LargeUtf8(Some(s))
+                        | ScalarValue::Utf8View(Some(s)) => {
+                            parse_vec_from_str(s).ok_or_else(|| {
+                                datafusion::error::DataFusionError::Execution(format!(
+                                    "Failed to parse vector from string scalar: '{}'",
+                                    s
+                                ))
+                            })
+                        }
                         ScalarValue::FixedSizeList(fsl_arc) => {
                             let fsl_array = fsl_arc
                                 .as_any()
@@ -367,7 +461,7 @@ macro_rules! make_vector_dist_udf {
                             }
                         }
                         _ => Err(datafusion::error::DataFusionError::Execution(format!(
-                            "Expected List or FixedSizeList scalar, got {:?}",
+                            "Expected List, FixedSizeList, or Utf8 string scalar, got {:?}",
                             scalar
                         ))),
                     }

@@ -90,37 +90,45 @@ impl TreeNodeRewriter for PgVectorRewriter {
                 if matches!(
                     name,
                     "dist_l2"
+                        | "l2_distance"
+                        | "vector_distance"
                         | "dist_cosine"
+                        | "cosine_distance"
+                        | "vector_cosine_distance"
                         | "dist_ip"
+                        | "inner_product"
+                        | "vector_inner_product"
                         | "dist_l1"
+                        | "l1_distance"
+                        | "vector_l1_distance"
                         | "dist_hamming"
+                        | "hamming_distance"
+                        | "vector_hamming_distance"
                         | "dist_jaccard"
+                        | "jaccard_distance"
+                        | "vector_jaccard_distance"
                 ) && func.args.len() == 2
                 {
-                    // Support both regular and large string literals for the second argument
-                    let literal_text = match &func.args[1] {
-                        Expr::Literal(ScalarValue::Utf8(Some(s)), _) => Some(s.as_str()),
-                        Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => Some(s.as_str()),
-                        _ => None,
-                    };
+                    let mut transformed = false;
+                    for arg in &mut func.args {
+                        let literal_text = match arg {
+                            Expr::Literal(ScalarValue::Utf8(Some(s)), _) => Some(s.as_str()),
+                            Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => Some(s.as_str()),
+                            _ => None,
+                        };
 
-                    if let Some(s) = literal_text {
-                        let trimmed = s.trim();
-                        if trimmed.starts_with('[') {
-                            match VectorLiteralParser::parse(trimmed) {
-                                Ok(parsed_value) => {
-                                    func.args[1] = Expr::Literal(parsed_value, None);
-                                    return Ok(Transformed::yes(Expr::ScalarFunction(func)));
-                                }
-                                Err(e) => {
-                                    return Err(datafusion::error::DataFusionError::Plan(format!(
-                                        "Failed to parse vector literal: {}. Input starts with: {}",
-                                        e,
-                                        &trimmed[..trimmed.len().min(50)]
-                                    )));
+                        if let Some(s) = literal_text {
+                            let trimmed = s.trim();
+                            if trimmed.starts_with('[') {
+                                if let Ok(parsed_value) = VectorLiteralParser::parse(trimmed) {
+                                    *arg = Expr::Literal(parsed_value, None);
+                                    transformed = true;
                                 }
                             }
                         }
+                    }
+                    if transformed {
+                        return Ok(Transformed::yes(Expr::ScalarFunction(func)));
                     }
                 }
                 Ok(Transformed::no(Expr::ScalarFunction(func)))
