@@ -331,6 +331,90 @@ pub fn parse_file_bytes(
     parse_file_bytes_with_custom(raw_bytes, file_path, ext, chunk_size, None)
 }
 
+/// Extracts structured tabular records from delimited files (CSV, TSV, PSV).
+/// Automatically handles comma, tab, and pipe delimiters with column type inference.
+pub fn extract_delimited_records(data: &[u8], file_path: &str, ext: &str) -> Result<Vec<Value>> {
+    let delimiter = match ext {
+        "tsv" => b'\t',
+        "psv" => b'|',
+        _ => {
+            // Sniff first non-empty line
+            if let Some(first_line) = data.split(|&b| b == b'\n').find(|l| !l.is_empty()) {
+                let pipes = first_line.iter().filter(|&&b| b == b'|').count();
+                let tabs = first_line.iter().filter(|&&b| b == b'\t').count();
+                let commas = first_line.iter().filter(|&&b| b == b',').count();
+                if pipes > commas && pipes > tabs {
+                    b'|'
+                } else if tabs > commas && tabs > pipes {
+                    b'\t'
+                } else {
+                    b','
+                }
+            } else {
+                b','
+            }
+        }
+    };
+
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .has_headers(true)
+        .flexible(true)
+        .double_quote(true)
+        .escape(Some(b'\\'))
+        .trim(csv::Trim::All)
+        .from_reader(data);
+
+    let headers = reader.headers()?.clone();
+    let mut records = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        let mut row_map = Map::new();
+        row_map.insert("path".to_string(), json!(file_path));
+
+        for (i, field) in record.iter().enumerate() {
+            let col_name = headers
+                .get(i)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("col_{}", i + 1));
+
+            let trimmed = field.trim();
+            // Handle single-quoted values and SQL/escape conventions: 'val', '', \'
+            let normalized = if trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2 {
+                let inner = &trimmed[1..trimmed.len() - 1];
+                inner.replace("''", "'").replace("\\'", "'")
+            } else {
+                trimmed.to_string()
+            };
+
+            let val = if normalized.is_empty() {
+                Value::Null
+            } else if normalized.eq_ignore_ascii_case("true") {
+                json!(true)
+            } else if normalized.eq_ignore_ascii_case("false") {
+                json!(false)
+            } else if (normalized.starts_with('0') && normalized.len() > 1 && !normalized.starts_with("0."))
+                || (normalized.starts_with("-0") && normalized.len() > 2 && !normalized.starts_with("-0."))
+            {
+                json!(normalized)
+            } else if let Ok(int_val) = normalized.parse::<i64>() {
+                json!(int_val)
+            } else if let Ok(float_val) = normalized.parse::<f64>() {
+                json!(float_val)
+            } else {
+                json!(normalized)
+            };
+            row_map.insert(col_name, val);
+        }
+        records.push(Value::Object(row_map));
+    }
+
+    Ok(records)
+}
+
 /// Dispatches raw file bytes and extension with optional domain extractor support.
 pub fn parse_file_bytes_with_custom(
     raw_bytes: &[u8],
@@ -367,6 +451,7 @@ pub fn parse_file_bytes_with_custom(
 
     // 3. General enterprise formats
     match ext {
+        "csv" | "tsv" | "psv" => extract_delimited_records(raw_bytes, file_path, ext),
         "docx" => extract_docx_records(raw_bytes, file_path, chunk_size),
         "pptx" => extract_pptx_records(raw_bytes, file_path),
         "xml" => extract_xml_records(raw_bytes, file_path),

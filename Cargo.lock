@@ -1355,6 +1355,7 @@ dependencies = [
  "base64 0.22.1",
  "benostreamdb",
  "calamine",
+ "csv",
  "pdf-extract",
  "quick-xml 0.31.0",
  "reqwest",

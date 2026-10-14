@@ -572,7 +572,7 @@ impl McpServer {
         res.map(|_| records.len())
     }
 
-    async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
+    pub async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
         info!("Handling request method: {}", method);
         match method {
             "initialize" => {
@@ -2093,7 +2093,7 @@ impl McpServer {
                             }
                         } else if matches!(
                             ext.as_str(),
-                            "docx" | "pptx" | "xml" | "zip" | "zst" | "zstd"
+                            "csv" | "tsv" | "psv" | "docx" | "pptx" | "xml" | "zip" | "zst" | "zstd"
                         ) || self.extension.file_extractor.is_some()
                         {
                             let raw_bytes = std::fs::read(p)?;
@@ -2108,12 +2108,40 @@ impl McpServer {
                                     records = recs;
                                     if embed_chunks {
                                         for rec in &mut records {
-                                            if let Some(content_str) =
+                                            let text_to_embed = if let Some(content_str) =
                                                 rec.get("content").and_then(|c| c.as_str())
                                             {
-                                                if !content_str.trim().is_empty() {
+                                                Some(content_str.to_string())
+                                            } else if let Some(obj) = rec.as_object() {
+                                                let vals: Vec<String> = obj
+                                                    .iter()
+                                                    .filter(|(k, _)| {
+                                                        k.as_str() != "path"
+                                                            && k.as_str() != "embedding"
+                                                    })
+                                                    .filter_map(|(_, v)| match v {
+                                                        Value::String(s)
+                                                            if !s.trim().is_empty() =>
+                                                        {
+                                                            Some(s.clone())
+                                                        }
+                                                        Value::Number(n) => Some(n.to_string()),
+                                                        _ => None,
+                                                    })
+                                                    .collect();
+                                                if vals.is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(vals.join(" "))
+                                                }
+                                            } else {
+                                                None
+                                            };
+
+                                            if let Some(txt) = text_to_embed {
+                                                if !txt.trim().is_empty() {
                                                     if let Some(vec) =
-                                                        self.fetch_embedding(content_str).await
+                                                        self.fetch_embedding(txt.trim()).await
                                                     {
                                                         let vec_str = format!(
                                                             "[{}]",
@@ -3278,6 +3306,171 @@ mod tests {
             zst_res.get("isError").is_none(),
             "Zstd ingest failed: {zst_res}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_csv_tsv_psv_tables() {
+        let server = McpServer::new();
+        server
+            .handle_request("initialize", json!({}))
+            .await
+            .unwrap();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // 1. Comma-Separated Values (.csv)
+        let csv_path = temp_dir.path().join("inventory.csv");
+        let csv_data = "item_id,item_name,unit_price,in_stock\n1,Mechanical Keyboard,129.99,true\n2,Gaming Mouse,59.95,false\n";
+        std::fs::write(&csv_path, csv_data).unwrap();
+
+        let csv_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": csv_path.to_str().unwrap(),
+                        "table_name": "inventory_csv"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(csv_res.get("isError").is_none(), "CSV ingest failed: {csv_res}");
+
+        let q_csv = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT item_id, item_name, unit_price, in_stock FROM scratch.inventory_csv WHERE unit_price > 100.0"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_csv.get("isError").is_none());
+        let csv_text = q_csv["content"][0]["text"].as_str().unwrap();
+        assert!(csv_text.contains("Mechanical Keyboard") && csv_text.contains("129.99"));
+
+        // 2. Tab-Separated Values (.tsv)
+        let tsv_path = temp_dir.path().join("users.tsv");
+        let tsv_data = "user_id\tuser_handle\trank_score\n101\talice\t98.7\n102\tbob\t85.2\n";
+        std::fs::write(&tsv_path, tsv_data).unwrap();
+
+        let tsv_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": tsv_path.to_str().unwrap(),
+                        "table_name": "users_tsv"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(tsv_res.get("isError").is_none(), "TSV ingest failed: {tsv_res}");
+
+        let q_tsv = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT user_id, user_handle, rank_score FROM scratch.users_tsv WHERE rank_score >= 90.0"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_tsv.get("isError").is_none());
+        let tsv_text = q_tsv["content"][0]["text"].as_str().unwrap();
+        assert!(tsv_text.contains("alice") && tsv_text.contains("98.7"));
+
+        // 3. Pipe-Separated Values (.psv)
+        let psv_path = temp_dir.path().join("regions.psv");
+        let psv_data = "region_code|region_name|population|active\nNA|North America|580000000|true\nEU|Europe|740000000|true\n";
+        std::fs::write(&psv_path, psv_data).unwrap();
+
+        let psv_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": psv_path.to_str().unwrap(),
+                        "table_name": "regions_psv"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(psv_res.get("isError").is_none(), "PSV ingest failed: {psv_res}");
+
+        let q_psv = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT region_code, region_name, population FROM scratch.regions_psv ORDER BY population DESC"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_psv.get("isError").is_none());
+        let psv_text = q_psv["content"][0]["text"].as_str().unwrap();
+        assert!(psv_text.contains("Europe") && psv_text.contains("North America"));
+
+        // 4. Quoted text with "" and '' and backslash escaping
+        let quoted_csv_path = temp_dir.path().join("quoted.csv");
+        let quoted_csv_data = "\
+id,title,author,comment
+1,\"He said \"\"Hello, world!\"\"\",'O''Reilly',\"Multi-line \n comment with , comma\"
+2,\"Escaped \\\"quote\\\" inside\",'Escaped \\'single\\' quote',\"Regular text\"
+";
+        std::fs::write(&quoted_csv_path, quoted_csv_data).unwrap();
+
+        let quoted_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": quoted_csv_path.to_str().unwrap(),
+                        "table_name": "quoted_books"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            quoted_res.get("isError").is_none(),
+            "Quoted CSV ingest failed: {quoted_res}"
+        );
+
+        let q_quoted = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT id, title, author FROM scratch.quoted_books ORDER BY id"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_quoted.get("isError").is_none());
+        let quoted_text = q_quoted["content"][0]["text"].as_str().unwrap();
+        assert!(quoted_text.contains(r#"He said \"Hello, world!\""#));
+        assert!(quoted_text.contains("O'Reilly"));
+        assert!(quoted_text.contains(r#"Escaped \"quote\" inside"#));
+        assert!(quoted_text.contains("Escaped 'single' quote"));
     }
 
     #[tokio::test]

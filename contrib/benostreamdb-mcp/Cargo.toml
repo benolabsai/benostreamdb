@@ -32,4 +32,5 @@ base64 = "0.22"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 quick-xml = "0.31"
 zstd = "0.13"
+csv = "1.3"
 
