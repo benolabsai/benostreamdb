@@ -75,4 +75,56 @@ impl PySession {
         }
         Ok(list.into())
     }
+
+    /// Returns the warehouse catalog policy as a Python dict, or None if no policy exists.
+    pub fn catalog_policy(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let policy_opt = self
+            .inner
+            .catalog_policy()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        if let Some(policy) = policy_opt {
+            let json_str = serde_json::to_string(&policy)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let json_mod = py.import("json")?;
+            let dict = json_mod.call_method1("loads", (json_str,))?;
+            Ok(Some(dict.into()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Set read-only vs read-write access for a specific schema on the warehouse.
+    pub fn set_schema_access(
+        &self,
+        py: Python<'_>,
+        schema: String,
+        read_only: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let policy = self
+            .inner
+            .set_schema_access(&schema, read_only)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let json_str = serde_json::to_string(&policy)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let json_mod = py.import("json")?;
+        let dict = json_mod.call_method1("loads", (json_str,))?;
+        Ok(dict.into())
+    }
+
+    /// Locks down all schemas as read-only except scratchpad.
+    pub fn lock_all_read_only(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let wh = self.inner.warehouse().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Warehouse is not set in session")
+        })?;
+        let policy = crate::core::catalog::lock_catalog_read_only(wh)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let json_str = serde_json::to_string(&policy)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let json_mod = py.import("json")?;
+        let dict = json_mod.call_method1("loads", (json_str,))?;
+        Ok(dict.into())
+    }
 }

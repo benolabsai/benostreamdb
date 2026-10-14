@@ -332,4 +332,3 @@ mod tests {
         assert_eq!(loaded3.readwrite_schemas.unwrap(), vec![SCRATCH_SCHEMA]);
     }
 }
-

@@ -4201,6 +4201,92 @@ class Session:
             res = self.sql(f"SELECT * FROM {_escape_sql_string(table)} LIMIT {k}")
             return res.to_pandas() if hasattr(res, "to_pandas") else pd.DataFrame(res)
 
+    def catalog_policy(self) -> Optional[Dict[str, Any]]:
+        """Return the authoritative warehouse catalog policy as a dictionary, or None."""
+        return self._inner.catalog_policy()
+
+    def set_schema_access(self, schema: str, read_only: bool = True) -> Dict[str, Any]:
+        """Set read-only vs read-write access for a specific schema on the warehouse."""
+        return self._inner.set_schema_access(schema, read_only)
+
+    def lock_all_read_only(self) -> Dict[str, Any]:
+        """Lock down all persistent schemas to read-only mode."""
+        return self._inner.lock_all_read_only()
+
+
+class FlightClient:
+    """Arrow Flight SQL client for BenoStreamDB.
+
+    Streams SQL query results directly into PyArrow Tables or RecordBatches
+    over gRPC without serialization overhead.
+    """
+    def __init__(self, uri: str = "grpc://127.0.0.1:50051", token: Optional[str] = None):
+        import pyarrow.flight as flight
+        self.uri = uri
+        self.client = flight.FlightClient(uri)
+        self.call_options = flight.FlightCallOptions(headers=[(b"authorization", f"Bearer {token}".encode())]) if token else None
+
+    def execute(self, query: str):
+        """Execute a SQL query via Arrow Flight SQL and return a PyArrow Table."""
+        import pyarrow.flight as flight
+        desc = flight.FlightDescriptor.for_command(query.encode("utf-8"))
+        info = self.client.get_flight_info(desc, self.call_options) if self.call_options else self.client.get_flight_info(desc)
+        reader = self.client.do_get(info.endpoints[0].ticket, self.call_options) if self.call_options else self.client.do_get(info.endpoints[0].ticket)
+        return reader.read_all()
+
+    def execute_pandas(self, query: str):
+        """Execute query and return as a Pandas DataFrame."""
+        return self.execute(query).to_pandas()
+
+
+class SearchClient:
+    """BenoStreamDB Search client (OpenSearch 7.10 & Qdrant REST compatible).
+
+    Connects to the bsdb-search gateway for full-text lexical search, dense vector search,
+    and hybrid BM25 + dense retrieval.
+    """
+    def __init__(self, endpoint: str = "http://127.0.0.1:9200", api_key: Optional[str] = None):
+        self.endpoint = endpoint.rstrip("/")
+        self.headers = {"Content-Type": "application/json"}
+        if api_key:
+            self.headers["Authorization"] = f"Bearer {api_key}"
+
+    def search(self, index: str, query: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute an Elasticsearch/OpenSearch DSL query."""
+        import urllib.request
+        import json
+        url = f"{self.endpoint}/{index}/_search"
+        data = json.dumps(query).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=self.headers, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def hybrid_search(
+        self,
+        index: str,
+        text: str,
+        vector: Optional[List[float]] = None,
+        top_k: int = 10,
+    ) -> Dict[str, Any]:
+        """Execute reciprocal rank fusion (RRF) hybrid search across keyword and vector fields."""
+        query: Dict[str, Any] = {
+            "size": top_k,
+            "query": {
+                "multi_match": {
+                    "query": text,
+                    "fields": ["content", "text", "body"]
+                }
+            }
+        }
+        if vector is not None:
+            query["knn"] = {
+                "field": "embedding",
+                "query_vector": vector,
+                "k": top_k,
+                "num_candidates": top_k * 5
+            }
+        return self.search(index, query)
+
 
 def vector(data: Union[List[float], Any]) -> List[float]:
     """Vector constructor for queries and bindings.
