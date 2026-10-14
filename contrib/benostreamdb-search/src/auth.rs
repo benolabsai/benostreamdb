@@ -112,6 +112,65 @@ fn is_write_request(method: &Method, path: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn api_key_is_required_and_enforced_on_writes() {
+        use axum::body::Body;
+        use axum::http::Request as HttpRequest;
+        use axum::routing::{get, post};
+        use axum::Router;
+        use tower::ServiceExt;
+
+        let cfg = Arc::new(AuthConfig::default().with_api_key("secret"));
+        let app = Router::new()
+            .route("/_search", get(|| async { "ok" }))
+            .route("/v1/_doc", post(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                cfg.clone(),
+                auth_middleware,
+            ));
+
+        // Missing credentials -> 401.
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/_search")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        // Valid API key on a read -> 200.
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/_search")
+                    .header("api-key", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Valid API key (admin) on a write -> 200.
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/v1/_doc")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
     #[test]
     fn health_paths_are_public() {
         let cfg = AuthConfig::default();

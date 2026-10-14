@@ -11,7 +11,8 @@
 
 use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 use arrow::array::{
-    Array, ArrayRef, ListArray, ListBuilder, StringArray, UInt32Array, UInt64Array, UInt64Builder,
+    Array, ArrayRef, Int32Array, Int64Array, ListArray, ListBuilder, StringArray, UInt32Array,
+    UInt64Array, UInt64Builder,
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion::error::Result;
@@ -29,6 +30,51 @@ pub use super::graph_view::{
     estimate_subgraph_bytes, graph_memory_budget_bytes, load_graph_view, parse_graph_mode,
     CachingGraph, GraphAccumulatorBase, GraphMode, GraphView, SimpleGraph,
 };
+
+/// Read a `u64` from any integer-typed array at `index`, if valid.
+///
+/// The graph UDAFs use non-strict (`variadic_any`) signatures so callers never
+/// need an `arrow_cast(...)`; this normalizes whatever integer width the planner
+/// bound the argument to (`Int64` literals, `UInt32` columns, etc.) to the
+/// `u64` node-id space the accumulator works in.
+fn scalar_u64_at(array: &ArrayRef, index: usize) -> Option<u64> {
+    if !array.is_valid(index) {
+        return None;
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt64Array>() {
+        return Some(a.value(index));
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int64Array>() {
+        return u64::try_from(a.value(index)).ok();
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt32Array>() {
+        return Some(u64::from(a.value(index)));
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int32Array>() {
+        return u64::try_from(a.value(index)).ok();
+    }
+    None
+}
+
+/// Read a `u32` from any integer-typed array at `index`, if valid.
+fn scalar_u32_at(array: &ArrayRef, index: usize) -> Option<u32> {
+    scalar_u64_at(array, index).and_then(|v| u32::try_from(v).ok())
+}
+
+/// Read a `Vec<u64>` from a `List`-typed array at `index`, accepting any integer
+/// child type. Returns `None` when the slot is null or not a list.
+fn list_u64_at(array: &ArrayRef, index: usize) -> Option<Vec<u64>> {
+    let list = array.as_any().downcast_ref::<ListArray>()?;
+    if !list.is_valid(index) {
+        return None;
+    }
+    let inner = list.value(index);
+    let mut out = Vec::with_capacity(inner.len());
+    for i in 0..inner.len() {
+        out.push(scalar_u64_at(&inner, i)?);
+    }
+    Some(out)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriftAction {
@@ -502,18 +548,10 @@ impl Default for DriftSearchUDF {
 impl DriftSearchUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::UInt64,                                                     // source
-                    DataType::UInt64,                                                     // target
-                    DataType::Utf8,                                                       // query
-                    DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))), // top_communities
-                    DataType::UInt32,                                                     // n_depth
-                    DataType::Utf8, // graph_uri
-                    DataType::Utf8, // mode
-                ],
-                Volatility::Immutable,
-            ),
+            // Non-strict: accept whatever integer widths the planner binds, so
+            // `drift_search(source, target, q, [..], hops, uri, mode)` works on
+            // Int64 columns/literals without an `arrow_cast(...)`.
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -615,22 +653,11 @@ impl Accumulator for DriftSearchAccumulator {
         }
 
         if values.len() > 3 && !values[3].is_empty() && self.top_communities.is_none() {
-            if let Some(list_arr) = values[3].as_any().downcast_ref::<ListArray>() {
-                if list_arr.is_valid(0) {
-                    let inner = list_arr.value(0);
-                    if let Some(u64_inner) = inner.as_any().downcast_ref::<UInt64Array>() {
-                        self.top_communities = Some(u64_inner.values().to_vec());
-                    }
-                }
-            }
+            self.top_communities = list_u64_at(&values[3], 0);
         }
 
         if values.len() > 4 && !values[4].is_empty() && self.n_depth.is_none() {
-            if let Some(depth_arr) = values[4].as_any().downcast_ref::<UInt32Array>() {
-                if depth_arr.is_valid(0) {
-                    self.n_depth = Some(depth_arr.value(0));
-                }
-            }
+            self.n_depth = scalar_u32_at(&values[4], 0);
         }
 
         Ok(())
@@ -760,19 +787,9 @@ impl Default for RegionalDriftUDF {
 impl RegionalDriftUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::UInt64,                                                     // source
-                    DataType::UInt64,                                                     // target
-                    DataType::Utf8,                                                       // query
-                    DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))), // seeds
-                    DataType::UInt32,                                                     // hops
-                    DataType::UInt32,                                                     // n_depth
-                    DataType::Utf8, // graph_uri
-                    DataType::Utf8, // mode
-                ],
-                Volatility::Immutable,
-            ),
+            // Non-strict: accept whatever integer widths the planner binds, so
+            // the seeds/hops/n_depth arguments need no `arrow_cast(...)`.
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -878,30 +895,15 @@ impl Accumulator for RegionalDriftAccumulator {
         }
 
         if values.len() > 3 && !values[3].is_empty() && self.seeds.is_none() {
-            if let Some(list_arr) = values[3].as_any().downcast_ref::<ListArray>() {
-                if list_arr.is_valid(0) {
-                    let inner = list_arr.value(0);
-                    if let Some(u64_inner) = inner.as_any().downcast_ref::<UInt64Array>() {
-                        self.seeds = Some(u64_inner.values().to_vec());
-                    }
-                }
-            }
+            self.seeds = list_u64_at(&values[3], 0);
         }
 
         if values.len() > 4 && !values[4].is_empty() && self.hops.is_none() {
-            if let Some(arr) = values[4].as_any().downcast_ref::<UInt32Array>() {
-                if arr.is_valid(0) {
-                    self.hops = Some(arr.value(0));
-                }
-            }
+            self.hops = scalar_u32_at(&values[4], 0);
         }
 
         if values.len() > 5 && !values[5].is_empty() && self.n_depth.is_none() {
-            if let Some(arr) = values[5].as_any().downcast_ref::<UInt32Array>() {
-                if arr.is_valid(0) {
-                    self.n_depth = Some(arr.value(0));
-                }
-            }
+            self.n_depth = scalar_u32_at(&values[5], 0);
         }
 
         Ok(())

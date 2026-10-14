@@ -197,11 +197,45 @@ SELECT * FROM graph_louvain('edges', 1.0);            -- cols: node, community
 ```
 
 As a result, **the RAG + knowledge-graph notebook is now fully cast-free** — every `arrow_cast(...)`
-is gone from both the notebook and the article, replaced by the table-function form. Two follow-ups
-from the original plan remain open:
+is gone from both the notebook and the article, replaced by the table-function form.
 
-1. The **column-argument scalar form still rejects bare columns** (`graph_neighbors(source, target,
-   133, 2)` → `No field named source`); only the table-function form is cast-free today. Either
-   finish R1 (coercion on the scalar form) or deprecate the scalar form in favor of the TVFs.
-2. `session.sql("... ;")` still rejects trailing semicolons/comments (R5), and `CREATE INDEX` over the
-   embedded session still returns `Unsupported logical plan` (use `add_index` / Flight SQL).
+## Update: R1, R4, and R5 shipped
+
+- **R1 — UDF boundary coercion (shipped).** Every graph UDAF registers a non-strict
+  `Signature::variadic_any(Volatility::Immutable)`, and the accumulators
+  (`GraphAccumulatorBase` plus per-UDAF scalar/list readers) normalize whatever
+  integer/float width the planner binds. The **column-argument scalar form is now
+  cast-free**: `graph_neighbors(source, target, 133, 2)`,
+  `graph_pagerank(source, target, 0.85, 30)`,
+  `graph_louvain_communities(source, target, 1.0)`, and
+  `graph_shortest_path(source, target, 0, 3)` all run against `Int64` columns with
+  bare literals. The last two strict outliers — `drift_search` and
+  `regional_drift` — were converted from `Signature::exact(...)` to
+  `variadic_any`, with `Int64`/`List(Int64)` argument reads normalized to
+  `u64`/`u32` via `scalar_u64_at` / `scalar_u32_at` / `list_u64_at` in
+  [`src/core/sql/graph_udf/drift_search.rs`](../src/core/sql/graph_udf/drift_search.rs:33).
+- **R5 — session ergonomics (shipped).** [`sql_to_df`](../src/core/sql/session.rs:348)
+  runs [`sanitize_sql_query`](../src/core/sql/session.rs:440), which strips `--`
+  line comments and a single trailing `;` (an internal `;` is still rejected as a
+  multi-statement guard). `CREATE INDEX` is no longer an `Unsupported logical
+  plan`: [`catalog_ddl::try_parse_and_execute`](../src/core/sql/catalog_ddl.rs:209)
+  intercepts it and executes it through the core `Table` API
+  (`CREATE INDEX ON t (col)`, `ALTER TABLE t ADD INDEX (col)`), with a fallback
+  error pointing at `table.add_index(col, algo)` / Flight SQL for forms it cannot
+  plan.
+- **R4 — vector literal ergonomics (shipped).**
+  `embedding <-> [1.0, 0.0, 0.0]` (and `<=>`, `<#>`) work without `::vector`, and
+  a Python `benostreamdb.vector([...])` constructor is available.
+
+Because MCP's `execute_sql` and the Python `Session.sql` both drive the same
+`BenoStreamSession`, R1 and R5 apply identically to the embedded session, the
+MCP server, and the Python bindings.
+
+**Tests:**
+[`tests/test_sql_binding_ergonomics.rs`](../tests/test_sql_binding_ergonomics.rs:1)
+(cast-free scalar + TVF calls incl. the two DRIFT UDAFs, `;`/comment tolerance,
+`CREATE INDEX`),
+[`tests/integration_test_graph_mode.rs`](../tests/integration_test_graph_mode.rs:244)
+(the DRIFT UDAFs are cast-free across graph modes), and
+[`test_mcp_graph_udaf_without_casts`](../contrib/benostreamdb-mcp/src/server.rs:3166)
+(the same behavior reachable through the MCP `execute_sql` tool).

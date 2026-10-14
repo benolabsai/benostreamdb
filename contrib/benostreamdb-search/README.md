@@ -88,6 +88,57 @@ Use a secret manager (Vault, AWS/GCP/Azure Secrets Manager) or a `0600` file
 mounted at `/run/secrets/` (Docker/K8s) or `/etc/benostreamdb/secrets/`, loaded
 via systemd `LoadCredential=`/`EnvironmentFile=` (mode `0600`).
 
+### Catalog storage policy (access control)
+
+The gateway is an **untrusted, network-facing connector**: reads and writes are
+governed by the authoritative **catalog storage policy** — a
+`.benostream-policy.json` object in the warehouse/bucket root (a local path or an
+object store such as `s3://`, resolved through the core object store).
+
+- **Schemas come from the backend — the gateway never creates one.** A schema
+  exists because an operator provisioned it and named it in the policy. Writing
+  an index whose schema is not granted returns `403`.
+- **Writes** are allowed only to schemas listed in `readwrite_schemas`. There is
+  **no default `scratch` namespace** (unlike the local MCP server): a server
+  connector is **read-only until an operator publishes a policy**.
+- **Reads** have a read-only floor — with **no policy** every schema is readable
+  (read-only) — and, when a policy is present, its `readwrite_schemas` /
+  `readonly_schemas` / immutable lists are an **allowlist** for reads too. A read
+  of a schema the policy does not name is denied before the index's existence is
+  even checked.
+- Immutable system schemas (`default`, `public`, `information_schema`, `sys`,
+  `system`) are never writable.
+- Policy updates are read-modify-write with optimistic concurrency (CAS on
+  object stores that support conditional PUTs).
+
+Enforcement is identical across the OpenSearch API (`_search`, `_count`,
+`_doc/{id}`, `_mapping`, `_bulk`, aliases, index create/delete) and the Qdrant
+API (search / query / scroll / retrieve / count / recommend / discover plus every
+mutating route).
+
+Example `.benostream-policy.json` at the warehouse root:
+
+```json
+{
+  "policy_version": "1.0",
+  "readwrite_schemas": ["analytics", "reporting"],
+  "readonly_schemas": ["archive"],
+  "no_access_schemas": ["pii"],
+  "default_write_schema": "analytics"
+}
+```
+
+With this policy the gateway may write `analytics.*` and `reporting.*` indexes,
+may only read `analytics`, `reporting`, and `archive`, and denies everything
+else.
+
+> **Operational note:** a deployment that publishes **no** policy is read-only —
+> the gateway logs a `WARN` at startup (`"search gateway is READ-ONLY: no writable
+> schema"`). Provision the schema(s) and publish a policy before expecting writes.
+> Set `BSDB_SEARCH_REQUIRE_POLICY=1` to **refuse to start** rather than run
+> read-only. See [`docs/CATALOG_USAGE.md`](../../docs/CATALOG_USAGE.md) and
+> [`docs/SUPPORT_MATRIX.md`](../../docs/SUPPORT_MATRIX.md) for the full model.
+
 ### Iceberg catalog integration
 
 `benostreamdb-search` can automatically synchronize search indices with an

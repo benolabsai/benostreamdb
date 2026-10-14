@@ -22,9 +22,12 @@ Every published result must satisfy all four:
    (CPU model, cores, RAM, containerized, GPU list) and the run writes
    `results/hardware_profile.txt` (host CPU/RAM, Docker/Compose versions, GPU
    driver, envelope, dataset, HNSW parameters).
-3. **Identical envelope.** Every participant — server engines *and* the runner
-   that executes each client, including BenoStreamDB — runs under the same
-   `--cpus` / `--mem` cgroup limits. A comparison across different envelopes is
+3. **Identical envelope and equivalent configuration.** Every participant —
+   server engines *and* the runner that executes each client, including
+   BenoStreamDB — runs under the same `--cpus` / `--mem` cgroup limits, against
+   the same dataset, query workload, `k`, and index parameters (HNSW
+   `m`/`ef_construction`/`ef_search`, etc.), with recall held at parity. A
+   comparison across different envelopes *or* different configurations is
    invalid.
 4. **A correctness oracle.** The index must not change the answer. Exact indexes
    are checked against a full scan; ANN indexes are checked for recall. See §7.

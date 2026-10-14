@@ -25,6 +25,12 @@ impl Harness {
     fn new() -> Self {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = format!("file://{}", tmp.path().display());
+        // The gateway is a server connector: writes require a policy grant, so
+        // the conformance harness provisions a permissive policy.
+        let mut policy = benostreamdb::core::catalog::CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["*".to_string()]);
+        benostreamdb::core::catalog::set_catalog_policy(tmp.path().to_str().unwrap(), &policy)
+            .expect("set policy");
         let state = Arc::new(AppState::new(root, "qdrant-test".to_string()));
         Self {
             app: qdrant::router(state),

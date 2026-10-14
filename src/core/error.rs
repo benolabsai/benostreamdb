@@ -79,6 +79,10 @@ pub enum BenoStreamError {
     /// Unknown catalog type string.
     UnknownCatalogType { typ: String },
 
+    // ─── Permission errors ──────────────────────────────────────────
+    /// A mutation was rejected by the catalog storage policy for `schema`.
+    PermissionDenied { schema: String, reason: String },
+
     // ─── Manifest errors ────────────────────────────────────────────
     /// Manifest version mismatch (file version != expected).
     ManifestVersionMismatch { expected: u64, actual: u64 },
@@ -232,6 +236,9 @@ impl fmt::Display for BenoStreamError {
             Self::UnknownCatalogType { typ } => {
                 write!(f, "Unknown catalog type: {typ}")
             }
+            Self::PermissionDenied { schema, reason } => {
+                write!(f, "Permission denied for schema '{schema}': {reason}")
+            }
 
             Self::ManifestVersionMismatch { expected, actual } => {
                 write!(
@@ -380,6 +387,14 @@ impl BenoStreamError {
     ) -> Self {
         Self::Internal {
             source: anyhow::Error::new(source).context(msg.into()),
+        }
+    }
+
+    /// A mutation was rejected by the catalog storage policy for `schema`.
+    pub fn permission_denied(schema: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::PermissionDenied {
+            schema: schema.into(),
+            reason: reason.into(),
         }
     }
 }

@@ -285,3 +285,18 @@ jobs:
       - name: Run Spark & Trino Cross-Engine Tests
         # We run these explicitly, ensuring any skipped markers are overriden or handled
         run: pytest -v tests/test_cross_engine_compat.py
+
+  #########################
+  # Workflow lint — validate .github/workflows on every change so release- and
+  # tag-only jobs (which are otherwise exercised only at release time) are at
+  # least statically checked on every PR.
+  #########################
+  workflow-lint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run actionlint
+        run: |
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color

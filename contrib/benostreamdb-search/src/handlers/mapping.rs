@@ -182,6 +182,8 @@ pub(crate) async fn get_mapping_core(
     state: &AppState,
     index: &str,
 ) -> Result<Value, BenoStreamError> {
+    // Mapping is a schema-revealing read: it is subject to the catalog policy.
+    state.ensure_index_readable(index)?;
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
@@ -280,6 +282,8 @@ pub(crate) async fn put_mapping_core(
     index: &str,
     body: &Value,
 ) -> Result<Value, BenoStreamError> {
+    state.ensure_index_writable(index)?;
+
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
@@ -611,7 +615,7 @@ mod tests {
 
     fn test_state(dir: &tempfile::TempDir) -> AppState {
         let root = format!("file://{}", dir.path().display());
-        AppState::new(root, "test-cluster".into())
+        crate::state::test_state(root)
     }
 
     #[tokio::test]

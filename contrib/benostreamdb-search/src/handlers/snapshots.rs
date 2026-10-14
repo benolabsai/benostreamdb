@@ -372,7 +372,7 @@ mod tests {
     async fn test_snapshot_lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
 
         // 1. Initial repositories list should contain "default"
         let repos = get_all_repositories(State(Arc::new(state.clone()))).await;

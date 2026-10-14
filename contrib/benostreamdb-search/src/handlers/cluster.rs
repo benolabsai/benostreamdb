@@ -307,7 +307,7 @@ mod tests {
     async fn test_cluster_info_and_compute_metadata() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = Arc::new(AppState::new(root, "test-cluster".into()));
+        let state = Arc::new(crate::state::test_state(root));
 
         let resp = cluster_info(State(state)).await.into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
@@ -332,7 +332,7 @@ mod tests {
     async fn test_cluster_health() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = Arc::new(AppState::new(root, "test-cluster".into()));
+        let state = Arc::new(crate::state::test_state(root));
 
         let resp = cluster_health(State(state)).await.into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
@@ -349,7 +349,7 @@ mod tests {
     async fn test_cluster_stats_and_cat_indices() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = Arc::new(AppState::new(root, "test-cluster".into()));
+        let state = Arc::new(crate::state::test_state(root));
 
         let resp = cluster_stats(State(state.clone())).await.into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
@@ -374,7 +374,7 @@ mod tests {
     async fn test_cluster_stubs_and_fallback() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = Arc::new(AppState::new(root, "test-cluster".into()));
+        let state = Arc::new(crate::state::test_state(root));
 
         // 1. Cat master / cluster manager
         let cm_resp = cat_cluster_manager().await;

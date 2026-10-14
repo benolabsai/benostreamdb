@@ -125,6 +125,26 @@ async fn test_sql_binding_ergonomics_no_arrow_cast() -> anyhow::Result<()> {
         .await?;
     // Catalog DDL returns an empty batch upon executing DDL successfully
     assert!(res_idx.is_empty() || res_idx[0].num_rows() == 0);
+
+    // 4. Priority 1 (continued): the two DRIFT graph UDAFs also carry
+    //    non-strict signatures, so bare Int64 columns/literals and `List(Int64)`
+    //    whole-community/seed lists need no `arrow_cast(...)`.
+    let (res_drift, _) = session
+        .sql("SELECT drift_search(source, target, 'text', [0, 1], 1, 'in_memory', 'in_memory') AS d FROM edges")
+        .await?;
+    assert!(
+        !res_drift.is_empty(),
+        "drift_search should accept Int64 args without arrow_cast"
+    );
+
+    let (res_regional, _) = session
+        .sql("SELECT regional_drift(source, target, 'text', [0, 1], 1, 1, 'in_memory', 'in_memory') AS r FROM edges")
+        .await?;
+    assert!(
+        !res_regional.is_empty(),
+        "regional_drift should accept Int64 args without arrow_cast"
+    );
+
     Ok(())
 }
 

@@ -23,6 +23,10 @@ env:
   # Persist sccache objects in the GitHub Actions cache so wheels reuse compiled
   # crates across steps and across runs instead of recompiling from scratch.
   SCCACHE_GHA_ENABLED: "true"
+  # Pin artifact timestamps so wheels/sdists are byte-reproducible for a given
+  # revision: maturin/wheel honour SOURCE_DATE_EPOCH for the embedded zip
+  # mtimes, so rebuilding the same tag yields identical archives.
+  SOURCE_DATE_EPOCH: "1704067200"
 
 jobs:
   ci:
@@ -82,6 +86,14 @@ jobs:
           args: --release --out dist --find-interpreter --features "python" --zig
           sccache: "true"
           manylinux: auto
+      # §3.1: clean-environment install + import of the freshly built wheel.
+      # Only the native-arch wheel is installable on the runner (aarch64 is a
+      # cross-build).
+      - name: Smoke test — clean install & import (native arch)
+        if: matrix.target == 'x86_64'
+        run: |
+          python -m pip install --force-reinstall dist/benostreamdb-*.whl
+          python -c "import benostreamdb; print('benostreamdb import OK')"
       - name: Build search gateway wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -165,6 +177,13 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features "python"
           sccache: "true"
+      # §3.1: clean-environment install + import. `macos-latest` is Apple Silicon,
+      # so only the aarch64 wheel is installable here.
+      - name: Smoke test — clean install & import (native arch)
+        if: matrix.target == 'aarch64'
+        run: |
+          python -m pip install --force-reinstall dist/benostreamdb-*.whl
+          python -c "import benostreamdb; print('benostreamdb import OK')"
       - name: Build search gateway wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -258,6 +277,11 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist --features "python"
           sccache: "true"
+      # §3.1: clean-environment install + import of the freshly built wheel.
+      - name: Smoke test — clean install & import
+        run: |
+          python -m pip install --force-reinstall dist/benostreamdb-*.whl
+          python -c "import benostreamdb; print('benostreamdb import OK')"
       - name: Build search gateway wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -324,6 +348,35 @@ jobs:
         with:
           name: wheels-core-sdist
           path: dist
+
+  # Reproducibility: build the core wheel twice under the pinned
+  # SOURCE_DATE_EPOCH and require byte-identical archives, turning the
+  # reproducibility claim into a checked guarantee.
+  reproducibility:
+    name: Reproducible Wheel
+    needs: [ci]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - name: Install maturin
+        run: pip install maturin
+      - name: Build twice and compare hashes
+        run: |
+          maturin build --release --out dist-run1 --features python
+          maturin build --release --out dist-run2 --features python
+          sha256sum dist-run1/benostreamdb-*.whl | awk '{print $1}' > h1
+          sha256sum dist-run2/benostreamdb-*.whl | awk '{print $1}' > h2
+          if ! diff -u h1 h2; then
+            echo "::error::wheel is not reproducible under SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
+            exit 1
+          fi
+          echo "wheel is byte-reproducible: $(cat h1)"
 
   # Pre-release gate: the long-running correctness evidence. This is the
   # "millions of operations" bar from the production-readiness plan — it does

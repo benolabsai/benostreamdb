@@ -117,6 +117,22 @@ async fn main() {
         catalog_ns,
     ));
 
+    // Optional hard requirement: refuse to start read-only. A network-facing
+    // deployment that expects writes should fail fast rather than accept them
+    // and 403 at request time.
+    if state.is_read_only() {
+        let require_policy = std::env::var("BSDB_SEARCH_REQUIRE_POLICY")
+            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        if require_policy {
+            tracing::error!(
+                "BSDB_SEARCH_REQUIRE_POLICY is set but no writable schema is configured \
+                 (publish a .benostream-policy.json); refusing to start in read-only mode"
+            );
+            std::process::exit(1);
+        }
+    }
+
     // Stateless auth (API key / JWT). No user database: identity is delegated
     // to a shared secret or an external IdP's signing key.
     let auth = Arc::new(benostreamdb_search::auth::AuthConfig::from_env());

@@ -241,8 +241,10 @@ async fn udafs_are_mode_invariant() -> anyhow::Result<()> {
         "SELECT graph_strongly_connected_components(source, target, '{URI}', '{MODE}') AS res FROM edges",
         "SELECT graph_louvain_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast(1.0, 'Float64'), '{URI}', '{MODE}') AS res FROM edges",
         "SELECT graph_pagerank(source, target, '{URI}', '{MODE}') AS res FROM edges",
-        "SELECT drift_search(source, target, 'text', make_array(arrow_cast(1, 'UInt64')), arrow_cast(1, 'UInt32'), '{URI}', '{MODE}') AS res FROM edges",
-        "SELECT regional_drift(source, target, 'text', make_array(arrow_cast(1, 'UInt64')), arrow_cast(1, 'UInt32'), arrow_cast(1, 'UInt32'), '{URI}', '{MODE}') AS res FROM edges",
+        // The two DRIFT UDAFs are non-strict: bare Int64 literals and a
+        // List(Int64) whole-community/seed list are accepted (no arrow_cast).
+        "SELECT drift_search(source, target, 'text', [1], 1, '{URI}', '{MODE}') AS res FROM edges",
+        "SELECT regional_drift(source, target, 'text', [1], 1, 1, '{URI}', '{MODE}') AS res FROM edges",
     ];
 
     for query_tpl in queries {

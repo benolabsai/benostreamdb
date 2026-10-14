@@ -372,6 +372,7 @@ fn es_status(err: &BenoStreamError) -> u16 {
         BenoStreamError::PrimaryKeyViolation { .. } => 400,
         BenoStreamError::NullConstraintViolation { .. } => 400,
         BenoStreamError::SchemaIncompatible { .. } => 400,
+        BenoStreamError::PermissionDenied { .. } => 403,
         _ => 500,
     }
 }
@@ -400,6 +401,10 @@ pub async fn bulk_core(
 
     let t_write = Instant::now();
     for (index, group) in by_index {
+        // Enforce the catalog storage policy for every target index before any
+        // write (including the delete path).
+        state.ensure_index_writable(&index)?;
+
         let existed_before = state.index_exists(&index).await;
         // Split off deletes and updates
         let writes: Vec<(usize, &BulkItem)> = group
@@ -600,7 +605,7 @@ mod tests {
     async fn test_bulk_index_and_delete() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("bulk_test")).unwrap();
 
         let ndjson = "{\"index\": {\"_index\": \"bulk_test\", \"_id\": \"b1\"}}\n{\"name\": \"item 1\", \"val\": 100}\n{\"index\": {\"_index\": \"bulk_test\", \"_id\": \"b2\"}}\n{\"name\": \"item 2\", \"val\": 200}\n";

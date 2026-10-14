@@ -3163,6 +3163,84 @@ mod tests {
         assert!(content.contains("\"x\":1") || content.contains("\"x\": 1"));
     }
 
+    /// R1 + R5 reachable through MCP: the graph UDAFs carry non-strict
+    /// (`variadic_any`) signatures inherited from the core session, so an
+    /// `Int64`-columned edge table can be queried with bare integer/float
+    /// literals (no `arrow_cast(...)`); and `session.sql` tolerates a trailing
+    /// `;` plus `--` line comments.
+    #[tokio::test]
+    async fn test_mcp_graph_udaf_without_casts() {
+        let server = McpServer::new();
+
+        server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": { "table_name": "edges_i64", "schema_ddl": "source BIGINT, target BIGINT" }
+                }),
+            )
+            .await
+            .unwrap();
+        server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_records",
+                    "arguments": {
+                        "table_name": "edges_i64",
+                        "records": [
+                            {"source": 0, "target": 1},
+                            {"source": 1, "target": 2},
+                            {"source": 2, "target": 0}
+                        ]
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+
+        // Non-strict graph UDAF: Int64 columns + bare literals, no arrow_cast.
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT graph_pagerank(source, target, 0.85, 20) AS pr FROM scratch.edges_i64"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            res.get("isError").is_none(),
+            "graph UDAF must run via MCP without casts: {res}"
+        );
+        assert!(!res["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty());
+
+        // R5: trailing semicolon + line comments are tolerated via MCP too.
+        let res2 = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "-- pagerank over Int64 edges\nSELECT graph_pagerank(source, target, 0.85, 20) AS pr FROM scratch.edges_i64;"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            res2.get("isError").is_none(),
+            "trailing ';' and comments must be tolerated via MCP: {res2}"
+        );
+    }
+
     #[tokio::test]
     async fn test_mcp_scratch_table_workflow() {
         let server = McpServer::new();

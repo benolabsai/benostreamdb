@@ -164,6 +164,7 @@ pub(crate) async fn count_core(
     index: &str,
     body: Option<&Value>,
 ) -> Result<CountResponse, BenoStreamError> {
+    state.ensure_index_readable(index)?;
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
@@ -1897,6 +1898,11 @@ pub async fn search_core(
 ) -> Result<SearchResponse, BenoStreamError> {
     let start = Instant::now();
 
+    // Reads are governed by the same catalog policy (RW/RO/immutable lists) as
+    // writes; check BEFORE existence so an untrusted connector cannot probe
+    // whether an ungoverned schema exists.
+    state.ensure_index_readable(index)?;
+
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
@@ -2529,6 +2535,41 @@ mod tests {
 
     use super::*;
 
+    #[tokio::test]
+    async fn search_denied_for_ungoverned_schema() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let mut policy = benostreamdb::core::catalog::CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["scratch".to_string()]);
+        policy.readonly_schemas = Some(vec!["reporting".to_string()]);
+        benostreamdb::core::catalog::set_catalog_policy(tmp.path().to_str().unwrap(), &policy)
+            .unwrap();
+        let state = AppState::new(root, "test-cluster".into());
+
+        let body = serde_json::json!({ "query": { "match_all": {} } });
+
+        // Ungoverned schema -> read denied (403), before existence is checked.
+        let err = match search_core(&state, "analytics.events", &body).await {
+            Err(e) => e,
+            Ok(_) => panic!("ungoverned schema read must be denied"),
+        };
+        assert!(
+            matches!(err, BenoStreamError::PermissionDenied { .. }),
+            "expected PermissionDenied, got {err}"
+        );
+
+        // A governed (read-only) schema passes the read check; it then fails on
+        // the missing index, NOT with a permission error.
+        let err2 = match search_core(&state, "reporting.2024", &body).await {
+            Err(e) => e,
+            Ok(_) => panic!("missing index must error"),
+        };
+        assert!(
+            !matches!(err2, BenoStreamError::PermissionDenied { .. }),
+            "read-only schema must be readable, got {err2}"
+        );
+    }
+
     async fn index_docs(state: &AppState, index: &str, docs: &[Value]) {
         for (i, doc) in docs.iter().enumerate() {
             index_document_core(state, index, Some(&format!("{index}-doc-{i}")), doc.clone())
@@ -2546,7 +2587,7 @@ mod tests {
             .try_init();
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
 
         crate::handlers::indices::create_index_core(&state, "docs", None)
@@ -2599,7 +2640,7 @@ mod tests {
     async fn search_knn_nearest_first() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("vecs")).unwrap();
 
         index_docs(
@@ -2637,7 +2678,7 @@ mod tests {
     async fn search_hybrid_rrf() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("hyb")).unwrap();
 
         index_docs(
@@ -2676,7 +2717,7 @@ mod tests {
     async fn search_filter_narrows_results() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("f")).unwrap();
 
         crate::handlers::indices::create_index_core(&state, "f", None)
@@ -2755,7 +2796,7 @@ mod tests {
     async fn search_match_all_and_pagination() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("ma")).unwrap();
 
         index_docs(
@@ -2791,7 +2832,7 @@ mod tests {
     async fn search_unknown_index_404() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
 
         let err = search_core(&state, "missing", &json!({"query": {"match_all": {}}}))
             .await
@@ -2805,7 +2846,7 @@ mod tests {
     async fn search_request_errors_are_400() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("e")).unwrap();
         index_docs(&state, "e", &[json!({"body": "hello"})]).await;
 
@@ -2836,7 +2877,7 @@ mod tests {
     async fn exists_filter_es_wire_format() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("ex")).unwrap();
 
         index_docs(
@@ -2885,7 +2926,7 @@ mod tests {
     async fn unknown_filter_column_is_400_not_500() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("nf")).unwrap();
 
         index_docs(&state, "nf", &[json!({"body": "hello", "age": 30})]).await;
@@ -2909,7 +2950,7 @@ mod tests {
     async fn aggregations_terms_stats_histogram_range() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("agg")).unwrap();
 
         index_docs(
@@ -2960,7 +3001,7 @@ mod tests {
     async fn aggregations_percentiles() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("pct")).unwrap();
 
         index_docs(
@@ -3033,7 +3074,7 @@ mod tests {
     async fn aggregations_composite() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("comp_idx")).unwrap();
 
         index_docs(
@@ -3200,7 +3241,7 @@ mod tests {
     async fn aggregations_significant_terms() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("sig_idx")).unwrap();
 
         index_docs(
@@ -3263,7 +3304,7 @@ mod tests {
     async fn search_fuzzy_query() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("fuzzy_idx")).unwrap();
 
         index_docs(
@@ -3395,7 +3436,7 @@ mod tests {
     async fn search_match_phrase_and_multi_match() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("phrase_idx")).unwrap();
 
         crate::handlers::indices::create_index_core(&state, "phrase_idx", None)
@@ -3482,7 +3523,7 @@ mod tests {
     async fn search_bool_should_wildcard_prefix_ids_and_sort() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("ops")).unwrap();
 
         crate::handlers::indices::create_index_core(&state, "ops", None)
@@ -3687,7 +3728,7 @@ mod tests {
     async fn search_nested_query_and_dot_path() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("nested_idx")).unwrap();
 
         index_docs(
@@ -3778,7 +3819,7 @@ mod tests {
     async fn search_nested_array_of_objects_query() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("nested_arr")).unwrap();
 
         // Index documents with array of objects
@@ -3894,7 +3935,7 @@ mod tests {
     async fn search_has_child_and_has_parent() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("posts")).unwrap();
         std::fs::create_dir_all(tmp.path().join("comments")).unwrap();
 
@@ -4163,7 +4204,7 @@ mod tests {
     async fn search_query_string_and_simple_query_string() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("qs_idx")).unwrap();
 
         crate::handlers::indices::create_index_core(&state, "qs_idx", None)
@@ -4315,7 +4356,7 @@ mod tests {
     async fn search_scroll_lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("scroll_idx")).unwrap();
 
         let docs: Vec<Value> = (0..5)

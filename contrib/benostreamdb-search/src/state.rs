@@ -4,6 +4,7 @@
 //! Prometheus collectors behind plan-5.2.2 telemetry.
 
 use arrow::datatypes::SchemaRef;
+use benostreamdb::core::catalog::SchemaPermissions;
 use benostreamdb::core::table::{PreloadOptions, WalDurability};
 use benostreamdb::{BenoStreamError, Table};
 use futures::TryStreamExt;
@@ -41,6 +42,12 @@ pub struct AppState {
     pub catalog: Option<Arc<dyn benostreamdb::core::catalog::Catalog>>,
     /// Namespace for table operations in the external catalog (default: "default").
     pub catalog_namespace: String,
+    /// Catalog storage policy enforced for this untrusted connector.
+    ///
+    /// Computed once from the authoritative `.benostream-policy.json` at the
+    /// warehouse root. Flight SQL is trusted and bypasses this entirely; the
+    /// Search REST API (an untrusted connector) applies it to every mutation.
+    pub permissions: SchemaPermissions,
     /// Qdrant collection aliases: alias name -> target collection name.
     ///
     /// Aliases are process-local (in-memory) rather than persisted: they are a
@@ -74,6 +81,37 @@ fn preload_options() -> PreloadOptions {
         max_memory_bytes: budget_gb * 1024 * 1024 * 1024,
         ..PreloadOptions::default()
     }
+}
+
+/// Derive the local filesystem warehouse path behind `storage_root`.
+///
+/// Strips a `file://` prefix; returns `None` for remote object stores
+/// (`s3://`, `gs://`, `abfs://`, ...). Policy reads no longer depend on this:
+/// [`SchemaPermissions::for_untrusted_connector`] goes through the core
+/// object-store resolver, which supports remote warehouses too. This helper
+/// remains for local-path normalization and diagnostics.
+fn local_warehouse_path(storage_root: &str) -> Option<String> {
+    let stripped = storage_root.strip_prefix("file://").unwrap_or(storage_root);
+    // A remaining `scheme://` marker means this is a remote object store.
+    if stripped.find("://").map(|idx| idx > 0).unwrap_or(false) {
+        None
+    } else {
+        Some(stripped.trim_end_matches('/').to_string())
+    }
+}
+
+/// Test helper: build a gateway whose warehouse carries a permissive policy, so
+/// handler tests can exercise behavior (the gateway is a server connector whose
+/// writes otherwise require a policy grant).
+#[cfg(test)]
+pub fn test_state(root: String) -> AppState {
+    use benostreamdb::core::catalog::{set_catalog_policy, CatalogPolicy};
+    if let Some(path) = local_warehouse_path(&root) {
+        let mut policy = CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["*".to_string()]);
+        let _ = set_catalog_policy(&path, &policy);
+    }
+    AppState::new(root, "test-cluster".into())
 }
 
 impl AppState {
@@ -117,6 +155,33 @@ impl AppState {
             }),
         );
 
+        // Resolve the catalog storage policy once, at startup. The resolver is
+        // storage-aware: it reads `.benostream-policy.json` through the core
+        // object store, so both local paths and remote URIs (s3://, gs://, ...)
+        // adopt the admin policy. When no policy exists (or the object store is
+        // unreachable) it fails closed to read-only-except-scratch.
+        let policy_root =
+            local_warehouse_path(&storage_root).unwrap_or_else(|| storage_root.clone());
+        // The gateway is a network-facing **server** connector: schemas are
+        // provisioned on the backend, writes are allowed only where the policy
+        // grants read-write (no default `scratch` namespace, and it never creates
+        // a schema), and reads follow the read-only floor / policy allowlist.
+        let permissions = SchemaPermissions::for_server_connector(&policy_root);
+        if permissions.readwrite_schemas.is_empty() {
+            tracing::warn!(
+                storage_root = %storage_root,
+                "search gateway is READ-ONLY: no writable schema. Publish a \
+                 .benostream-policy.json naming readwrite_schemas to enable writes, \
+                 or set BSDB_SEARCH_REQUIRE_POLICY=1 to refuse to start instead"
+            );
+        } else {
+            tracing::info!(
+                storage_root = %storage_root,
+                writable = ?permissions.readwrite_schemas,
+                "search gateway write policy resolved"
+            );
+        }
+
         Self {
             storage_root,
             cluster_uuid,
@@ -126,6 +191,7 @@ impl AppState {
             compute,
             catalog,
             catalog_namespace,
+            permissions,
             aliases: Arc::new(RwLock::new(HashMap::new())),
             snapshot_repositories: Arc::new(RwLock::new(default_repos)),
             snapshots: Arc::new(RwLock::new(HashMap::new())),
@@ -171,6 +237,79 @@ impl AppState {
         } else {
             name.to_string()
         }
+    }
+
+    /// Resolve the policy "schema" for a search index, MCP-consistent.
+    ///
+    /// If the index name contains a '.', the prefix is the schema
+    /// (e.g. `analytics.events` -> `analytics`). Otherwise the schema is
+    /// `permissions.default_write_schema` (default `scratch`). Lowercased.
+    pub fn write_schema_for_index(&self, index: &str) -> String {
+        match index.split_once('.') {
+            Some((schema, _)) if !schema.is_empty() => schema.to_ascii_lowercase(),
+            _ => self.permissions.default_write_schema.to_ascii_lowercase(),
+        }
+    }
+
+    /// Enforce the catalog storage policy for a write targeting `index`.
+    ///
+    /// Returns [`BenoStreamError::PermissionDenied`] (mapped to HTTP 403 by the
+    /// ES layer) when the index's schema is not writable. The reason names the
+    /// schema and the writable schemas allowed by the policy.
+    pub fn ensure_index_writable(&self, index: &str) -> Result<(), BenoStreamError> {
+        let schema = self.write_schema_for_index(index);
+        if self.permissions.is_schema_writable(&schema) {
+            return Ok(());
+        }
+        let allowed = if self.permissions.readwrite_schemas.is_empty() {
+            "<none>".to_string()
+        } else {
+            self.permissions.readwrite_schemas.join(", ")
+        };
+        Err(BenoStreamError::permission_denied(
+            schema.clone(),
+            format!(
+                "write to schema '{schema}' is not permitted by the catalog storage policy; \
+                 writable schemas: [{allowed}]"
+            ),
+        ))
+    }
+
+    /// Enforce the catalog storage policy for a **read** of `index`.
+    ///
+    /// Reads have a **read-only floor**: when the warehouse has no policy every
+    /// schema is read-only (readable), so a fresh gateway can still be read.
+    /// When an explicit policy is present it is an allowlist for reads too — a
+    /// schema named read-write, read-only, or immutable is readable, as is
+    /// `scratch`; an unlisted schema is not. Returns
+    /// [`BenoStreamError::PermissionDenied`] (HTTP 403) when the index's schema
+    /// is not readable.
+    pub fn ensure_index_readable(&self, index: &str) -> Result<(), BenoStreamError> {
+        let schema = self.write_schema_for_index(index);
+        if self.permissions.is_schema_readable(&schema) {
+            return Ok(());
+        }
+        let mut readable = self.permissions.readwrite_schemas.clone();
+        readable.extend(self.permissions.readonly_schemas.iter().cloned());
+        let readable = if readable.is_empty() {
+            "<none>".to_string()
+        } else {
+            readable.join(", ")
+        };
+        Err(BenoStreamError::permission_denied(
+            schema.clone(),
+            format!(
+                "read from schema '{schema}' is not permitted by the catalog storage policy; \
+                 readable schemas: [{readable}]"
+            ),
+        ))
+    }
+
+    /// Whether the gateway currently has **no writable schema** (read-only
+    /// posture). True when no policy has been published (or none grants a
+    /// read-write schema).
+    pub fn is_read_only(&self) -> bool {
+        self.permissions.readwrite_schemas.is_empty()
     }
 
     /// Table URI for a named search index: `{storage_root}/{index}`.
@@ -901,6 +1040,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn is_read_only_tracks_policy() {
+        use benostreamdb::core::catalog::{set_catalog_policy, CatalogPolicy};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+
+        // No policy -> read-only (server connector).
+        let state = AppState::new(root.clone(), "test-cluster".into());
+        assert!(state.is_read_only());
+
+        // A policy granting a writable schema -> not read-only.
+        let mut policy = CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["analytics".to_string()]);
+        set_catalog_policy(tmp.path().to_str().unwrap(), &policy).unwrap();
+        let state2 = AppState::new(root, "test-cluster".into());
+        assert!(!state2.is_read_only());
+    }
+
+    #[test]
+    fn no_access_schema_is_denied_for_reads_and_writes() {
+        use benostreamdb::core::catalog::{set_catalog_policy, CatalogPolicy};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let mut policy = CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["*".to_string()]);
+        policy.no_access_schemas = Some(vec!["secret".to_string()]);
+        set_catalog_policy(tmp.path().to_str().unwrap(), &policy).unwrap();
+
+        let state = AppState::new(root, "test-cluster".into());
+        assert!(state.ensure_index_readable("secret.x").is_err());
+        assert!(state.ensure_index_writable("secret.x").is_err());
+        // An unrelated schema is still writable under the wildcard.
+        assert!(state.ensure_index_writable("analytics.events").is_ok());
+    }
+
+    /// The gateway must adopt a policy from ANY storage root — including a
+    /// remote object-store URI (here a process-shared `memory://` stand-in),
+    /// not only a local filesystem path.
+    #[test]
+    fn remote_object_store_policy_is_adopted() {
+        use benostreamdb::core::catalog::{set_catalog_policy, CatalogPolicy};
+
+        let root = format!("memory://search-policy-{}", std::process::id());
+        let mut policy = CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["scratch".to_string(), "analytics".to_string()]);
+        policy.default_write_schema = Some("scratch".to_string());
+        set_catalog_policy(&root, &policy).unwrap();
+
+        let state = crate::state::test_state(root);
+        assert!(
+            state.ensure_index_writable("analytics.events").is_ok(),
+            "a policy on a remote root must permit a listed schema"
+        );
+        assert!(
+            state.ensure_index_writable("finance.events").is_err(),
+            "a policy on a remote root must still deny unlisted schemas"
+        );
+    }
+
+    #[test]
     fn index_uri_joins_root_and_name() {
         let state = AppState::new("/data/search".to_string(), "uuid".to_string());
         assert_eq!(state.index_uri("people"), "/data/search/people");
@@ -924,7 +1122,7 @@ mod tests {
     async fn open_or_create_reports_cache_hits_and_misses() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("mi")).unwrap();
 
         // First open creates the table (cache miss); the second reuses the
@@ -959,5 +1157,92 @@ mod tests {
         std::env::remove_var("BSDB_SEARCH_CATALOG_TYPE");
         std::env::remove_var("BSDB_SEARCH_CATALOG_URL");
         std::env::remove_var("BSDB_SEARCH_CATALOG_NAMESPACE");
+    }
+
+    #[test]
+    fn write_schema_for_index_dotted_and_unqualified() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = crate::state::test_state(root);
+
+        // Dotted: the prefix is the schema (lowercased).
+        assert_eq!(
+            state.write_schema_for_index("analytics.events"),
+            "analytics"
+        );
+        assert_eq!(
+            state.write_schema_for_index("Analytics.Events"),
+            "analytics"
+        );
+        assert_eq!(state.write_schema_for_index("a.b.c"), "a");
+
+        // Unqualified: falls back to the default write schema (scratch).
+        assert_eq!(state.write_schema_for_index("logs"), "scratch");
+        assert_eq!(state.write_schema_for_index(""), "scratch");
+    }
+
+    #[test]
+    fn ensure_index_readable_read_only_floor_and_policy_allowlist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+
+        // No policy: every schema is read-only → readable; scratch too.
+        let state = AppState::new(root.clone(), "test-cluster".into());
+        assert!(state.ensure_index_readable("scratch.logs").is_ok());
+        assert!(state.ensure_index_readable("logs").is_ok()); // unqualified -> scratch
+        assert!(
+            state.ensure_index_readable("analytics.events").is_ok(),
+            "with no policy every schema is read-only (readable)"
+        );
+
+        // With a policy the read lists are an allowlist: named schemas are
+        // readable, an unlisted schema is not.
+        use benostreamdb::core::catalog::{set_catalog_policy, CatalogPolicy};
+        let mut policy = CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["scratch".to_string()]);
+        policy.readonly_schemas = Some(vec!["reporting".to_string()]);
+        set_catalog_policy(tmp.path().to_str().unwrap(), &policy).unwrap();
+        let state2 = AppState::new(root, "test-cluster".into());
+        assert!(state2.ensure_index_readable("reporting.2024").is_ok());
+        assert!(state2.ensure_index_readable("scratch.x").is_ok());
+        assert!(state2.ensure_index_readable("analytics.events").is_err());
+    }
+
+    #[test]
+    fn ensure_index_writable_fails_closed_without_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+
+        // Server connector: no policy -> no writable schema at all (no scratch).
+        assert!(state.ensure_index_writable("logs").is_err());
+        assert!(state.ensure_index_writable("scratch.logs").is_err());
+
+        // A persistent (dotted) schema is denied when no policy exists.
+        let err = state
+            .ensure_index_writable("analytics.events")
+            .expect_err("analytics must be denied");
+        assert!(matches!(
+            err,
+            BenoStreamError::PermissionDenied { ref schema, .. } if schema == "analytics"
+        ));
+
+        // Immutable system schemas are denied too.
+        assert!(state.ensure_index_writable("default.foo").is_err());
+    }
+
+    #[test]
+    fn local_warehouse_path_handles_local_and_remote() {
+        assert_eq!(
+            local_warehouse_path("file:///data/wh"),
+            Some("/data/wh".to_string())
+        );
+        assert_eq!(
+            local_warehouse_path("/data/wh/"),
+            Some("/data/wh".to_string())
+        );
+        assert_eq!(local_warehouse_path("s3://bucket/wh"), None);
+        assert_eq!(local_warehouse_path("gs://bucket/wh"), None);
+        assert_eq!(local_warehouse_path("abfs://container/wh"), None);
     }
 }

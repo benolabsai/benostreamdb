@@ -101,6 +101,15 @@ impl From<BenoStreamError> for EsError {
                 },
                 status: 400,
             },
+            BenoStreamError::PermissionDenied { schema, .. } => EsError {
+                error: EsErrorBody {
+                    error_type: "security_exception".into(),
+                    reason: format!(
+                        "action [indices:data/write/index] is unauthorized for schema '{schema}': {err}"
+                    ),
+                },
+                status: 403,
+            },
             _ => EsError {
                 error: EsErrorBody {
                     error_type: "internal_error".into(),

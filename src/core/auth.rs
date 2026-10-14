@@ -89,6 +89,12 @@ impl AuthConfig {
         self
     }
 
+    /// Builder: configure a shared API key programmatically (embedding/tests).
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        self.api_key = Some(key.into());
+        self
+    }
+
     /// Verify a bearer token (API key or JWT). Returns the claims on success.
     pub fn verify(&self, token: &str) -> Result<AuthClaims, String> {
         // API key first (constant-time).

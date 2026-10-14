@@ -151,7 +151,7 @@ config, and the command used.
   | `--ef-construction` | build beam width | HNSW `ef_construction` (`quality`) |
   | `--ef-search` | query beam width | HNSW `efSearch` |
   | `--metric` | distance | `l2` / `cosine` / `inner_product` |
-  | `--index` | algorithm | `hnsw`, `hnsw_tq8`, `hnsw_tq4`, `hnsw_pq` |
+  | `--index` | algorithm | `hnsw`, `hnsw_tq8`, `hnsw_pq` (TQ4 was cut — recall too low) |
 
 - Two latency views are reported:
   - **End-to-end** (`to_arrow(vector_filter=...)`): index search + row fetch.

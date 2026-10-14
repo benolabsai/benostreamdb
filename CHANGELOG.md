@@ -10,7 +10,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Benchmarks
 - **Report: "Index Precision" column** — the vector tables now report the
-  quantization (`f32`/`tq8`/`tq4`/`pq`) rather than the algorithm name, and the
+  quantization (`f32`/`tq8`/`pq`) rather than the algorithm name, and the
   `_tq8`/`_pq` suffix is dropped from the Engine column (the precision
   column carries it). The §4 BEIR table is sorted by dataset then QPS, with
   lexical BM25 rows reading `-` (no vector index) and hybrid `f32`. The SQL
@@ -25,6 +25,32 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   matrices under the shared envelope after the fixes below.
 
 ### Fixed
+- **Resolved a stale README claim about gateway authentication** — the Search
+  API compatibility list said "authentication/security" was unsupported, which
+  contradicted the security section. Authentication (stateless API key / JWT,
+  admin-only writes) **is** enforced on every search and Qdrant route; the list
+  is corrected. Added a middleware regression test
+  (`api_key_is_required_and_enforced_on_writes`) asserting `401` without
+  credentials and that authenticated writes are permitted.
+- **Policy `no_access_schemas`** — an explicit deny (read **and** write) that
+  overrides the read-only floor; enforced on both the `CatalogPolicy` and the
+  `SchemaPermissions` used by untrusted connectors.
+- **Search gateway now enforces the catalog policy on reads** — the OpenSearch
+  (`_search`, `_count`, `_doc/{id}`, `_mapping`) and Qdrant (search / query /
+  scroll / retrieve / count / recommend / discover) read paths were unguarded;
+  they now consult `SchemaPermissions::is_schema_readable` before touching
+  storage, so an untrusted client cannot read a schema the policy does not name.
+- **Qdrant mutation routes now enforce the write policy** — collection
+  update/delete, payload-index create/delete, snapshot create, and alias
+  create/rename were previously unguarded and are now subject to
+  `ensure_index_writable`.
+- **Catalog policy read-modify-write is now CAS (optimistic concurrency)** —
+  `set_catalog_schema_access` / `lock_catalog_read_only` retry on a stale
+  object-store version instead of last-writer-wins, so concurrent admin updates
+  no longer lose schemas.
+- **Search gateway adopts remote (`s3://`, `gs://`, …) policies** — policy
+  resolution now goes through the object-store resolver rather than assuming a
+  local path (previously it failed closed to scratch-only for non-local roots).
 - **Vector distance UDF formulas corrected** — `l2_distance` and
   `cosine_distance` scalar UDFs now correctly compute Euclidean ($L_2$) distance
   and cosine distance ($1 - \cos(\theta)$), matching pgvector operators `<->` and `<=>`.
@@ -54,7 +80,33 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   and host-sized buffer pool also failed to mmap under the cgroup cap; both are
   now sized from the envelope.
 
+### Changed
+- **Search gateway read-only posture is loud and fail-fast-able** — the gateway
+  logs a `WARN` at startup when it has no writable schema, and
+  `BSDB_SEARCH_REQUIRE_POLICY=1` makes it **refuse to start** instead of running
+  read-only.
+- **Reproducibility is now checked** — the release workflow builds the core wheel
+  twice under the pinned `SOURCE_DATE_EPOCH` and fails unless the archives are
+  byte-identical.
+- **Workflow lint** — CI runs `actionlint` on every change, so tag-only release
+  jobs are at least statically validated on PRs.
+- **The search gateway is a server connector (no default `scratch`)** — unlike
+  the local MCP agent, it gets **no default writable namespace**: schemas are
+  provisioned on the backend and the gateway never creates one, writes are
+  allowed only to schemas the policy lists `read-write`, and reads follow a
+  read-only floor / policy allowlist. Reads and writes are enforced identically
+  across the OpenSearch and Qdrant APIs. See
+  `contrib/benostreamdb-search/README.md`.
+- **Reproducible release artifacts** — the release workflow pins
+  `SOURCE_DATE_EPOCH` so wheels/sdists are byte-reproducible for a given
+  revision, and smoke-tests a clean install + import on each platform.
+
 ### Added
+- **Feature-boundary lock test** — `tests/test_feature_boundary.rs` asserts the
+  default build stays CPU-only (`default = []`) and the experimental surfaces
+  (`python`, `java`, `cuda`, `wgpu`, `observability`, …) remain opt-in, so the
+  supported/experimental split in `docs/SUPPORT_MATRIX.md` is enforced, not just
+  documented.
 - **Authoritative Warehouse Catalog Policy (`.benostream-policy.json`)** — Added a
   bucket-level catalog policy file that defines schema permissions (`readwrite_schemas`,
   `readonly_schemas`, and `immutable_schemas`). The core database exposes administrative

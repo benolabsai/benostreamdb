@@ -60,4 +60,5 @@ BenoStreamDB provides native connectors and API bridges for data engineering and
 * **[Benchmarking Methodology](BENCHMARKING.md)**: Reproducibility contract, test harnesses, and competitive analysis guidelines.
 * **[Benchmarking Plan](BENCHMARKING_PLAN.md)**: Workloads, competitor matrices, and evaluation dimensions.
 * **[Production Readiness Assessment](PRODUCTION_READINESS_ASSESSMENT.md)**: Verification of core invariants and stability milestones.
+* **[Supported Surface & Build Matrix](SUPPORT_MATRIX.md)**: Shipped platforms/ABIs, cargo feature gates, trusted vs untrusted surfaces, and known limitations.
 * **[Project Roadmap](ROADMAP.md)**: Architecture status, shipped milestones, and planned roadmap items.

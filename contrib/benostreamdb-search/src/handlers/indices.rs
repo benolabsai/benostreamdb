@@ -32,6 +32,7 @@ pub(crate) async fn create_index_core(
     body: Option<&Value>,
 ) -> Result<Value, BenoStreamError> {
     AppState::validate_index_name(index)?;
+    state.ensure_index_writable(index)?;
 
     if state.index_exists(index).await {
         return Err(BenoStreamError::PrimaryKeyViolation {
@@ -153,6 +154,7 @@ pub(crate) async fn delete_index_core(
     index: &str,
 ) -> Result<Value, BenoStreamError> {
     AppState::validate_index_name(index)?;
+    state.ensure_index_writable(index)?;
 
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
@@ -201,6 +203,7 @@ pub(crate) async fn post_aliases_core(
                 }
             })?;
             AppState::validate_index_name(alias)?;
+            state.ensure_index_writable(index)?;
             aliases.insert(alias.to_string(), index.to_string());
         } else if let Some(remove) = act.get("remove") {
             let alias = remove.get("alias").and_then(Value::as_str).ok_or_else(|| {
@@ -284,6 +287,7 @@ pub(crate) async fn put_single_alias_core(
     alias: &str,
 ) -> Result<Value, BenoStreamError> {
     AppState::validate_index_name(alias)?;
+    state.ensure_index_writable(index)?;
 
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
@@ -302,8 +306,11 @@ pub(crate) async fn put_single_alias_core(
 /// `DELETE /{index}/_alias/{alias}` — delete a single alias.
 pub async fn delete_single_alias(
     State(state): State<Arc<AppState>>,
-    Path((_index, alias)): Path<(String, String)>,
+    Path((index, alias)): Path<(String, String)>,
 ) -> Response {
+    if let Err(e) = state.ensure_index_writable(&index) {
+        return es_response::<Value>(Err(e));
+    }
     state.aliases.write().await.remove(&alias);
     es_response(Ok(serde_json::json!({ "acknowledged": true })))
 }
@@ -319,7 +326,7 @@ mod tests {
     async fn test_alias_lifecycle_and_resolution() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
 
         // 1. Create index
         let create_res = create_index_core(&state, "logs-v1", None).await.unwrap();
@@ -438,6 +445,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
         let mock_cat = Arc::new(MockCatalog::default());
+        let mut policy = benostreamdb::core::catalog::CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["*".to_string()]);
+        benostreamdb::core::catalog::set_catalog_policy(tmp.path().to_str().unwrap(), &policy)
+            .unwrap();
         let state = AppState::with_catalog(
             root,
             "test-cluster".into(),
@@ -502,5 +513,88 @@ mod tests {
             .await
             .unwrap());
         assert!(!state.index_exists("catalog_idx").await);
+    }
+
+    #[tokio::test]
+    async fn write_denied_in_persistent_schema_without_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+
+        // A dotted (persistent) schema is denied when no policy file exists.
+        let err = create_index_core(&state, "analytics.events", None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                BenoStreamError::PermissionDenied { ref schema, .. } if schema == "analytics"
+            ),
+            "{err}"
+        );
+
+        // Immutable system schemas are denied too.
+        let err = create_index_core(&state, "default.foo", None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, BenoStreamError::PermissionDenied { .. }),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_denied_without_policy_including_scratch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+
+        // Server connector: no default writable namespace. Writing any index
+        // (including the MCP `scratch` namespace) requires a policy grant.
+        for name in ["scratch.logs", "logs", "analytics.events"] {
+            let err = create_index_core(&state, name, None).await.unwrap_err();
+            assert!(
+                matches!(err, BenoStreamError::PermissionDenied { .. }),
+                "{name}: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn policy_allows_listed_schema_only() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // The policy file must exist before the state resolves permissions.
+        let mut policy = benostreamdb::core::catalog::CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["scratch".to_string(), "analytics".to_string()]);
+        benostreamdb::core::catalog::set_catalog_policy(tmp.path().to_str().unwrap(), &policy)
+            .unwrap();
+
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+
+        // The schema explicitly allowed by the policy is writable.
+        create_index_core(&state, "analytics.events", None)
+            .await
+            .unwrap();
+        assert!(state.index_exists("analytics.events").await);
+
+        // An unlisted schema is denied.
+        let err = create_index_core(&state, "other.thing", None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, BenoStreamError::PermissionDenied { .. }),
+            "{err}"
+        );
+
+        // An immutable system schema is denied even though a policy exists.
+        let err = create_index_core(&state, "default.foo", None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, BenoStreamError::PermissionDenied { .. }),
+            "{err}"
+        );
     }
 }

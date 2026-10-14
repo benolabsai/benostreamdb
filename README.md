@@ -111,6 +111,9 @@ BenoStreamDB sits between two categories of system that do not overlap. Vector/g
 | **Indexes on existing Iceberg tables** | ❌ | ❌ | ✅ Layered Indexing |
 | **Deployment** | Managed cluster | Cluster | Embedded library / scale-to-zero |
 
+> **Supported platforms, cargo feature gates, the trusted/untrusted boundary, and
+> known limitations** are enumerated in [`docs/SUPPORT_MATRIX.md`](docs/SUPPORT_MATRIX.md).
+
 ## ⚡ Iceberg V2/V3 Compatibility
 
 BenoStreamDB implements the core Apache Iceberg table format V2 and V3 features required for its indexed-lakehouse model:
@@ -1043,8 +1046,10 @@ This will automatically generate the configuration file and start the service. S
 `term`/`terms`/`range`/`exists`, `match_all`), `_count`, `_source` filtering,
 `from`/`size`, and Prometheus `/metrics`.
 
-**Not supported (v1):** ILM (index lifecycle), authentication/security, multi-node
-sharding/replicas, and Kibana. See
+**Not supported (v1):** ILM (index lifecycle), multi-node
+sharding/replicas, and Kibana. (Stateless **authentication** — API key / JWT,
+with admin-only writes — *is* supported; see the search-gateway Security
+section.) See
 [contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md](contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md) for the full matrix and
 [docs/INSTALLATION.md](docs/INSTALLATION.md) for a complete quickstart.
 

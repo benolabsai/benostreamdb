@@ -74,6 +74,12 @@ impl QErr {
             status: StatusCode::BAD_REQUEST,
         }
     }
+    fn forbidden(m: impl Into<String>) -> Self {
+        Self {
+            msg: m.into(),
+            status: StatusCode::FORBIDDEN,
+        }
+    }
     fn internal(m: impl Into<String>) -> Self {
         Self {
             msg: m.into(),
@@ -765,6 +771,9 @@ async fn upsert_core(state: &AppState, name: &str, points: Vec<PointStruct>) -> 
         return Ok(());
     }
     let name = resolve(state, name).await;
+    state
+        .ensure_index_writable(&name)
+        .map_err(|e| QErr::forbidden(e.to_string()))?;
     let existed_before = state.index_exists(&name).await;
 
     let docs = points_to_docs(&points);
@@ -963,11 +972,15 @@ async fn delete_points_core(
     name: &str,
     req: &DeletePointsRequest,
 ) -> Result<(), QErr> {
+    let name = resolve(state, name).await;
+    state
+        .ensure_index_writable(&name)
+        .map_err(|e| QErr::forbidden(e.to_string()))?;
     let filter_sql = selector_filter(&req.points, &req.filter)?;
     let Some(filter_sql) = filter_sql else {
         return Ok(());
     };
-    let table = open_existing(state, name).await?;
+    let table = open_existing(state, &name).await?;
     table
         .commit_async()
         .await
@@ -1366,6 +1379,9 @@ pub async fn create_collection(
     if let Err(e) = AppState::validate_index_name(&collection_name) {
         return qerr(QErr::bad(e.to_string()), start);
     }
+    if let Err(e) = state.ensure_index_writable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     if collection_exists(&state, &collection_name).await {
         return qerr(QErr::bad("Collection already exists"), start);
     }
@@ -1439,6 +1455,9 @@ pub async fn update_collection(
     if !collection_exists(&state, &collection_name).await {
         return qerr(QErr::not_found("Collection not found"), start);
     }
+    if let Err(e) = state.ensure_index_writable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     let mut meta = load_meta_or_default(&state, &collection_name).await;
     if let Some(hnsw) = req.hnsw_config {
         meta.hnsw_config = Some(hnsw);
@@ -1462,6 +1481,9 @@ pub async fn delete_collection(
     if !collection_exists(&state, &name).await {
         return qerr(QErr::not_found("Collection not found"), start);
     }
+    if let Err(e) = state.ensure_index_writable(&name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     if let Err(e) = state.delete_index(&name).await {
         return qerr(QErr::internal(e.to_string()), start);
     }
@@ -1483,6 +1505,9 @@ pub async fn create_payload_index(
     let name = resolve(&state, &collection_name).await;
     if !collection_exists(&state, &name).await {
         return qerr(QErr::not_found("Collection not found"), start);
+    }
+    if let Err(e) = state.ensure_index_writable(&name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
     }
     let schema_type = match &req.field_schema {
         Some(Value::String(s)) => s.clone(),
@@ -1525,6 +1550,9 @@ pub async fn delete_payload_index(
     if !collection_exists(&state, &name).await {
         return qerr(QErr::not_found("Collection not found"), start);
     }
+    if let Err(e) = state.ensure_index_writable(&name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     if let Ok(table) = open_existing(&state, &name).await {
         let _ = table.drop_index(field_name.clone()).await;
     }
@@ -1563,6 +1591,9 @@ pub async fn retrieve_points(
         Some(r) => (r.ids, r.with_payload, r.with_vector),
         None => (Vec::new(), None, None),
     };
+    if let Err(e) = state.ensure_index_readable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     if !collection_exists(&state, &collection_name).await {
         return qerr(QErr::not_found("Collection not found"), start);
     }
@@ -1594,6 +1625,9 @@ pub async fn get_point(
     Path((collection_name, id)): Path<(String, String)>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = state.ensure_index_readable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     if !collection_exists(&state, &collection_name).await {
         return qerr(QErr::not_found("Collection not found"), start);
     }
@@ -1620,6 +1654,9 @@ pub async fn search_points(
     Json(req): Json<SearchPointsRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = state.ensure_index_readable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     match search_core(
         &state,
         &collection_name,
@@ -1650,6 +1687,9 @@ pub async fn query_points(
     Json(req): Json<QueryPointsRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = state.ensure_index_readable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     let limit = req.limit.unwrap_or(10).max(1);
 
     // If prefetch queries are provided
@@ -1845,6 +1885,9 @@ pub async fn scroll_points(
     Json(req): Json<ScrollRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = state.ensure_index_readable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     match scroll_core(
         &state,
         &collection_name,
@@ -1868,6 +1911,9 @@ pub async fn count_points_handler(
     Json(req): Json<CountRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = state.ensure_index_readable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     let filter_sql = match req.filter.as_ref() {
         Some(f) => match filter_to_sql(f) {
             Ok(s) => s,
@@ -1889,6 +1935,9 @@ pub async fn recommend_points(
     Json(req): Json<RecommendRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = state.ensure_index_readable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     if req.positive.is_empty() {
         return qerr(
             QErr::bad("'positive' must contain at least one vector"),
@@ -2044,6 +2093,9 @@ pub async fn discover_points(
     Json(req): Json<DiscoverRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = state.ensure_index_readable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     let limit = req.limit.unwrap_or(10).max(1);
     let want_vector = req
         .with_vector
@@ -2098,6 +2150,9 @@ pub async fn batch_points(
     Json(req): Json<BatchRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = state.ensure_index_writable(&collection_name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
+    }
     let mut results = Vec::with_capacity(req.operations.len());
     for op in req.operations {
         let res = match op {
@@ -2301,6 +2356,10 @@ pub async fn update_aliases(
                 if let Err(e) = AppState::validate_index_name(&create_alias.alias_name) {
                     return qerr(QErr::bad(e.to_string()), start);
                 }
+                // An alias can redirect writes, so its target must be writable.
+                if let Err(e) = state.ensure_index_writable(&create_alias.collection_name) {
+                    return qerr(QErr::forbidden(e.to_string()), start);
+                }
                 aliases.insert(create_alias.alias_name, create_alias.collection_name);
             }
             AliasAction::Delete { delete_alias } => {
@@ -2311,6 +2370,9 @@ pub async fn update_aliases(
                     return qerr(QErr::bad(e.to_string()), start);
                 }
                 if let Some(target) = aliases.remove(&rename_alias.old_alias_name) {
+                    if let Err(e) = state.ensure_index_writable(&target) {
+                        return qerr(QErr::forbidden(e.to_string()), start);
+                    }
                     aliases.insert(rename_alias.new_alias_name, target);
                 }
             }
@@ -2377,6 +2439,9 @@ pub async fn create_snapshot(
     let name = resolve(&state, &collection_name).await;
     if !collection_exists(&state, &name).await {
         return qerr(QErr::not_found("Collection not found"), start);
+    }
+    if let Err(e) = state.ensure_index_writable(&name) {
+        return qerr(QErr::forbidden(e.to_string()), start);
     }
     let table = match open_existing(&state, &name).await {
         Ok(t) => t,

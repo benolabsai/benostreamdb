@@ -257,7 +257,52 @@ Themes are ordered by priority.
   - `langchain-benostreamdb`: LangChain-compatible `VectorStore` and `Retriever` implementations with metadata filtering.
   - `llama-index-vector-stores-benostreamdb`: LlamaIndex vector store index adapter.
 - [ ] **Broker Event Adapters** — 🟢 **Deferred**:
-  - Pluggable Kafka, RabbitMQ, and NATS consumers implementing the `WorkCoordinator` trait for automated event-driven lakehouse ingestion.
+  - Pluggable Kafka, RabbitMQ, and NATS consumers for automated event-driven
+    lakehouse ingestion.
+  - **Placement: a new `contrib/benostreamdb-ingest` crate, not the core.** The
+    publish/subscribe seam already lives in the core — the
+    [`WorkCoordinator` trait](../src/core/table/coordinator.rs:89) (with
+    `WorkUnit` / `Lease`), its only implementation
+    [`ObjectStoreCoordinator`](../src/core/table/coordinator.rs:112), and the
+    claim → read → write → commit loop in
+    [`ingest_with_coordinator`](../src/core/table/ingest.rs:304). A broker
+    adapter is therefore just another `impl WorkCoordinator`, so **no new core
+    API is required**:
+    ```
+    contrib/benostreamdb-ingest/
+      Cargo.toml            # [[lib]] + [[bin]] bsdb-ingest; features = kafka/nats/rabbitmq
+      src/kafka.rs          # KafkaWorkCoordinator    : impl WorkCoordinator
+      src/nats.rs           # NatsWorkCoordinator     : impl WorkCoordinator
+      src/rabbitmq.rs       # RabbitMqWorkCoordinator : impl WorkCoordinator
+      src/main.rs           # bsdb-ingest daemon → Table::ingest_with_coordinator(..)
+      tests/
+    ```
+  - **Why `contrib/` and not core:** the broker clients are heavy and
+    platform-sensitive (`rdkafka`/`librdkafka` is a C dependency, plus `lapin`
+    and `async-nats`); pulling them into the default engine build would regress
+    build time, binary size, and cross-platform reach. This mirrors the existing
+    boundary — core = engine + traits, `contrib/` = deployment surfaces
+    (`bsdb-search`, `bsdb-mcp`) — with `bsdb-ingest` as the third column.
+  - **Semantics to settle at implementation:** a broker *consumer* is a source of
+    work, whereas `WorkCoordinator` is the queue/lease authority. Either
+    implement the trait directly against the broker's consumer-group offsets
+    (broker is the queue), or keep `ObjectStoreCoordinator` as the lease
+    authority and add a broker → queue enqueue bridge.
+  - **Config:** follow the `BSDB_` / `BSDB_SEARCH_` convention →
+    `BSDB_INGEST_*` (brokers, topics, group id, lease TTL, coordinator backend
+    selection: `object-store` | `kafka` | `nats`).
+  - **Deploy / docs:** a `deploy/` compose entry (Kafka/NATS alongside the
+    RustFS/Nessie stack) and `docs/integrations/INGEST.md` + its
+    `docs/source/guides/` copy, consistent with SEARCH_GATEWAY and MCP.
+- [ ] **Per-session MCP scratch namespace + TTL** — derive the agent scratch
+  schema from the authenticated subject (JWT `sub` / API-key id, sanitized to
+  `scratch_<subject>`) and give ephemeral tables a TTL + background GC, so two
+  agents never share a namespace. Today `scratch` is a single shared schema.
+- [ ] **Policy tooling & observability** — a `bsdb policy show|set|lint` CLI
+  (lint flags schemas present in storage but absent from the policy), an
+  effective-permissions read endpoint, and a
+  `benostream_policy_denials_total{schema,action}` metric so over-restriction is
+  visible instead of looking like missing data.
 
 ### Theme 7: Graph Overlays
 *Elevating knowledge graphs into a first-class lakehouse data modeling primitive.* — 🟠 **Medium**

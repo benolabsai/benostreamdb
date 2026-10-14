@@ -16,8 +16,8 @@ use arrow::datatypes::SchemaRef;
 pub use config::CatalogConfig;
 pub use policy::{
     get_catalog_policy, lock_catalog_read_only, resolve_permissions_for_untrusted_connector,
-    set_catalog_policy, set_catalog_schema_access, CatalogPolicy, CATALOG_POLICY_FILE,
-    IMMUTABLE_SYSTEM_SCHEMAS, SCRATCH_SCHEMA,
+    set_catalog_policy, set_catalog_schema_access, CatalogPolicy, SchemaPermissions,
+    CATALOG_POLICY_FILE, IMMUTABLE_SYSTEM_SCHEMAS, SCRATCH_SCHEMA,
 };
 
 /// Abstract Catalog Interface (Iceberg Compatible)

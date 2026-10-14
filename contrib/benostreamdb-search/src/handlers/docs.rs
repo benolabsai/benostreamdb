@@ -157,6 +157,8 @@ pub(crate) async fn index_document_core(
     path_id: Option<&str>,
     mut doc: Value,
 ) -> Result<DocWriteResponse, BenoStreamError> {
+    state.ensure_index_writable(index)?;
+
     let id = match path_id {
         Some(id) => id.to_string(),
         None => uuid::Uuid::new_v4().to_string(),
@@ -317,6 +319,7 @@ pub async fn get_document_core(
     index: &str,
     id: &str,
 ) -> Result<DocGetResponse, BenoStreamError> {
+    state.ensure_index_readable(index)?;
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
@@ -394,6 +397,8 @@ pub async fn delete_document_core(
     index: &str,
     id: &str,
 ) -> Result<DocWriteResponse, BenoStreamError> {
+    state.ensure_index_writable(index)?;
+
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
@@ -482,6 +487,8 @@ pub async fn update_document_core(
     id: &str,
     body: Value,
 ) -> Result<DocWriteResponse, BenoStreamError> {
+    state.ensure_index_writable(index)?;
+
     let doc_patch = body.get("doc").and_then(Value::as_object).ok_or_else(|| {
         BenoStreamError::SchemaIncompatible {
             reason: "update: missing or invalid 'doc' object (scripts not supported)".into(),
@@ -566,6 +573,8 @@ pub async fn delete_by_query_core(
     index: &str,
     body: Value,
 ) -> Result<DeleteByQueryResponse, BenoStreamError> {
+    state.ensure_index_writable(index)?;
+
     let started = std::time::Instant::now();
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
@@ -662,6 +671,7 @@ pub async fn reindex_core(
     }
 
     let resolved_dest = state.resolve_alias(dest_index).await;
+    state.ensure_index_writable(&resolved_dest)?;
 
     let dest_existed_before = state.index_exists(&resolved_dest).await;
 
@@ -806,6 +816,8 @@ pub async fn refresh_core(
     state: &AppState,
     index: &str,
 ) -> Result<RefreshResponse, BenoStreamError> {
+    state.ensure_index_writable(index)?;
+
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
@@ -953,7 +965,7 @@ mod tests {
     async fn index_document_end_to_end() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
 
         // The local object store does not create parent directories.
         std::fs::create_dir_all(tmp.path().join("people")).unwrap();
@@ -1019,7 +1031,7 @@ mod tests {
     async fn get_and_delete_document_lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("items")).unwrap();
 
         // Index a doc
@@ -1071,7 +1083,7 @@ mod tests {
     async fn delete_by_query_lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("products")).unwrap();
 
         for i in 1..=5 {
@@ -1112,7 +1124,7 @@ mod tests {
     async fn update_document_lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
         std::fs::create_dir_all(tmp.path().join("users")).unwrap();
 
         // Initial write
@@ -1188,7 +1200,7 @@ mod tests {
     async fn reindex_lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
-        let state = AppState::new(root, "test-cluster".into());
+        let state = crate::state::test_state(root);
 
         // Populate source index
         index_document_core(
