@@ -1358,7 +1358,6 @@ dependencies = [
  "pdf-extract",
  "quick-xml 0.31.0",
  "reqwest",
- "secsgml",
  "serde",
  "serde_json",
  "sqlparser 0.55.0",
@@ -6524,17 +6523,6 @@ checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
 dependencies = [
  "ring",
  "untrusted",
-]
-
-[[package]]
-name = "secsgml"
-version = "0.1.0"
-dependencies = [
- "memchr",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
 ]
 
 [[package]]

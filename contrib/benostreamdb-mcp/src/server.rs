@@ -8,7 +8,7 @@ use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 use benostreamdb::core::sql::session::BenoStreamSession;
 
 /// The only schema the MCP server may create objects in.
-const SCRATCH_SCHEMA: &str = "scratch";
+pub const SCRATCH_SCHEMA: &str = "scratch";
 
 /// Enforce the MCP write policy: **read any schema, write only to `scratch`**.
 ///
@@ -227,12 +227,31 @@ fn validate_schema_ddl(schema_ddl: &str) -> anyhow::Result<()> {
     }
 }
 
+/// Function signature for domain-specific schema resolvers that return default DDL for a given table_type.
+pub type CustomSchemaResolver = fn(table_type: &str) -> Option<&'static str>;
+
+/// Optional extension configuration for domain-specific MCP servers
+/// (Finance, Healthcare, Legal, etc.) built on the BenoStreamDB MCP engine.
+#[derive(Clone, Default)]
+pub struct McpExtension {
+    pub server_name: Option<String>,
+    pub server_version: Option<String>,
+    pub schema_resolver: Option<CustomSchemaResolver>,
+    pub file_extractor: Option<crate::ingest_formats::CustomFileExtractor>,
+    pub additional_tools: Vec<Value>,
+}
+
 pub struct McpServer {
     session: BenoStreamSession,
+    extension: McpExtension,
 }
 
 impl McpServer {
     pub fn new() -> Self {
+        Self::with_extension(McpExtension::default())
+    }
+
+    pub fn with_extension(extension: McpExtension) -> Self {
         let mut session = BenoStreamSession::default();
         // The engine session does not read `BSDB_WAREHOUSE` itself; wire it in so
         // DDL/CTAS can derive table URIs (the Flight server does the same). Fall
@@ -255,7 +274,7 @@ impl McpServer {
         // Pin the GPU device for this process from BSDB_GPU_DEVICE /
         // BENOSTREAM_GPU_DEVICE (e.g. "cuda:1").
         let _ = benostreamdb::core::index::gpu::apply_gpu_context_from_env();
-        Self { session }
+        Self { session, extension }
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -556,18 +575,26 @@ impl McpServer {
     async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
         info!("Handling request method: {}", method);
         match method {
-            "initialize" => Ok(json!({
-                "protocolVersion": "2024-11-05",
-                "serverInfo": {
-                    "name": "benostreamdb-mcp",
-                    "version": "0.1.0"
-                },
-                "capabilities": {
-                    "tools": {},
-                    "resources": {},
-                    "prompts": {}
-                }
-            })),
+            "initialize" => {
+                let name = self
+                    .extension
+                    .server_name
+                    .as_deref()
+                    .unwrap_or("benostreamdb-mcp");
+                let version = self.extension.server_version.as_deref().unwrap_or("0.12.0");
+                Ok(json!({
+                    "protocolVersion": "2024-11-05",
+                    "serverInfo": {
+                        "name": name,
+                        "version": version
+                    },
+                    "capabilities": {
+                        "tools": {},
+                        "resources": {},
+                        "prompts": {}
+                    }
+                }))
+            }
             "prompts/list" => Ok(json!({
                 "prompts": [
                     {
@@ -877,156 +904,158 @@ impl McpServer {
                 - Discovery: Query `information_schema.tables` and `information_schema.columns`, or call the `list_graph_tables` tool.\n\n\
                 NOTE: For full syntax examples, read the `benostreamdb://docs/sql_manual.md` resource!";
 
-                Ok(json!({
-                    "tools": [
-                        {
-                            "name": "execute_sql",
-                            "description": execute_sql_desc,
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "query": { "type": "string" }
-                                },
-                                "required": ["query"]
-                            }
-                        },
-                        {
-                            "name": "create_scratch_table",
-                            "description": "Creates a temporary, ephemeral table in the local scratch catalog.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "table_name": { "type": "string" },
-                                    "schema_ddl": { "type": "string", "description": "The column definitions, e.g., 'id INT, name VARCHAR'" },
-                                    "table_type": { "type": "string", "description": "Optional type, e.g. 'node' or 'edge'" }
-                                },
-                                "required": ["table_name", "schema_ddl"]
-                            }
-                        },
-                        {
-                            "name": "export_table",
-                            "description": "Exports any table (scratch or main catalog) to local disk as Parquet.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "table_name": { "type": "string" },
-                                    "export_path": { "type": "string" }
-                                },
-                                "required": ["table_name", "export_path"]
-                            }
-                        },
-                        {
-                            "name": "list_graph_tables",
-                            "description": "List the graph tables (node/edge) and their endpoint columns. Use this to discover the graph before traversing it.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {}
-                            }
-                        },
-                        {
-                            "name": "subscribe_events",
-                            "description": "Drain the next committed-change events for a table (a bounded live tail). Returns one row per event: event_type ('batch'|'commit') and rows. Only observes commits made in this process.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "table": { "type": "string" },
-                                    "filter": { "type": "string", "description": "Optional SQL predicate; only matching rows are counted." },
-                                    "max_events": { "type": "integer", "description": "Max events to drain (default 100)." },
-                                    "timeout_ms": { "type": "integer", "description": "Wait budget in ms (default 1000)." }
-                                },
-                                "required": ["table"]
-                            }
-                        },
-                        {
-                            "name": "hybrid_search",
-                            "description": "Performs hybrid search combining BM25 lexical search and dense vector similarity using Reciprocal Rank Fusion (RRF). If query_vector is omitted and BSDB_EMBEDDING_URL is configured, dense embeddings are auto-generated from query_text.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "table": { "type": "string", "description": "Target table name (e.g. 'code_chunks' or 'scratch.agent_memories')" },
-                                    "query_text": { "type": "string", "description": "Search query text for BM25 and vector embedding" },
-                                    "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed embedding vector" },
-                                    "vector_col": { "type": "string", "description": "Vector column name (default 'embedding')" },
-                                    "text_col": { "type": "string", "description": "Text column name (default 'content')" },
-                                    "top_k": { "type": "integer", "description": "Number of top results to return (default 10)" },
-                                    "rrf_k": { "type": "integer", "description": "RRF damping constant (default 60)" }
-                                },
-                                "required": ["table", "query_text"]
-                            }
-                        },
-                        {
-                            "name": "graph_rag_search",
-                            "description": "Performs regional graph retrieval (Graph RAG / DRIFT) around seed nodes using graph table functions (graph_neighbors, graph_subgraph, or graph_shortest_path).",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "table": { "type": "string", "description": "Edge table name" },
-                                    "seeds": { "type": "array", "items": { "type": "string" }, "description": "Seed node identifiers" },
-                                    "hops": { "type": "integer", "description": "Traversal depth (default 2)" },
-                                    "mode": { "type": "string", "enum": ["neighbors", "shortest_path", "subgraph"], "description": "Graph retrieval mode (default 'neighbors')" },
-                                    "target": { "type": "string", "description": "Target node for shortest_path mode" },
-                                    "top_k": { "type": "integer", "description": "Max rows to return (default 50)" }
-                                },
-                                "required": ["table", "seeds"]
-                            }
-                        },
-                        {
-                            "name": "store_memory",
-                            "description": "Stores an agent memory, context note, or code insight into the persistent scratch table 'scratch.agent_memories'. Embeddings are auto-generated if BSDB_EMBEDDING_URL is set.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "key": { "type": "string", "description": "Unique key or topic label" },
-                                    "content": { "type": "string", "description": "Memory content or insight" },
-                                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional list of tags or categories" },
-                                    "embedding": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed embedding vector" }
-                                },
-                                "required": ["key", "content"]
-                            }
-                        },
-                        {
-                            "name": "recall_memory",
-                            "description": "Recalls agent memories from 'scratch.agent_memories' using vector similarity or lexical search.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "query": { "type": "string", "description": "Text query to recall memories for" },
-                                    "tag": { "type": "string", "description": "Optional tag filter" },
-                                    "top_k": { "type": "integer", "description": "Number of memories to recall (default 5)" },
-                                    "embedding": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed query vector" }
-                                },
-                                "required": ["query"]
-                            }
-                        },
-                        {
-                            "name": "ingest_records",
-                            "description": "Ingests structured JSON records into a scratch table. Auto-creates the table if it does not exist, and optionally generates embeddings for a specified text column.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "table_name": { "type": "string", "description": "Destination table name (will be placed in scratch schema)" },
-                                    "records": { "type": "array", "items": { "type": "object" }, "description": "Array of JSON objects" },
-                                    "embed_col": { "type": "string", "description": "Optional text column to auto-embed into 'embedding' column" }
-                                },
-                                "required": ["table_name", "records"]
-                            }
-                        },
-                        {
-                            "name": "ingest_file",
-                            "description": "Ingests a local file (Word .docx, PowerPoint .pptx, Excel .xlsx/.xls/.ods, XBRL financial reports, XML, SEC EDGAR SGML .sgml/.nc/.txt, Zstandard .zst/.zstd, Zip archives .zip, PDF documents, Images .png/.jpg/.webp, code, markdown, text, or JSON) into a scratch table. Text/PDF/Office are chunked with line/slide/paragraph metadata; Excel/XML/XBRL/SGML are converted to structured tabular rows; Images are ingested as base64 Data URIs with optional multimodal embeddings.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "file_path": { "type": "string", "description": "Absolute path to local file" },
-                                    "table_name": { "type": "string", "description": "Target scratch table name (optional, defaults to sanitized file stem)" },
-                                    "chunk_size": { "type": "integer", "description": "Character chunk size for text/code/PDF (default 500)" },
-                                    "embed_chunks": { "type": "boolean", "description": "Whether to auto-generate embeddings for chunks or images (default false)" }
-                                },
-                                "required": ["file_path"]
-                            }
+                let mut tools = json!([
+                    {
+                        "name": "execute_sql",
+                        "description": execute_sql_desc,
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "query": { "type": "string" }
+                            },
+                            "required": ["query"]
                         }
-                    ]
-                }))
+                    },
+                    {
+                        "name": "create_scratch_table",
+                        "description": "Creates a temporary, ephemeral table in the local scratch catalog. table_type can specify standard formats (e.g. 'node', 'edge'). If a recognized table_type is specified, schema_ddl can be omitted or set to 'default'.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "table_name": { "type": "string" },
+                                "schema_ddl": { "type": "string", "description": "The column definitions, e.g., 'id INT, name VARCHAR', or 'default' if using a recognized table_type" },
+                                "table_type": { "type": "string", "description": "Optional type, e.g. 'node' or 'edge'" }
+                            },
+                            "required": ["table_name"]
+                        }
+                    },
+                    {
+                        "name": "export_table",
+                        "description": "Exports any table (scratch or main catalog) to local disk as Parquet.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "table_name": { "type": "string" },
+                                "export_path": { "type": "string" }
+                            },
+                            "required": ["table_name", "export_path"]
+                        }
+                    },
+                    {
+                        "name": "list_graph_tables",
+                        "description": "List the graph tables (node/edge) and their endpoint columns. Use this to discover the graph before traversing it.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    },
+                    {
+                        "name": "subscribe_events",
+                        "description": "Drain the next committed-change events for a table (a bounded live tail). Returns one row per event: event_type ('batch'|'commit') and rows. Only observes commits made in this process.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "table": { "type": "string" },
+                                "filter": { "type": "string", "description": "Optional SQL predicate; only matching rows are counted." },
+                                "max_events": { "type": "integer", "description": "Max events to drain (default 100)." },
+                                "timeout_ms": { "type": "integer", "description": "Wait budget in ms (default 1000)." }
+                            },
+                            "required": ["table"]
+                        }
+                    },
+                    {
+                        "name": "hybrid_search",
+                        "description": "Performs hybrid search combining BM25 lexical search and dense vector similarity using Reciprocal Rank Fusion (RRF). If query_vector is omitted and BSDB_EMBEDDING_URL is configured, dense embeddings are auto-generated from query_text.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "table": { "type": "string", "description": "Target table name (e.g. 'code_chunks' or 'scratch.agent_memories')" },
+                                "query_text": { "type": "string", "description": "Search query text for BM25 and vector embedding" },
+                                "query_vector": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed embedding vector" },
+                                "vector_col": { "type": "string", "description": "Vector column name (default 'embedding')" },
+                                "text_col": { "type": "string", "description": "Text column name (default 'content')" },
+                                "top_k": { "type": "integer", "description": "Number of top results to return (default 10)" },
+                                "rrf_k": { "type": "integer", "description": "RRF damping constant (default 60)" }
+                            },
+                            "required": ["table", "query_text"]
+                        }
+                    },
+                    {
+                        "name": "graph_rag_search",
+                        "description": "Performs regional graph retrieval (Graph RAG / DRIFT) around seed nodes using graph table functions (graph_neighbors, graph_subgraph, or graph_shortest_path).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "table": { "type": "string", "description": "Edge table name" },
+                                "seeds": { "type": "array", "items": { "type": "string" }, "description": "Seed node identifiers" },
+                                "hops": { "type": "integer", "description": "Traversal depth (default 2)" },
+                                "mode": { "type": "string", "enum": ["neighbors", "shortest_path", "subgraph"], "description": "Graph retrieval mode (default 'neighbors')" },
+                                "target": { "type": "string", "description": "Target node for shortest_path mode" },
+                                "top_k": { "type": "integer", "description": "Max rows to return (default 50)" }
+                            },
+                            "required": ["table", "seeds"]
+                        }
+                    },
+                    {
+                        "name": "store_memory",
+                        "description": "Stores an agent memory, context note, or code insight into the persistent scratch table 'scratch.agent_memories'. Embeddings are auto-generated if BSDB_EMBEDDING_URL is set.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "key": { "type": "string", "description": "Unique key or topic label" },
+                                "content": { "type": "string", "description": "Memory content or insight" },
+                                "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional list of tags or categories" },
+                                "embedding": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed embedding vector" }
+                            },
+                            "required": ["key", "content"]
+                        }
+                    },
+                    {
+                        "name": "recall_memory",
+                        "description": "Recalls agent memories from 'scratch.agent_memories' using vector similarity or lexical search.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "query": { "type": "string", "description": "Text query to recall memories for" },
+                                "tag": { "type": "string", "description": "Optional tag filter" },
+                                "top_k": { "type": "integer", "description": "Number of memories to recall (default 5)" },
+                                "embedding": { "type": "array", "items": { "type": "number" }, "description": "Optional precomputed query vector" }
+                            },
+                            "required": ["query"]
+                        }
+                    },
+                    {
+                        "name": "ingest_records",
+                        "description": "Ingests structured JSON records into a scratch table. Auto-creates the table if it does not exist, and optionally generates embeddings for a specified text column.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "table_name": { "type": "string", "description": "Destination table name (will be placed in scratch schema)" },
+                                "records": { "type": "array", "items": { "type": "object" }, "description": "Array of JSON objects" },
+                                "embed_col": { "type": "string", "description": "Optional text column to auto-embed into 'embedding' column" }
+                            },
+                            "required": ["table_name", "records"]
+                        }
+                    },
+                    {
+                        "name": "ingest_file",
+                        "description": "Ingests a local file (Word .docx, PowerPoint .pptx, Excel .xlsx/.xls/.ods, XML, Zstandard .zst/.zstd, Zip archives .zip, PDF documents, Images .png/.jpg/.webp, code, markdown, text, or JSON) into a scratch table. Text/PDF/Office are chunked with line/slide/paragraph metadata; Excel/XML are converted to structured tabular rows; Images are ingested as base64 Data URIs with optional multimodal embeddings.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": { "type": "string", "description": "Absolute path to local file" },
+                                "table_name": { "type": "string", "description": "Target scratch table name (optional, defaults to sanitized file stem)" },
+                                "chunk_size": { "type": "integer", "description": "Character chunk size for text/code/PDF (default 500)" },
+                                "embed_chunks": { "type": "boolean", "description": "Whether to auto-generate embeddings for chunks or images (default false)" }
+                            },
+                            "required": ["file_path"]
+                        }
+                    }
+                ]);
+                if let Some(arr) = tools.as_array_mut() {
+                    arr.extend(self.extension.additional_tools.clone());
+                }
+                Ok(json!({ "tools": tools }))
             }
             "tools/call" => {
                 let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -1099,6 +1128,30 @@ impl McpServer {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
+                        let clean_table_type = table_type.trim().to_lowercase();
+                        let ddl_to_use = if schema_ddl.trim().is_empty()
+                            || schema_ddl.trim().eq_ignore_ascii_case("default")
+                        {
+                            if let Some(resolver) = self.extension.schema_resolver {
+                                if let Some(resolved) = resolver(&clean_table_type) {
+                                    resolved.to_string()
+                                } else {
+                                    schema_ddl.to_string()
+                                }
+                            } else {
+                                schema_ddl.to_string()
+                            }
+                        } else {
+                            schema_ddl.to_string()
+                        };
+
+                        if ddl_to_use.trim().is_empty() {
+                            return Ok(json!({
+                                "content": [ { "type": "text", "text": "create_scratch_table requires 'schema_ddl' unless a supported 'table_type' with a default schema is provided." } ],
+                                "isError": true
+                            }));
+                        }
+
                         let _ = self
                             .session
                             .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", SCRATCH_SCHEMA))
@@ -1112,7 +1165,7 @@ impl McpServer {
                                 format!("{}.{}", SCRATCH_SCHEMA, clean_table)
                             };
 
-                        if let Err(e) = validate_schema_ddl(schema_ddl) {
+                        if let Err(e) = validate_schema_ddl(&ddl_to_use) {
                             return Ok(json!({
                                 "content": [ { "type": "text", "text": format!("Invalid schema DDL: {}", e) } ],
                                 "isError": true
@@ -1135,7 +1188,7 @@ impl McpServer {
 
                         let query = format!(
                             "CREATE TABLE {} ({}) LOCATION '{}'",
-                            full_table_name, schema_ddl, scratch_path
+                            full_table_name, ddl_to_use, scratch_path
                         );
                         match self.session.sql(&query).await {
                             Ok(_) => {
@@ -2040,23 +2093,16 @@ impl McpServer {
                             }
                         } else if matches!(
                             ext.as_str(),
-                            "docx"
-                                | "pptx"
-                                | "xbrl"
-                                | "xml"
-                                | "sgml"
-                                | "nc"
-                                | "zip"
-                                | "zst"
-                                | "zstd"
-                        ) || (ext == "txt" && {
-                            let raw = std::fs::read(p).unwrap_or_default();
-                            raw.windows(10)
-                                .any(|w| w == b"<DOCUMENT>" || w == b"<SEC-DOCUM")
-                        }) {
+                            "docx" | "pptx" | "xml" | "zip" | "zst" | "zstd"
+                        ) || self.extension.file_extractor.is_some()
+                        {
                             let raw_bytes = std::fs::read(p)?;
-                            match crate::ingest_formats::parse_file_bytes(
-                                &raw_bytes, file_path, &ext, chunk_size,
+                            match crate::ingest_formats::parse_file_bytes_with_custom(
+                                &raw_bytes,
+                                file_path,
+                                &ext,
+                                chunk_size,
+                                self.extension.file_extractor,
                             ) {
                                 Ok(recs) => {
                                     records = recs;
@@ -3092,126 +3138,122 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mcp_ingest_secsgml_file() {
-        let server = McpServer::new();
-        server
+    async fn test_mcp_custom_extension_and_zstd() {
+        // Define a custom vertical extension (e.g. specialized domain table schema and format)
+        let custom_schema_resolver: CustomSchemaResolver = |table_type| match table_type {
+            "custom_vertical" => Some("item_id VARCHAR, score DOUBLE, label VARCHAR"),
+            _ => None,
+        };
+
+        let custom_file_extractor: crate::ingest_formats::CustomFileExtractor =
+            |raw_bytes, file_path, ext, _chunk_size| {
+                if ext == "custom" {
+                    let content = String::from_utf8_lossy(raw_bytes);
+                    let mut recs = Vec::new();
+                    for line in content.lines() {
+                        let parts: Vec<&str> = line.split(',').collect();
+                        if parts.len() == 3 {
+                            recs.push(json!({
+                                "path": file_path,
+                                "item_id": parts[0].trim(),
+                                "score": parts[1].trim().parse::<f64>().unwrap_or(0.0),
+                                "label": parts[2].trim(),
+                                "format": "custom"
+                            }));
+                        }
+                    }
+                    Some(Ok(recs))
+                } else {
+                    None
+                }
+            };
+
+        let extension = McpExtension {
+            server_name: Some("benostreamdb-custom-mcp".to_string()),
+            server_version: Some("1.0.0".to_string()),
+            schema_resolver: Some(custom_schema_resolver),
+            file_extractor: Some(custom_file_extractor),
+            additional_tools: vec![json!({
+                "name": "custom_domain_ping",
+                "description": "Test vertical ping",
+                "inputSchema": { "type": "object", "properties": {} }
+            })],
+        };
+
+        let server = McpServer::with_extension(extension);
+
+        // 1. Verify custom server info
+        let init_res = server
             .handle_request("initialize", json!({}))
             .await
             .unwrap();
+        assert_eq!(init_res["serverInfo"]["name"], "benostreamdb-custom-mcp");
 
-        let temp_dir = tempfile::tempdir().unwrap();
-        let sgml_path = temp_dir.path().join("filing.sgml");
-        let sgml_content = br#"<SEC-DOCUMENT>0001010412-24-000001.txt : 20240401
-ACCESSION NUMBER: 0001010412-24-000001
-CONFORMED SUBMISSION TYPE: 10-K
-CENTRAL INDEX KEY: 0000876134
-COMPANY CONFORMED NAME: ACME CORP
+        // 2. Verify additional tool appears in tools/list
+        let tools_res = server
+            .handle_request("tools/list", json!({}))
+            .await
+            .unwrap();
+        let tools = tools_res["tools"].as_array().unwrap();
+        assert!(tools.iter().any(|t| t["name"] == "custom_domain_ping"));
 
-<DOCUMENT>
-<TYPE>10-K
-<SEQUENCE>1
-<FILENAME>acme-10k.htm
-<DESCRIPTION>Annual Report 2024
-<TEXT>
-Financial performance was strong across all operating divisions in fiscal 2024.
-</TEXT>
-</DOCUMENT>
-"#;
-        std::fs::write(&sgml_path, sgml_content).unwrap();
-
-        let res = server
+        // 3. Verify auto-generated schema from custom table_type
+        let create_res = server
             .handle_request(
                 "tools/call",
                 json!({
-                    "name": "ingest_file",
+                    "name": "create_scratch_table",
                     "arguments": {
-                        "file_path": sgml_path.to_str().unwrap(),
-                        "table_name": "acme_filing"
+                        "table_name": "my_custom_table",
+                        "table_type": "custom_vertical"
                     }
                 }),
             )
             .await
             .unwrap();
-
-        assert!(res.get("isError").is_none(), "SGML ingest failed: {res}");
-        let text = res["content"][0]["text"].as_str().unwrap();
         assert!(
-            text.contains("Ingested 1 records from"),
-            "expected 1 record, got: {text}"
+            create_res.get("isError").is_none(),
+            "create table failed: {create_res}"
         );
-        assert!(text.contains("scratch.acme_filing"));
 
-        // Query the ingested filing
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // 4. Ingest file using custom extractor
+        let custom_file = temp_dir.path().join("data.custom");
+        std::fs::write(&custom_file, "item_1, 98.5, ALPHA\nitem_2, 72.1, BETA\n").unwrap();
+
+        let ingest_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": custom_file.to_str().unwrap(),
+                        "table_name": "my_custom_table"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            ingest_res.get("isError").is_none(),
+            "ingest failed: {ingest_res}"
+        );
+
         let query_res = server
             .handle_request(
                 "tools/call",
                 json!({
                     "name": "execute_sql",
                     "arguments": {
-                        "query": "SELECT doc_type, filename, accession_number FROM scratch.acme_filing"
+                        "query": "SELECT item_id, score, label FROM scratch.my_custom_table ORDER BY score DESC"
                     }
                 }),
             )
             .await
             .unwrap();
-        assert!(query_res.get("isError").is_none());
         let q_text = query_res["content"][0]["text"].as_str().unwrap();
-        assert!(q_text.contains("10-K"));
-        assert!(q_text.contains("acme-10k.htm"));
-        assert!(q_text.contains("0001010412-24-000001"));
-    }
-
-    #[tokio::test]
-    async fn test_mcp_ingest_xbrl_and_zstd() {
-        let server = McpServer::new();
-        server
-            .handle_request("initialize", json!({}))
-            .await
-            .unwrap();
-
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        // 1. Test XBRL ingestion
-        let xbrl_path = temp_dir.path().join("report.xbrl");
-        let xbrl_content = r#"<?xml version="1.0" encoding="UTF-8"?>
-<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:us-gaap="http://fasb.org/us-gaap/2024">
-    <us-gaap:Revenues contextRef="FY2024" unitRef="USD" decimals="-3">5000000</us-gaap:Revenues>
-    <us-gaap:NetIncomeLoss contextRef="FY2024" unitRef="USD" decimals="-3">1200000</us-gaap:NetIncomeLoss>
-</xbrli:xbrl>"#;
-        std::fs::write(&xbrl_path, xbrl_content).unwrap();
-
-        let xbrl_res = server
-            .handle_request(
-                "tools/call",
-                json!({
-                    "name": "ingest_file",
-                    "arguments": {
-                        "file_path": xbrl_path.to_str().unwrap(),
-                        "table_name": "acme_xbrl"
-                    }
-                }),
-            )
-            .await
-            .unwrap();
-        assert!(
-            xbrl_res.get("isError").is_none(),
-            "XBRL ingest failed: {xbrl_res}"
-        );
-
-        let q_xbrl = server
-            .handle_request(
-                "tools/call",
-                json!({
-                    "name": "execute_sql",
-                    "arguments": {
-                        "query": "SELECT concept, value, context_ref FROM scratch.acme_xbrl ORDER BY concept"
-                    }
-                }),
-            )
-            .await
-            .unwrap();
-        let q_text = q_xbrl["content"][0]["text"].as_str().unwrap();
-        assert!(q_text.contains("NetIncomeLoss") || q_text.contains("Revenues"));
+        assert!(q_text.contains("item_1") && q_text.contains("ALPHA"));
 
         // 2. Test Zstd-compressed text ingestion
         let zst_path = temp_dir.path().join("data.txt.zst");
@@ -3235,6 +3277,244 @@ Financial performance was strong across all operating divisions in fiscal 2024.
         assert!(
             zst_res.get("isError").is_none(),
             "Zstd ingest failed: {zst_res}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_docx_and_pptx_files() {
+        use std::io::Write;
+        let server = McpServer::new();
+        server
+            .handle_request("initialize", json!({}))
+            .await
+            .unwrap();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // 1. Create and ingest .docx file
+        let docx_path = temp_dir.path().join("document.docx");
+        {
+            let file = std::fs::File::create(&docx_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("word/document.xml", options).unwrap();
+            let docx_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+    <w:body>
+        <w:p><w:r><w:t>First paragraph of executive review.</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Second paragraph detailing margin expansion.</w:t></w:r></w:p>
+    </w:body>
+</w:document>"#;
+            zip.write_all(docx_xml.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let docx_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": docx_path.to_str().unwrap(),
+                        "table_name": "exec_docx"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            docx_res.get("isError").is_none(),
+            "docx ingest failed: {docx_res}"
+        );
+
+        let q_docx = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT content, format FROM scratch.exec_docx"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_docx.get("isError").is_none());
+        let q_docx_text = q_docx["content"][0]["text"].as_str().unwrap();
+        assert!(q_docx_text.contains("executive review"));
+
+        // 2. Create and ingest .pptx file
+        let pptx_path = temp_dir.path().join("slides.pptx");
+        {
+            let file = std::fs::File::create(&pptx_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("ppt/slides/slide1.xml", options).unwrap();
+            let slide1_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+    <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Slide 1: Q3 Strategic Update</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>"#;
+            zip.write_all(slide1_xml.as_bytes()).unwrap();
+
+            zip.start_file("ppt/slides/slide2.xml", options).unwrap();
+            let slide2_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+    <p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Slide 2: Key Milestones Delivered</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>"#;
+            zip.write_all(slide2_xml.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let pptx_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": pptx_path.to_str().unwrap(),
+                        "table_name": "deck_pptx"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            pptx_res.get("isError").is_none(),
+            "pptx ingest failed: {pptx_res}"
+        );
+
+        let q_pptx = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT slide_index, content, format FROM scratch.deck_pptx ORDER BY slide_index"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_pptx.get("isError").is_none());
+        let q_pptx_text = q_pptx["content"][0]["text"].as_str().unwrap();
+        assert!(q_pptx_text.contains("Q3 Strategic Update"));
+        assert!(q_pptx_text.contains("Key Milestones"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_xml_and_zip() {
+        use std::io::Write;
+        let server = McpServer::new();
+        server
+            .handle_request("initialize", json!({}))
+            .await
+            .unwrap();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // 1. Structured XML ingestion
+        let xml_path = temp_dir.path().join("inventory.xml");
+        let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<inventory>
+    <item>
+        <sku>DB-101</sku>
+        <name>BenoStreamDB Server</name>
+        <qty>50</qty>
+    </item>
+    <item>
+        <sku>DB-102</sku>
+        <name>Vector Acceleration Kit</name>
+        <qty>25</qty>
+    </item>
+</inventory>"#;
+        std::fs::write(&xml_path, xml_content).unwrap();
+
+        let xml_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": xml_path.to_str().unwrap(),
+                        "table_name": "warehouse_xml"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            xml_res.get("isError").is_none(),
+            "xml ingest failed: {xml_res}"
+        );
+
+        let q_xml = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT sku, name, qty FROM scratch.warehouse_xml ORDER BY sku"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_xml.get("isError").is_none());
+        let q_xml_text = q_xml["content"][0]["text"].as_str().unwrap();
+        assert!(q_xml_text.contains("DB-101") && q_xml_text.contains("BenoStreamDB Server"));
+
+        // 2. ZIP archive ingestion
+        let zip_path = temp_dir.path().join("bundle.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+
+            zip.start_file("notes/readme.txt", options).unwrap();
+            zip.write_all(b"Welcome to the BenoStream archive bundle.\n")
+                .unwrap();
+
+            zip.start_file("config/manifest.json", options).unwrap();
+            zip.write_all(b"{\"version\": \"1.0.0\", \"target\": \"lakehouse\"}\n")
+                .unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        let zip_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": zip_path.to_str().unwrap(),
+                        "table_name": "bundle_zip"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            zip_res.get("isError").is_none(),
+            "zip ingest failed: {zip_res}"
+        );
+
+        let q_zip = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT entry_name, archive_path FROM scratch.bundle_zip ORDER BY entry_name"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_zip.get("isError").is_none());
+        let q_zip_text = q_zip["content"][0]["text"].as_str().unwrap();
+        assert!(
+            q_zip_text.contains("notes/readme.txt") || q_zip_text.contains("config/manifest.json")
         );
     }
 }

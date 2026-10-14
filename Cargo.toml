@@ -38,7 +38,6 @@ members = [
     "server/flight_sql",
     "contrib/benostreamdb-search",
     "contrib/benostreamdb-mcp",
-    "contrib/secsgml",
 ]
 
 # Single source of truth for the version of the core engine and the connectors

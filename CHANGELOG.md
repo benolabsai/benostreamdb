@@ -8,19 +8,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.12.0]
 
-### Added
-- **Native SEC EDGAR SGML Parser (`contrib/secsgml`)** — High-performance, zero-copy,
-  100% safe Rust port of `secsgml` / `secsgml2`. Provides single-pass tag scanning,
-  submission header metadata tree parsing and standardization (SIC and SEC Act regex extraction,
-  tag normalization), variable-length SEC UU-decoding with 60-byte SIMD-aligned fast path,
-  and TAR archive byte layout calculation (`calculate_documents_locations_in_tar`).
-- **Multi-Format Ingestion in MCP (`ingest_file`)** — Expanded file ingestion to
-  support Microsoft Word (`.docx`), PowerPoint (`.pptx`), financial XBRL (`.xbrl`),
-  XML (`.xml`), SEC EDGAR filings (`.sgml`, `.nc`, SEC `.txt`), transparent Zstandard
-  decompression (`.zst`, `.zstd`), and recursive ZIP archive extraction (`.zip`).
-- **Third-Party Attribution** — Documented upstream `secsgml` attribution in
-  `THIRDPARTY_NOTICES.md` and `contrib/secsgml/LICENSE` in accordance with MIT licensing.
-
 ### Benchmarks
 - **Report: "Index Precision" column** — the vector tables now report the
   quantization (`f32`/`tq8`/`tq4`/`pq`) rather than the algorithm name, and the
@@ -367,11 +354,16 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - **Model Context Protocol (MCP) server overhaul (`contrib/benostreamdb-mcp`)** —
   A production-ready stdio MCP server for agentic SQL execution, RAG, and memory:
   - **Multimodal file ingestion (`ingest_file`)** — Ingests local files into scratch
-    tables with automatic format detection: PDF documents (with page/line metadata
-    chunking via `pdf-extract`), Excel spreadsheets (`.xlsx`, `.xls`, `.ods` via
-    `calamine`), images (`.png`, `.jpg`, `.jpeg`, `.webp`, `.svg` with base64 Data
-    URI encoding and optional multimodal embeddings), source code/text chunking,
-    JSON/NDJSON, and Parquet.
+    tables with automatic format detection: Microsoft Word (`.docx`), PowerPoint (`.pptx`),
+    Excel spreadsheets (`.xlsx`, `.xls`, `.ods` via `calamine`), structured XML (`.xml`),
+    transparent Zstandard decompression (`.zst`, `.zstd`), recursive ZIP archives (`.zip`),
+    PDF documents (with page/line metadata chunking via `pdf-extract`), images (`.png`, `.jpg`,
+    `.jpeg`, `.webp`, `.svg` with base64 Data URI encoding and optional multimodal embeddings),
+    source code/text chunking, and JSON/NDJSON.
+  - **Extensible MCP Architecture (`McpExtension`)** — Refactored `benostreamdb-mcp` into an
+    embeddable core library engine (`benostreamdb_mcp`) with pluggable `CustomFileExtractor`,
+    `CustomSchemaResolver`, and dynamic tool extensions, enabling specialized vertical MCP servers
+    (Finance, Healthcare, Legal) to cleanly build on top of BenoStreamDB without protocol duplication.
   - **Tool surface consolidation** — Consolidated record insertion into `ingest_records`
     (schema inference, auto table creation, and optional vector embeddings) and removed
     redundant `insert_scratch_records`, standardizing the MCP surface to 11 unified tools.
@@ -384,7 +376,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
     unauthorized command execution.
   - **Fuzzing resilience** — Hardened JSON-RPC loop against corrupt payloads, random
     garbage inputs, and invalid methods without exiting or leaking state; verified
-    with Node `@modelcontextprotocol/inspector --cli` and 20 passing unit tests.
+    with Node `@modelcontextprotocol/inspector --cli` and 23 passing unit tests.
 
 ### Changed
 - **Puffin compound bundles are the index storage format.** Every secondary

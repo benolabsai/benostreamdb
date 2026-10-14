@@ -1,13 +1,14 @@
 //! File format extractors for BenoStreamDB MCP ingest_file tool.
 //!
-//! Handles:
+//! Handles general-purpose enterprise and document formats:
 //! - Office Word (.docx)
 //! - Office PowerPoint (.pptx)
-//! - Financial XBRL (.xbrl)
-//! - XML (.xml)
-//! - SEC EDGAR SGML (.sgml, .nc, SEC .txt)
+//! - Structured XML (.xml)
 //! - Zstandard decompression (.zst, .zstd)
 //! - Zip archive extraction (.zip)
+//! - Plain text / code chunking (.txt, .md, .rs, .py, etc.)
+//! Domain-specific file formats are handled via pluggable `CustomFileExtractor`
+//! functions configured on `McpServer`.
 
 use anyhow::{Context, Result};
 use quick_xml::events::Event;
@@ -15,6 +16,14 @@ use quick_xml::reader::Reader;
 use serde_json::{json, Map, Value};
 use std::io::{Cursor, Read};
 use std::path::Path;
+
+/// Function signature for domain-specific custom file extractors.
+pub type CustomFileExtractor = fn(
+    raw_bytes: &[u8],
+    file_path: &str,
+    ext: &str,
+    chunk_size: usize,
+) -> Option<Result<Vec<Value>>>;
 
 /// Decompresses Zstandard-compressed bytes.
 pub fn decompress_zstd(data: &[u8]) -> Result<Vec<u8>> {
@@ -114,29 +123,27 @@ pub fn extract_docx_records(data: &[u8], file_path: &str, chunk_size: usize) -> 
     Ok(records)
 }
 
-/// Extracts slides from a PowerPoint presentation (.pptx).
+/// Extracts text slides from a PowerPoint presentation (.pptx).
 pub fn extract_pptx_records(data: &[u8], file_path: &str) -> Result<Vec<Value>> {
     let mut zip = zip::ZipArchive::new(Cursor::new(data)).context("Invalid pptx zip archive")?;
 
-    // Find and sort slide entries: ppt/slides/slide{N}.xml
-    let mut slide_names: Vec<String> = (0..zip.len())
-        .filter_map(|i| {
-            let file = zip.by_index(i).ok()?;
-            let name = file.name();
-            if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
-                Some(name.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let mut slide_names = Vec::new();
+    for i in 0..zip.len() {
+        let entry = zip.by_index(i)?;
+        let name = entry.name().to_string();
+        if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+            slide_names.push(name);
+        }
+    }
 
-    slide_names.sort_by_key(|name| {
-        let stem = name
-            .strip_prefix("ppt/slides/slide")
-            .and_then(|s| s.strip_suffix(".xml"))
-            .unwrap_or("0");
-        stem.parse::<u32>().unwrap_or(0)
+    slide_names.sort_by(|a, b| {
+        let extract_num = |s: &str| -> usize {
+            s.trim_start_matches("ppt/slides/slide")
+                .trim_end_matches(".xml")
+                .parse::<usize>()
+                .unwrap_or(0)
+        };
+        extract_num(a).cmp(&extract_num(b))
     });
 
     let mut records = Vec::new();
@@ -144,7 +151,9 @@ pub fn extract_pptx_records(data: &[u8], file_path: &str) -> Result<Vec<Value>> 
     for (slide_idx, name) in slide_names.iter().enumerate() {
         let mut slide_xml = String::new();
         {
-            let mut entry = zip.by_name(name)?;
+            let mut entry = zip
+                .by_name(name)
+                .with_context(|| format!("Missing slide entry: {}", name))?;
             entry.read_to_string(&mut slide_xml)?;
         }
 
@@ -193,101 +202,6 @@ pub fn extract_pptx_records(data: &[u8], file_path: &str) -> Result<Vec<Value>> 
             "content": trimmed,
             "format": "pptx"
         }));
-    }
-
-    Ok(records)
-}
-
-/// Extracts financial facts from an XBRL document (.xbrl).
-pub fn extract_xbrl_records(data: &[u8], file_path: &str) -> Result<Vec<Value>> {
-    let xml_str = String::from_utf8_lossy(data);
-    let mut reader = Reader::from_str(&xml_str);
-    reader.trim_text(true);
-
-    let mut records = Vec::new();
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                let tag_bytes = e.name().as_ref().to_vec();
-                let tag_name = String::from_utf8_lossy(&tag_bytes).into_owned();
-
-                // Check for XBRL fact attributes
-                let mut context_ref = None;
-                let mut unit_ref = None;
-                let mut decimals = None;
-
-                for attr in e.attributes().flatten() {
-                    let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-                    let val = String::from_utf8_lossy(&attr.value).into_owned();
-                    match key.as_str() {
-                        "contextRef" => context_ref = Some(val),
-                        "unitRef" => unit_ref = Some(val),
-                        "decimals" => decimals = Some(val),
-                        _ => {}
-                    }
-                }
-
-                if context_ref.is_some() || unit_ref.is_some() {
-                    // Read text content
-                    let text = reader.read_text(e.name())?;
-                    let mut rec = json!({
-                        "path": file_path,
-                        "concept": tag_name,
-                        "value": text.trim(),
-                        "format": "xbrl"
-                    });
-                    if let Some(ctx) = context_ref {
-                        rec["context_ref"] = json!(ctx);
-                    }
-                    if let Some(unit) = unit_ref {
-                        rec["unit_ref"] = json!(unit);
-                    }
-                    if let Some(dec) = decimals {
-                        rec["decimals"] = json!(dec);
-                    }
-                    records.push(rec);
-                }
-            }
-            Ok(Event::Empty(ref e)) => {
-                let tag_bytes = e.name().as_ref().to_vec();
-                let tag_name = String::from_utf8_lossy(&tag_bytes).into_owned();
-
-                let mut context_ref = None;
-                let mut unit_ref = None;
-
-                for attr in e.attributes().flatten() {
-                    let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-                    let val = String::from_utf8_lossy(&attr.value).into_owned();
-                    if key == "contextRef" {
-                        context_ref = Some(val);
-                    } else if key == "unitRef" {
-                        unit_ref = Some(val);
-                    }
-                }
-
-                if context_ref.is_some() || unit_ref.is_some() {
-                    let mut rec = json!({
-                        "path": file_path,
-                        "concept": tag_name,
-                        "value": "",
-                        "format": "xbrl"
-                    });
-                    if let Some(ctx) = context_ref {
-                        rec["context_ref"] = json!(ctx);
-                    }
-                    if let Some(unit) = unit_ref {
-                        rec["unit_ref"] = json!(unit);
-                    }
-                    records.push(rec);
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => return Err(anyhow::anyhow!("XBRL XML parse error: {}", e)),
-            _ => {}
-        }
-        buf.clear();
     }
 
     Ok(records)
@@ -366,80 +280,13 @@ pub fn extract_xml_records(data: &[u8], file_path: &str) -> Result<Vec<Value>> {
     Ok(records)
 }
 
-/// Extracts records from SEC EDGAR SGML filings (.sgml, .nc, SEC .txt) using secsgml.
-pub fn extract_secsgml_records(data: &[u8], file_path: &str) -> Result<Vec<Value>> {
-    use base64::Engine;
-
-    let (meta, docs) = secsgml::parse_sgml(data, None)
-        .map_err(|e| anyhow::anyhow!("SEC SGML parse error: {}", e))?;
-
-    let mut records = Vec::with_capacity(docs.len().max(1));
-
-    let accession_number = meta
-        .get("accession-number")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let filing_type = meta
-        .get("type")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let period = meta
-        .get("period")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let filing_date = meta
-        .get("filing-date")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let cik = meta
-        .pointer("/filer/company-data/cik")
-        .or_else(|| meta.get("cik"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    for doc in docs {
-        let content_str = if doc.is_uuencoded {
-            base64::prelude::BASE64_STANDARD.encode(&doc.content)
-        } else {
-            String::from_utf8_lossy(&doc.content).into_owned()
-        };
-
-        let mut rec = json!({
-            "path": file_path,
-            "doc_type": doc.meta.r#type,
-            "sequence": doc.meta.sequence,
-            "filename": doc.meta.filename,
-            "description": doc.meta.description,
-            "content": content_str,
-            "is_binary": doc.is_uuencoded,
-            "size_bytes": doc.content.len(),
-            "format": "secsgml"
-        });
-
-        if let Some(ref acc) = accession_number {
-            rec["accession_number"] = json!(acc);
-        }
-        if let Some(ref ft) = filing_type {
-            rec["submission_type"] = json!(ft);
-        }
-        if let Some(ref p) = period {
-            rec["period"] = json!(p);
-        }
-        if let Some(ref fd) = filing_date {
-            rec["filing_date"] = json!(fd);
-        }
-        if let Some(ref c) = cik {
-            rec["cik"] = json!(c);
-        }
-
-        records.push(rec);
-    }
-
-    Ok(records)
-}
-
 /// Extracts entries from a ZIP archive (.zip) and parses supported formats within.
-pub fn extract_zip_records(data: &[u8], file_path: &str, chunk_size: usize) -> Result<Vec<Value>> {
+pub fn extract_zip_records(
+    data: &[u8],
+    file_path: &str,
+    chunk_size: usize,
+    custom_extractor: Option<CustomFileExtractor>,
+) -> Result<Vec<Value>> {
     let mut zip = zip::ZipArchive::new(Cursor::new(data)).context("Invalid zip archive")?;
 
     let mut records = Vec::new();
@@ -460,7 +307,8 @@ pub fn extract_zip_records(data: &[u8], file_path: &str, chunk_size: usize) -> R
             .unwrap_or("")
             .to_lowercase();
 
-        let inner_records = parse_file_bytes(&buf, &name, &inner_ext, chunk_size)?;
+        let inner_records =
+            parse_file_bytes_with_custom(&buf, &name, &inner_ext, chunk_size, custom_extractor)?;
         for mut rec in inner_records {
             if let Some(obj) = rec.as_object_mut() {
                 obj.insert("archive_path".to_string(), json!(file_path));
@@ -480,7 +328,25 @@ pub fn parse_file_bytes(
     ext: &str,
     chunk_size: usize,
 ) -> Result<Vec<Value>> {
-    // 1. Transparent Zstandard decompression (.zst, .zstd)
+    parse_file_bytes_with_custom(raw_bytes, file_path, ext, chunk_size, None)
+}
+
+/// Dispatches raw file bytes and extension with optional domain extractor support.
+pub fn parse_file_bytes_with_custom(
+    raw_bytes: &[u8],
+    file_path: &str,
+    ext: &str,
+    chunk_size: usize,
+    custom_extractor: Option<CustomFileExtractor>,
+) -> Result<Vec<Value>> {
+    // 1. Check custom domain extractor first
+    if let Some(custom) = custom_extractor {
+        if let Some(res) = custom(raw_bytes, file_path, ext, chunk_size) {
+            return res;
+        }
+    }
+
+    // 2. Transparent Zstandard decompression (.zst, .zstd)
     if ext == "zst" || ext == "zstd" {
         let decompressed = decompress_zstd(raw_bytes)?;
         let path = Path::new(file_path);
@@ -490,28 +356,22 @@ pub fn parse_file_bytes(
             .and_then(|e| e.to_str())
             .unwrap_or("txt")
             .to_lowercase();
-        return parse_file_bytes(&decompressed, file_path, &inner_ext, chunk_size);
+        return parse_file_bytes_with_custom(
+            &decompressed,
+            file_path,
+            &inner_ext,
+            chunk_size,
+            custom_extractor,
+        );
     }
 
-    // 2. Specific formats
+    // 3. General enterprise formats
     match ext {
         "docx" => extract_docx_records(raw_bytes, file_path, chunk_size),
         "pptx" => extract_pptx_records(raw_bytes, file_path),
-        "xbrl" => extract_xbrl_records(raw_bytes, file_path),
         "xml" => extract_xml_records(raw_bytes, file_path),
-        "sgml" | "nc" => extract_secsgml_records(raw_bytes, file_path),
-        "zip" => extract_zip_records(raw_bytes, file_path, chunk_size),
+        "zip" => extract_zip_records(raw_bytes, file_path, chunk_size, custom_extractor),
         _ => {
-            // Check if text file contains SEC SGML markers
-            if ext == "txt" || ext.is_empty() {
-                if raw_bytes
-                    .windows(10)
-                    .any(|w| w == b"<DOCUMENT>" || w == b"<SEC-DOCUM")
-                {
-                    return extract_secsgml_records(raw_bytes, file_path);
-                }
-            }
-
             // Fallback plain text / code chunking
             let content = String::from_utf8_lossy(raw_bytes);
             let lines: Vec<&str> = content.lines().collect();

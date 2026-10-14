@@ -5,6 +5,14 @@ edition = "2021"
 publish = false
 description = "Model Context Protocol (MCP) server for BenoStreamDB"
 
+[lib]
+name = "benostreamdb_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "benostreamdb-mcp"
+path = "src/main.rs"
+
 [dependencies]
 benostreamdb = { path = "../../" }
 tokio = { version = "1.36", features = ["full"] }
@@ -24,4 +32,4 @@ base64 = "0.22"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 quick-xml = "0.31"
 zstd = "0.13"
-secsgml = { path = "../secsgml" }
+
