@@ -8,6 +8,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.12.0]
 
+### Added
+- **Native SEC EDGAR SGML Parser (`contrib/secsgml`)** — High-performance, zero-copy,
+  100% safe Rust port of `secsgml` / `secsgml2`. Provides single-pass tag scanning,
+  submission header metadata tree parsing and standardization (SIC and SEC Act regex extraction,
+  tag normalization), variable-length SEC UU-decoding with 60-byte SIMD-aligned fast path,
+  and TAR archive byte layout calculation (`calculate_documents_locations_in_tar`).
+- **Multi-Format Ingestion in MCP (`ingest_file`)** — Expanded file ingestion to
+  support Microsoft Word (`.docx`), PowerPoint (`.pptx`), financial XBRL (`.xbrl`),
+  XML (`.xml`), SEC EDGAR filings (`.sgml`, `.nc`, SEC `.txt`), transparent Zstandard
+  decompression (`.zst`, `.zstd`), and recursive ZIP archive extraction (`.zip`).
+- **Third-Party Attribution** — Documented upstream `secsgml` attribution in
+  `THIRDPARTY_NOTICES.md` and `contrib/secsgml/LICENSE` in accordance with MIT licensing.
+
 ### Benchmarks
 - **Report: "Index Precision" column** — the vector tables now report the
   quantization (`f32`/`tq8`/`tq4`/`pq`) rather than the algorithm name, and the

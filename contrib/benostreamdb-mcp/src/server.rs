@@ -1013,7 +1013,7 @@ impl McpServer {
                         },
                         {
                             "name": "ingest_file",
-                            "description": "Ingests a local file (PDF documents, Excel .xlsx/.xls/.ods sheets, Images .png/.jpg/.webp, code, markdown, text, JSON, or Parquet) into a scratch table. Text and PDFs are chunked with line/chunk metadata; Excel sheets are converted to structured rows; Images are ingested as base64 Data URIs with optional multimodal embeddings.",
+                            "description": "Ingests a local file (Word .docx, PowerPoint .pptx, Excel .xlsx/.xls/.ods, XBRL financial reports, XML, SEC EDGAR SGML .sgml/.nc/.txt, Zstandard .zst/.zstd, Zip archives .zip, PDF documents, Images .png/.jpg/.webp, code, markdown, text, or JSON) into a scratch table. Text/PDF/Office are chunked with line/slide/paragraph metadata; Excel/XML/XBRL/SGML are converted to structured tabular rows; Images are ingested as base64 Data URIs with optional multimodal embeddings.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -2038,6 +2038,58 @@ impl McpServer {
                                     }));
                                 }
                             }
+                        } else if matches!(
+                            ext.as_str(),
+                            "docx"
+                                | "pptx"
+                                | "xbrl"
+                                | "xml"
+                                | "sgml"
+                                | "nc"
+                                | "zip"
+                                | "zst"
+                                | "zstd"
+                        ) || (ext == "txt" && {
+                            let raw = std::fs::read(p).unwrap_or_default();
+                            raw.windows(10)
+                                .any(|w| w == b"<DOCUMENT>" || w == b"<SEC-DOCUM")
+                        }) {
+                            let raw_bytes = std::fs::read(p)?;
+                            match crate::ingest_formats::parse_file_bytes(
+                                &raw_bytes, file_path, &ext, chunk_size,
+                            ) {
+                                Ok(recs) => {
+                                    records = recs;
+                                    if embed_chunks {
+                                        for rec in &mut records {
+                                            if let Some(content_str) =
+                                                rec.get("content").and_then(|c| c.as_str())
+                                            {
+                                                if !content_str.trim().is_empty() {
+                                                    if let Some(vec) =
+                                                        self.fetch_embedding(content_str).await
+                                                    {
+                                                        let vec_str = format!(
+                                                            "[{}]",
+                                                            vec.iter()
+                                                                .map(|f| f.to_string())
+                                                                .collect::<Vec<_>>()
+                                                                .join(", ")
+                                                        );
+                                                        rec["embedding"] = json!(vec_str);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "content": [{ "type": "text", "text": format!("Error extracting records from '{}': {}", file_path, e) }],
+                                        "isError": true
+                                    }));
+                                }
+                            }
                         } else {
                             // Text / code chunking
                             let content = std::fs::read_to_string(p)?;
@@ -3036,6 +3088,153 @@ mod tests {
         assert!(
             ingest_text.contains("scratch.company_q3_earnings_report_draft"),
             "expected spaces and parentheses replaced with underscores, got: {ingest_text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_secsgml_file() {
+        let server = McpServer::new();
+        server
+            .handle_request("initialize", json!({}))
+            .await
+            .unwrap();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let sgml_path = temp_dir.path().join("filing.sgml");
+        let sgml_content = br#"<SEC-DOCUMENT>0001010412-24-000001.txt : 20240401
+ACCESSION NUMBER: 0001010412-24-000001
+CONFORMED SUBMISSION TYPE: 10-K
+CENTRAL INDEX KEY: 0000876134
+COMPANY CONFORMED NAME: ACME CORP
+
+<DOCUMENT>
+<TYPE>10-K
+<SEQUENCE>1
+<FILENAME>acme-10k.htm
+<DESCRIPTION>Annual Report 2024
+<TEXT>
+Financial performance was strong across all operating divisions in fiscal 2024.
+</TEXT>
+</DOCUMENT>
+"#;
+        std::fs::write(&sgml_path, sgml_content).unwrap();
+
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": sgml_path.to_str().unwrap(),
+                        "table_name": "acme_filing"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(res.get("isError").is_none(), "SGML ingest failed: {res}");
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("Ingested 1 records from"),
+            "expected 1 record, got: {text}"
+        );
+        assert!(text.contains("scratch.acme_filing"));
+
+        // Query the ingested filing
+        let query_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT doc_type, filename, accession_number FROM scratch.acme_filing"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(query_res.get("isError").is_none());
+        let q_text = query_res["content"][0]["text"].as_str().unwrap();
+        assert!(q_text.contains("10-K"));
+        assert!(q_text.contains("acme-10k.htm"));
+        assert!(q_text.contains("0001010412-24-000001"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_ingest_xbrl_and_zstd() {
+        let server = McpServer::new();
+        server
+            .handle_request("initialize", json!({}))
+            .await
+            .unwrap();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // 1. Test XBRL ingestion
+        let xbrl_path = temp_dir.path().join("report.xbrl");
+        let xbrl_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:us-gaap="http://fasb.org/us-gaap/2024">
+    <us-gaap:Revenues contextRef="FY2024" unitRef="USD" decimals="-3">5000000</us-gaap:Revenues>
+    <us-gaap:NetIncomeLoss contextRef="FY2024" unitRef="USD" decimals="-3">1200000</us-gaap:NetIncomeLoss>
+</xbrli:xbrl>"#;
+        std::fs::write(&xbrl_path, xbrl_content).unwrap();
+
+        let xbrl_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": xbrl_path.to_str().unwrap(),
+                        "table_name": "acme_xbrl"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            xbrl_res.get("isError").is_none(),
+            "XBRL ingest failed: {xbrl_res}"
+        );
+
+        let q_xbrl = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT concept, value, context_ref FROM scratch.acme_xbrl ORDER BY concept"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let q_text = q_xbrl["content"][0]["text"].as_str().unwrap();
+        assert!(q_text.contains("NetIncomeLoss") || q_text.contains("Revenues"));
+
+        // 2. Test Zstd-compressed text ingestion
+        let zst_path = temp_dir.path().join("data.txt.zst");
+        let plain_data = b"Line 1: Q1 revenue\nLine 2: Q2 revenue\nLine 3: Q3 revenue\n";
+        let compressed = zstd::encode_all(&plain_data[..], 3).unwrap();
+        std::fs::write(&zst_path, &compressed).unwrap();
+
+        let zst_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": zst_path.to_str().unwrap(),
+                        "table_name": "acme_zst"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            zst_res.get("isError").is_none(),
+            "Zstd ingest failed: {zst_res}"
         );
     }
 }

@@ -180,3 +180,28 @@ SELECT * FROM graph_neighbors('doc_links', 133, 2);
 # After #3 — the form the notebook should teach
 session.graph_neighbors("doc_links", seed=133, hops=2)
 ```
+
+---
+
+## Update: R2/R3 shipped (graph table functions)
+
+The graph table functions now exist and read endpoints from the edge table's own metadata
+(`list_graph_tables` reports `table_type=edge` + `source_column`/`target_column`). Verified against a
+freshly built edge table:
+
+```sql
+SELECT * FROM graph_neighbors('doc_links', 133, 2);   -- cols: node, hop, seed
+SELECT * FROM shortest_path('doc_links', 2, 7);       -- cols: node, hop
+SELECT * FROM graph_pagerank('edges');                -- cols: node, rank
+SELECT * FROM graph_louvain('edges', 1.0);            -- cols: node, community
+```
+
+As a result, **the RAG + knowledge-graph notebook is now fully cast-free** — every `arrow_cast(...)`
+is gone from both the notebook and the article, replaced by the table-function form. Two follow-ups
+from the original plan remain open:
+
+1. The **column-argument scalar form still rejects bare columns** (`graph_neighbors(source, target,
+   133, 2)` → `No field named source`); only the table-function form is cast-free today. Either
+   finish R1 (coercion on the scalar form) or deprecate the scalar form in favor of the TVFs.
+2. `session.sql("... ;")` still rejects trailing semicolons/comments (R5), and `CREATE INDEX` over the
+   embedded session still returns `Unsupported logical plan` (use `add_index` / Flight SQL).
