@@ -2103,7 +2103,15 @@ impl McpServer {
                             }
                         } else if matches!(
                             ext.as_str(),
-                            "csv" | "tsv" | "psv" | "docx" | "pptx" | "xml" | "zip" | "zst" | "zstd"
+                            "csv"
+                                | "tsv"
+                                | "psv"
+                                | "docx"
+                                | "pptx"
+                                | "xml"
+                                | "zip"
+                                | "zst"
+                                | "zstd"
                         ) || self.extension.file_extractor.is_some()
                         {
                             let raw_bytes = std::fs::read(p)?;
@@ -3053,7 +3061,9 @@ mod tests {
         ];
 
         for payload in &fuzz_payloads {
-            for ext in ["csv", "tsv", "psv", "xml", "docx", "pptx", "zip", "zst", "txt"] {
+            for ext in [
+                "csv", "tsv", "psv", "xml", "docx", "pptx", "zip", "zst", "txt",
+            ] {
                 // Must not panic under any corrupted payload
                 let _ = crate::ingest_formats::parse_file_bytes(payload, "fuzz_input", ext, 500);
             }
@@ -3416,7 +3426,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(csv_res.get("isError").is_none(), "CSV ingest failed: {csv_res}");
+        assert!(
+            csv_res.get("isError").is_none(),
+            "CSV ingest failed: {csv_res}"
+        );
 
         let q_csv = server
             .handle_request(
@@ -3452,7 +3465,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(tsv_res.get("isError").is_none(), "TSV ingest failed: {tsv_res}");
+        assert!(
+            tsv_res.get("isError").is_none(),
+            "TSV ingest failed: {tsv_res}"
+        );
 
         let q_tsv = server
             .handle_request(
@@ -3488,7 +3504,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(psv_res.get("isError").is_none(), "PSV ingest failed: {psv_res}");
+        assert!(
+            psv_res.get("isError").is_none(),
+            "PSV ingest failed: {psv_res}"
+        );
 
         let q_psv = server
             .handle_request(

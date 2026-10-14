@@ -383,12 +383,13 @@ pub fn extract_delimited_records(data: &[u8], file_path: &str, ext: &str) -> Res
 
             let trimmed = field.trim();
             // Handle single-quoted values and SQL/escape conventions: 'val', '', \'
-            let normalized = if trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2 {
-                let inner = &trimmed[1..trimmed.len() - 1];
-                inner.replace("''", "'").replace("\\'", "'")
-            } else {
-                trimmed.to_string()
-            };
+            let normalized =
+                if trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2 {
+                    let inner = &trimmed[1..trimmed.len() - 1];
+                    inner.replace("''", "'").replace("\\'", "'")
+                } else {
+                    trimmed.to_string()
+                };
 
             let val = if normalized.is_empty() {
                 Value::Null
@@ -396,8 +397,12 @@ pub fn extract_delimited_records(data: &[u8], file_path: &str, ext: &str) -> Res
                 json!(true)
             } else if normalized.eq_ignore_ascii_case("false") {
                 json!(false)
-            } else if (normalized.starts_with('0') && normalized.len() > 1 && !normalized.starts_with("0."))
-                || (normalized.starts_with("-0") && normalized.len() > 2 && !normalized.starts_with("-0."))
+            } else if (normalized.starts_with('0')
+                && normalized.len() > 1
+                && !normalized.starts_with("0."))
+                || (normalized.starts_with("-0")
+                    && normalized.len() > 2
+                    && !normalized.starts_with("-0."))
             {
                 json!(normalized)
             } else if let Ok(int_val) = normalized.parse::<i64>() {
