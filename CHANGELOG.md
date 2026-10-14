@@ -55,6 +55,24 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   now sized from the envelope.
 
 ### Added
+- **Authoritative Warehouse Catalog Policy (`.benostream-policy.json`)** — Added a
+  bucket-level catalog policy file that defines schema permissions (`readwrite_schemas`,
+  `readonly_schemas`, and `immutable_schemas`). The core database exposes administrative
+  functions (`Session.catalog_policy()`, `Session.set_schema_access(schema, read_only)`,
+  and `Session.lock_all_read_only()`) to configure and inspect bucket access from
+  Python, Rust, and CLI. System schemas (`default`, `public`, `sys`, `system`,
+  `information_schema`) are strictly immutable.
+- **Untrusted Connector Security Lockdown** — Established an explicit security
+  boundary between trusted data pipelines (Core DB, Flight SQL, Spark, Trino, dbt) and
+  untrusted endpoints (MCP agents, Search gateway). When `.benostream-policy.json` is
+  missing or unspecified, untrusted connectors are conservatively locked down to
+  **read-only mode across all tables**, permitting mutations strictly in isolated
+  `scratch.*` workspace tables.
+- **Python Network & Search Clients (`FlightClient`, `SearchClient`)** — Added
+  high-level native Python clients to `benostreamdb`: `FlightClient` for zero-copy
+  streaming of Arrow Flight SQL queries directly into PyArrow Tables and Pandas
+  DataFrames over gRPC, and `SearchClient` for full-text, vector, and hybrid RRF
+  search over the OpenSearch 7.10 / Qdrant REST gateway.
 - **Workflow tutorials** — one runnable tutorial per core workflow: AI/semantic
   retrieval via MCP, JSON/document retrieval with a JSON-path index, and graph
   traversal via `graph_neighbors(...)`. Python versions are Jupyter notebooks

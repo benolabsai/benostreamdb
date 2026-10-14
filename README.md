@@ -42,12 +42,37 @@ An **index-overlay engine for the lakehouse**. BenoStreamDB layers reconstructib
 3. **Distributed / Clustered**:
    *Status: Future / Experimental (Not currently supported).* Distributed coordinator and multi-node write/compaction scheduling are under design.
 
-> ## 🔒 Security & RBAC
+> ## 🔒 Security & Warehouse Catalog Policy
 >
-> **BenoStreamDB supports stateless authentication and Role-Based Access Control (RBAC).**
+> **1. Stateless Authentication & RBAC**:
 > Both `benostreamdb-flight` and `bsdb-search` support stateless authentication via static API keys (`BSDB_API_KEY`) and JWTs (HS256/RS256). JWT payloads are parsed to extract user roles (`"roles"` array) for native RBAC enforcement within the engine.
+>
+> **2. Authoritative Warehouse Catalog Policy (`.benostream-policy.json`)**:
+> Warehouse read/write permissions are durably stored on storage root (`s3://bucket/warehouse/.benostream-policy.json`) and managed directly from the core database product:
+> ```python
+> import benostreamdb as bsdb
+> session = bsdb.connect("s3://bucket/warehouse")
+>
+> # Query remote policy on the bucket
+> policy = session.catalog_policy()
+>
+> # Grant or revoke read/write access per schema
+> session.set_schema_access("analytics", read_only=False)
+>
+> # Lock down warehouse to read-only
+> session.lock_all_read_only()
+> ```
+>
+> **3. Read-Only vs. Immutable Policies**:
+> - **Read-Only (`readonly`)**: Operational access state. Administrator/trusted pipelines can toggle a schema to read-write for scheduled ETL/backfills, then lock it back down.
+> - **Immutable (`immutable`)**: Permanent write-once/WORM integrity constraint. Applied to system schemas (`default`, `public`, `sys`, `information_schema`) and compliance archives. Mutations are permanently rejected engine-wide and cannot be overridden by administrators.
+>
+> **4. Trusted vs. Untrusted Connector Boundary**:
+> - **Trusted Data Engines** (Core DB, Flight SQL, Spark, Trino, dbt): Retain full access authorized by warehouse credentials.
+> - **Untrusted Gateways** (MCP Agents, Search Gateway): If `.benostream-policy.json` is missing or unspecified, untrusted connectors are conservatively quarantined into **read-only mode across all tables**, restricting writes solely to transient `scratch.*` workspace tables.
 > 
 > *Note on TLS:* The network servers do not terminate TLS natively within the Rust binaries. When deploying over untrusted networks or the public internet, you must deploy BenoStreamDB behind a reverse proxy (like NGINX, Envoy, or an AWS ALB) that terminates TLS. See [SECURITY.md](SECURITY.md) for the full posture.
+
 
 It is not a storage engine you have to migrate into. You can either write through it, or point it at an **existing Apache Iceberg table it does not own** and build indexes over that data in place. The authoritative Parquet files and the advisory index overlays are stored separately, so indexing never rewrites or duplicates your data.
 
@@ -853,12 +878,26 @@ cd dbt-benostreamdb
 pip install -e .
 ```
 
-### Python (Direct)
+### Python (Direct & Network Clients)
 ```python
-# No Spark needed for local/notebook work
 import benostreamdb as bsdb
+
+# Embedded in-process execution (scales to zero)
 df = bsdb.Table("s3://bucket/table").query().execute()
 # Or using traditional API: df = bsdb.Table("s3://bucket/table").to_pandas()
+
+# Network Arrow Flight SQL client (zero-copy gRPC streaming)
+flight = bsdb.FlightClient("grpc://127.0.0.1:50051", token="secret")
+df = flight.execute_pandas("SELECT * FROM market_data WHERE symbol = 'NVDA'")
+
+# Network Search client (OpenSearch 7.10 / Qdrant REST gateway)
+search = bsdb.SearchClient("http://127.0.0.1:9200")
+results = search.hybrid_search(
+    index="filings",
+    text="revenue guidance semiconductor",
+    vector=[0.12, -0.45, 0.88],
+    top_k=10,
+)
 ```
 
 ### Snowflake (Untested / Developer Preview)
