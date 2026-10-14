@@ -1,32 +1,554 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::Write;
+use std::sync::RwLock;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info};
 
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 use benostreamdb::core::sql::session::BenoStreamSession;
 
-/// The only schema the MCP server may create objects in.
+/// The default schema the MCP server creates objects in if unqualified.
 pub const SCRATCH_SCHEMA: &str = "scratch";
 
-/// Enforce the MCP write policy: **read any schema, write only to `scratch`**.
-///
-/// The MCP server is driven by an untrusted agent, so it must not be able to
-/// mutate the main catalog. Every write statement's target table must be in the
-/// `scratch` schema; reads (SELECT, COPY ... TO, DESCRIBE, …) are unrestricted.
-fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
+/// Derives the default warehouse directory path.
+/// If `BSDB_WAREHOUSE` is already set, returns its value.
+/// If `BSDB_EPHEMERAL` is set or `--ephemeral` argument is present, generates a fresh directory under the system temp directory.
+/// In unit tests (`cfg!(test)`), defaults to ephemeral unless `BSDB_WAREHOUSE` is explicitly configured.
+/// Otherwise, returns a persistent warehouse path under `$XDG_DATA_HOME/benostreamdb/mcp_warehouse` or `~/.benostreamdb/mcp_warehouse`.
+pub fn resolve_default_warehouse() -> String {
+    let is_test = cfg!(test);
+    let is_ephemeral = is_test
+        || std::env::var("BSDB_EPHEMERAL")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        || std::env::args().any(|arg| arg == "--ephemeral");
+
+    if !is_test {
+        if let Ok(w) = std::env::var("BSDB_WAREHOUSE") {
+            if !w.trim().is_empty() {
+                if validate_local_path(&w, "BSDB_WAREHOUSE").is_ok() {
+                    let _ = std::fs::create_dir_all(&w);
+                    return w;
+                } else {
+                    error!("Ignoring remote or non-local BSDB_WAREHOUSE: {}", w);
+                }
+            }
+        }
+    }
+
+    let warehouse_path = if is_ephemeral {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "benostreamdb_mcp_{}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+            id
+        ));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        temp_dir
+    } else {
+        let base_dir = std::env::var("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| {
+                std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".benostreamdb"))
+            })
+            .unwrap_or_else(|_| std::env::temp_dir().join(".benostreamdb"));
+        let warehouse_dir = base_dir.join("mcp_warehouse");
+        let _ = std::fs::create_dir_all(&warehouse_dir);
+        warehouse_dir
+    };
+
+    warehouse_path.to_string_lossy().to_string()
+}
+
+/// Validates that a path is strictly a local filesystem path.
+/// Rejects remote URI schemes, network protocols, and hosted object store prefixes
+/// (e.g. s3://, minio://, rustfs://, http://, https://, gcs://, gs://, abfs://, rest://, etc.).
+pub fn validate_local_path(path: &str, field_name: &str) -> anyhow::Result<()> {
+    let p = path.trim();
+    if p.is_empty() {
+        anyhow::bail!("{field_name} cannot be empty");
+    }
+
+    // Check for explicit URI schemes (e.g. s3://, minio://, rustfs://, http://, etc.)
+    if let Some(idx) = p.find("://") {
+        let scheme = &p[..idx].to_ascii_lowercase();
+        if scheme != "file" {
+            anyhow::bail!(
+                "MCP storage is locked to local filesystem only. Remote/hosted object store or catalog URI scheme '{scheme}://' is strictly prohibited for {field_name} (e.g. MinIO, S3, RustFS, Iceberg REST, GCS)",
+            );
+        }
+    }
+
+    // Check for known cloud/object-store prefix schemes without :// (e.g. s3:, gs:, minio:)
+    for prefix in &[
+        "s3:", "gs:", "gcs:", "minio:", "rustfs:", "iceberg:", "rest:", "http:", "https:",
+        "azure:", "abfs:", "abfss:", "oss:", "cos:",
+    ] {
+        if p.to_ascii_lowercase().starts_with(prefix) {
+            anyhow::bail!(
+                "MCP storage is locked to local filesystem only. Remote/hosted object store prefix '{prefix}' is strictly prohibited for {field_name}",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn default_readwrite_schemas() -> Vec<String> {
+    vec![SCRATCH_SCHEMA.to_string()]
+}
+
+fn default_readonly_schemas() -> Vec<String> {
+    vec!["default".to_string()]
+}
+
+fn default_write_schema_val() -> String {
+    SCRATCH_SCHEMA.to_string()
+}
+
+/// Helper deserializer that accepts either a JSON array of strings or a comma-separated string.
+fn deserialize_optional_schema_list<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct SchemaListVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for SchemaListVisitor {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a list of strings, a comma-separated string, or null")
+        }
+
+        fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+
+        fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let list: Vec<String> = v
+                .split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            Ok(Some(list))
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut items = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                let trimmed = item.trim().to_ascii_lowercase();
+                if !trimmed.is_empty() {
+                    items.push(trimmed);
+                }
+            }
+            Ok(Some(items))
+        }
+    }
+
+    deserializer.deserialize_option(SchemaListVisitor)
+}
+
+/// Baseline system catalog schemas that are strictly immutable and can NEVER be configured as writable.
+pub const IMMUTABLE_SYSTEM_SCHEMAS: &[&str] =
+    &["default", "public", "information_schema", "sys", "system"];
+
+/// Schema write permissions policy for the MCP server.
+/// Governs which schemas can be mutated (tables created, records inserted, etc.)
+/// and which schemas are locked as read-only.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SchemaPermissions {
+    /// Schemas that permit writes (CREATE, INSERT, UPDATE, DELETE, ALTER, DROP, TRUNCATE, MERGE).
+    /// If it contains "*", all schemas are writable except those explicitly in `readonly_schemas`.
+    #[serde(default = "default_readwrite_schemas")]
+    pub readwrite_schemas: Vec<String>,
+    /// Schemas that are strictly read-only. Writes to these schemas are always rejected.
+    #[serde(default = "default_readonly_schemas")]
+    pub readonly_schemas: Vec<String>,
+    /// The default schema used when creating scratch/user tables without an explicit schema qualifier.
+    #[serde(default = "default_write_schema_val")]
+    pub default_write_schema: String,
+}
+
+impl Default for SchemaPermissions {
+    fn default() -> Self {
+        Self {
+            readwrite_schemas: default_readwrite_schemas(),
+            readonly_schemas: default_readonly_schemas(),
+            default_write_schema: default_write_schema_val(),
+        }
+    }
+}
+
+impl SchemaPermissions {
+    pub fn new(
+        readwrite_schemas: Vec<String>,
+        readonly_schemas: Vec<String>,
+        default_write_schema: String,
+    ) -> Self {
+        Self {
+            readwrite_schemas,
+            readonly_schemas,
+            default_write_schema,
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let readwrite_schemas = if let Ok(val) = std::env::var("BSDB_READWRITE_SCHEMAS") {
+            let list: Vec<String> = val
+                .split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if list.is_empty() {
+                vec![SCRATCH_SCHEMA.to_string()]
+            } else {
+                list
+            }
+        } else {
+            vec![SCRATCH_SCHEMA.to_string()]
+        };
+
+        let readonly_schemas = if let Ok(val) = std::env::var("BSDB_READONLY_SCHEMAS") {
+            let list: Vec<String> = val
+                .split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if list.is_empty() {
+                vec!["default".to_string()]
+            } else {
+                list
+            }
+        } else {
+            vec!["default".to_string()]
+        };
+
+        let default_write_schema = std::env::var("BSDB_DEFAULT_WRITE_SCHEMA")
+            .ok()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                readwrite_schemas
+                    .iter()
+                    .find(|s| *s != "*")
+                    .cloned()
+                    .unwrap_or_else(|| SCRATCH_SCHEMA.to_string())
+            });
+
+        Self {
+            readwrite_schemas,
+            readonly_schemas,
+            default_write_schema,
+        }
+    }
+
+    pub fn is_schema_writable(&self, schema: &str) -> bool {
+        let s = schema.to_ascii_lowercase();
+        // 1. Immutable system schemas are NEVER writable under any circumstances
+        if IMMUTABLE_SYSTEM_SCHEMAS
+            .iter()
+            .any(|sys| sys.eq_ignore_ascii_case(&s))
+        {
+            return false;
+        }
+        // 2. Explicit readonly schemas strictly veto write permissions
+        if self
+            .readonly_schemas
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(&s))
+        {
+            return false;
+        }
+        if self.readwrite_schemas.iter().any(|w| w == "*") {
+            return true;
+        }
+        self.readwrite_schemas
+            .iter()
+            .any(|w| w.eq_ignore_ascii_case(&s))
+    }
+}
+
+/// Global configuration for the BenoStreamDB MCP server.
+/// Supports loading from JSON files, inline JSON strings (e.g. from client `settings.json`),
+/// environment variables, and CLI arguments.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Warehouse directory path for table storage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warehouse: Option<String>,
+    /// Schemas that permit writes. Accepts a JSON array or a comma-separated string.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_schema_list"
+    )]
+    pub readwrite_schemas: Option<Vec<String>>,
+    /// Schemas that are strictly read-only. Accepts a JSON array or a comma-separated string.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_schema_list"
+    )]
+    pub readonly_schemas: Option<Vec<String>>,
+    /// Default schema for unqualified table creations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_write_schema: Option<String>,
+    /// Whether to force ephemeral temporary directories instead of the persistent warehouse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeral: Option<bool>,
+}
+
+impl McpServerConfig {
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+        if let Ok(json_str) = std::env::var("BSDB_MCP_CONFIG") {
+            if let Ok(parsed) = serde_json::from_str::<Self>(&json_str) {
+                config = parsed;
+            }
+        }
+        if let Ok(w) = std::env::var("BSDB_WAREHOUSE") {
+            if !w.trim().is_empty() {
+                config.warehouse = Some(w);
+            }
+        }
+        if let Ok(rw) = std::env::var("BSDB_READWRITE_SCHEMAS") {
+            let list: Vec<String> = rw
+                .split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !list.is_empty() {
+                config.readwrite_schemas = Some(list);
+            }
+        }
+        if let Ok(ro) = std::env::var("BSDB_READONLY_SCHEMAS") {
+            let list: Vec<String> = ro
+                .split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !list.is_empty() {
+                config.readonly_schemas = Some(list);
+            }
+        }
+        if let Ok(dw) = std::env::var("BSDB_DEFAULT_WRITE_SCHEMA") {
+            if !dw.trim().is_empty() {
+                config.default_write_schema = Some(dw.trim().to_ascii_lowercase());
+            }
+        }
+        if let Ok(e) = std::env::var("BSDB_EPHEMERAL") {
+            config.ephemeral = Some(e == "1" || e.eq_ignore_ascii_case("true"));
+        }
+        config
+    }
+
+    pub fn from_args(args: &[String]) -> anyhow::Result<Self> {
+        let mut config = Self::default();
+        let mut i = 0;
+        while i < args.len() {
+            match args[i].as_str() {
+                "--warehouse" => {
+                    i += 1;
+                    if i < args.len() {
+                        config.warehouse = Some(args[i].clone());
+                    }
+                }
+                "--readwrite-schemas" => {
+                    i += 1;
+                    if i < args.len() {
+                        let list: Vec<String> = args[i]
+                            .split(',')
+                            .map(|s| s.trim().to_ascii_lowercase())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        config.readwrite_schemas = Some(list);
+                    }
+                }
+                "--readonly-schemas" => {
+                    i += 1;
+                    if i < args.len() {
+                        let list: Vec<String> = args[i]
+                            .split(',')
+                            .map(|s| s.trim().to_ascii_lowercase())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        config.readonly_schemas = Some(list);
+                    }
+                }
+                "--default-write-schema" => {
+                    i += 1;
+                    if i < args.len() {
+                        config.default_write_schema = Some(args[i].trim().to_ascii_lowercase());
+                    }
+                }
+                "--ephemeral" => {
+                    config.ephemeral = Some(true);
+                }
+                "--config" => {
+                    i += 1;
+                    if i < args.len() {
+                        let parsed: Self = serde_json::from_str(&args[i])
+                            .map_err(|e| anyhow::anyhow!("Invalid --config JSON: {}", e))?;
+                        config = config.merge(parsed);
+                    }
+                }
+                "--config-file" => {
+                    i += 1;
+                    if i < args.len() {
+                        let content = std::fs::read_to_string(&args[i]).map_err(|e| {
+                            anyhow::anyhow!("Failed reading config file {}: {}", args[i], e)
+                        })?;
+                        let parsed: Self = serde_json::from_str(&content).map_err(|e| {
+                            anyhow::anyhow!("Invalid JSON in config file {}: {}", args[i], e)
+                        })?;
+                        config = config.merge(parsed);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        Ok(config)
+    }
+
+    pub fn resolve_from_args_and_env(args: &[String]) -> anyhow::Result<Self> {
+        let env_cfg = Self::from_env();
+        let args_cfg = Self::from_args(args)?;
+        Ok(env_cfg.merge(args_cfg))
+    }
+
+    pub fn merge(self, overlay: Self) -> Self {
+        Self {
+            warehouse: overlay.warehouse.or(self.warehouse),
+            readwrite_schemas: overlay.readwrite_schemas.or(self.readwrite_schemas),
+            readonly_schemas: overlay.readonly_schemas.or(self.readonly_schemas),
+            default_write_schema: overlay.default_write_schema.or(self.default_write_schema),
+            ephemeral: overlay.ephemeral.or(self.ephemeral),
+        }
+    }
+
+    pub fn to_permissions(&self) -> SchemaPermissions {
+        let readwrite_schemas = self
+            .readwrite_schemas
+            .clone()
+            .unwrap_or_else(default_readwrite_schemas);
+        let mut readonly_schemas = self
+            .readonly_schemas
+            .clone()
+            .unwrap_or_else(default_readonly_schemas);
+        for sys in IMMUTABLE_SYSTEM_SCHEMAS {
+            let sys_str = sys.to_string();
+            if !readonly_schemas
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(&sys_str))
+            {
+                readonly_schemas.push(sys_str);
+            }
+        }
+        let default_write_schema = self.default_write_schema.clone().unwrap_or_else(|| {
+            readwrite_schemas
+                .iter()
+                .find(|s| *s != "*")
+                .cloned()
+                .unwrap_or_else(default_write_schema_val)
+        });
+
+        SchemaPermissions {
+            readwrite_schemas,
+            readonly_schemas,
+            default_write_schema,
+        }
+    }
+}
+
+/// Enforce the MCP schema write policy:
+/// Writes (CREATE, INSERT, UPDATE, DELETE, ALTER, DROP, TRUNCATE, MERGE)
+/// are permitted ONLY to schemas marked as read/write in `permissions`
+/// and NEVER to schemas marked as read-only.
+/// Reads (SELECT, COPY ... TO, DESCRIBE, EXPLAIN, …) are unrestricted across all schemas.
+fn guard_schema_writes(query: &str, permissions: &SchemaPermissions) -> anyhow::Result<()> {
     use sqlparser::ast::{ObjectName, ObjectType, Statement, TableFactor};
     use sqlparser::dialect::GenericDialect;
     use sqlparser::parser::Parser;
+
+    let query_upper = query.to_ascii_uppercase();
+    if query_upper.contains("LOCATION") {
+        anyhow::bail!(
+            "MCP write denied: LOCATION clauses are strictly prohibited in MCP SQL statements. Tables are managed strictly within the local warehouse"
+        );
+    }
+    if query_upper.contains("CREATE EXTERNAL TABLE") {
+        anyhow::bail!(
+            "MCP write denied: CREATE EXTERNAL TABLE is strictly prohibited in MCP. Remote/external tables are not permitted; tables must reside in the local warehouse"
+        );
+    }
+    if query_upper.contains("CREATE CATALOG")
+        || query_upper.contains("ATTACH CATALOG")
+        || query_upper.contains("ATTACH DATABASE")
+        || query_upper.contains("MOUNT")
+    {
+        anyhow::bail!(
+            "MCP write denied: external catalog/database mounting is strictly prohibited. Remote Iceberg, MinIO, S3, or RustFS catalogs cannot be attached via MCP"
+        );
+    }
+    if query_upper.contains("SET BENOSTREAM.") || query_upper.contains("SET WAREHOUSE") {
+        anyhow::bail!(
+            "MCP write denied: mutating session settings via SQL SET is prohibited in MCP"
+        );
+    }
 
     let dialect = GenericDialect {};
     let statements = Parser::parse_sql(&dialect, query)
         .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
 
-    let check_scratch = |name: &ObjectName| -> anyhow::Result<()> {
+    let check_table_writable = |name: &ObjectName| -> anyhow::Result<()> {
         if name.0.is_empty() {
             return Ok(());
+        }
+        if name.0.len() >= 3 {
+            if let Some(cat_ident) = name.0[name.0.len() - 3].as_ident() {
+                let cat = cat_ident.value.to_ascii_lowercase();
+                if cat != "benostream" && cat != "datafusion" && cat != "default" {
+                    anyhow::bail!(
+                        "MCP write denied: writes to external catalog '{}' are prohibited (table '{}'). Only local schemas are writable",
+                        cat,
+                        name
+                    );
+                }
+            }
         }
         let schema = if name.0.len() >= 2 {
             if let Some(ident) = name.0[name.0.len() - 2].as_ident() {
@@ -37,11 +559,24 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
         } else {
             "".to_string()
         };
-        if schema != SCRATCH_SCHEMA {
+
+        if schema.is_empty() {
             anyhow::bail!(
-                "MCP may only write to the '{}' scratch schema (got '{}')",
-                SCRATCH_SCHEMA,
-                name
+                "MCP write statements must qualify the table with a writable schema (e.g. '{}.{}'). Allowed writable schemas: {:?}, locked schemas: {:?}",
+                permissions.default_write_schema,
+                name,
+                permissions.readwrite_schemas,
+                permissions.readonly_schemas
+            );
+        }
+
+        if !permissions.is_schema_writable(&schema) {
+            anyhow::bail!(
+                "MCP write denied: schema '{}' is read-only or not in writable schemas (table '{}'). Allowed writable schemas: {:?}, locked schemas: {:?}",
+                schema,
+                name,
+                permissions.readwrite_schemas,
+                permissions.readonly_schemas
             );
         }
         Ok(())
@@ -49,42 +584,58 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
 
     let check_table_factor = |tf: &TableFactor| -> anyhow::Result<()> {
         if let TableFactor::Table { name, .. } = tf {
-            check_scratch(name)?;
+            check_table_writable(name)?;
         }
         Ok(())
     };
 
     for stmt in statements {
         match stmt {
-            Statement::CreateSchema { .. } | Statement::CreateDatabase { .. } => {
-                anyhow::bail!("MCP may not create schemas or databases");
+            Statement::CreateSchema { schema_name, .. } => {
+                let name = match schema_name {
+                    sqlparser::ast::SchemaName::Simple(n) => n.to_string().to_ascii_lowercase(),
+                    other => {
+                        anyhow::bail!("Unsupported schema name: {:?}", other);
+                    }
+                };
+                if name.is_empty() || !permissions.is_schema_writable(&name) {
+                    anyhow::bail!(
+                        "MCP may not create schema '{}': schema is not in writable schemas {:?}",
+                        name,
+                        permissions.readwrite_schemas
+                    );
+                }
+            }
+            Statement::CreateDatabase { .. } => {
+                anyhow::bail!("MCP may not create databases");
             }
             Statement::CreateTable(cmd) => {
                 if cmd.location.is_some() {
                     anyhow::bail!("MCP may not use LOCATION in CREATE TABLE");
                 }
-                check_scratch(&cmd.name)?;
+                check_table_writable(&cmd.name)?;
             }
-            Statement::CreateView { name, .. } => check_scratch(&name)?,
+            Statement::CreateView { name, .. } => check_table_writable(&name)?,
             Statement::Copy { .. } => {
                 anyhow::bail!("MCP may not use COPY");
             }
-            Statement::CreateIndex(cmd) => check_scratch(&cmd.table_name)?,
-            Statement::AlterTable { name, .. } => check_scratch(&name)?,
-            Statement::AlterIndex { name, .. } => check_scratch(&name)?,
+            Statement::CreateIndex(cmd) => check_table_writable(&cmd.table_name)?,
+            Statement::AlterTable { name, .. } => check_table_writable(&name)?,
+            Statement::AlterIndex { name, .. } => check_table_writable(&name)?,
             Statement::Truncate { table_names, .. } => {
                 for target in &table_names {
-                    check_scratch(&target.name)?;
+                    check_table_writable(&target.name)?;
                 }
             }
-            Statement::Insert(cmd) => match &cmd.table {
-                sqlparser::ast::TableObject::TableName(name) => check_scratch(name)?,
-                _ => {}
-            },
+            Statement::Insert(cmd) => {
+                if let sqlparser::ast::TableObject::TableName(name) = &cmd.table {
+                    check_table_writable(name)?;
+                }
+            }
             Statement::Update { table, .. } => check_table_factor(&table.relation)?,
             Statement::Delete(cmd) => {
                 for name in &cmd.tables {
-                    check_scratch(name)?;
+                    check_table_writable(name)?;
                 }
                 match &cmd.from {
                     sqlparser::ast::FromTable::WithFromKeyword(tables) => {
@@ -108,10 +659,19 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
                     || object_type == ObjectType::View
                 {
                     for name in &names {
-                        check_scratch(name)?;
+                        check_table_writable(name)?;
                     }
-                } else if object_type == ObjectType::Schema || object_type == ObjectType::Database {
-                    anyhow::bail!("MCP may not drop schemas or databases");
+                } else if object_type == ObjectType::Schema {
+                    for name in &names {
+                        if let Some(ident) = name.0.last().and_then(|id| id.as_ident()) {
+                            let schema = ident.value.to_ascii_lowercase();
+                            if !permissions.is_schema_writable(&schema) {
+                                anyhow::bail!("MCP may not drop read-only schema '{}'", schema);
+                            }
+                        }
+                    }
+                } else if object_type == ObjectType::Database {
+                    anyhow::bail!("MCP may not drop databases");
                 }
             }
             _ => {
@@ -120,6 +680,12 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Enforce the default MCP write policy (scratch only).
+#[allow(dead_code)]
+pub fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
+    guard_schema_writes(query, &SchemaPermissions::default())
 }
 
 /// Validates that an identifier (table name, column name, or schema.table)
@@ -139,7 +705,7 @@ fn validate_sql_identifier(ident: &str) -> anyhow::Result<()> {
                 ident
             );
         }
-        if part.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        if part.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             anyhow::bail!(
                 "Invalid identifier '{}': component cannot start with a digit",
                 ident
@@ -154,11 +720,36 @@ fn escape_sql_literal(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// Sanitizes an identifier component (alphanumerics and underscores only).
+fn sanitize_ident(name_part: &str) -> String {
+    let mut sanitized = String::with_capacity(name_part.len());
+    let mut last_was_underscore = false;
+
+    for c in name_part.chars() {
+        if c.is_ascii_alphanumeric() {
+            sanitized.push(c.to_ascii_lowercase());
+            last_was_underscore = false;
+        } else if !last_was_underscore && !sanitized.is_empty() {
+            sanitized.push('_');
+            last_was_underscore = true;
+        }
+    }
+
+    if sanitized.ends_with('_') {
+        sanitized.pop();
+    }
+
+    if sanitized.is_empty() {
+        sanitized = "table".to_string();
+    } else if sanitized.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        sanitized = format!("t_{}", sanitized);
+    }
+
+    sanitized
+}
+
 /// Sanitizes a table name or filename so no SQL commands, shell injection,
 /// or invalid identifier characters can be formed.
-///
-/// Converts spaces, hyphens, and non-alphanumeric characters to '_', collapses
-/// repeated underscores, prefixes 't_' if starting with a digit, and lowercases.
 fn sanitize_table_name(raw: &str) -> String {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -172,37 +763,82 @@ fn sanitize_table_name(raw: &str) -> String {
         ("".to_string(), raw)
     };
 
-    let mut sanitized = String::with_capacity(name_part.len());
-    let mut last_was_underscore = false;
+    let sanitized = sanitize_ident(name_part);
+    format!("{}{}", schema_prefix, sanitized)
+}
 
-    for c in name_part.chars() {
-        if c.is_ascii_alphanumeric() {
-            sanitized.push(c.to_ascii_lowercase());
-            last_was_underscore = false;
+/// Resolves a raw table name into `(schema, sanitized_table_name, full_qualified_name)`.
+/// If `raw` includes a schema qualifier (e.g. `analytics.sales`), checks if the schema is writable.
+/// If `raw` is unqualified (e.g. `sales`), prepends `permissions.default_write_schema`.
+fn resolve_table_name_and_schema(
+    raw: &str,
+    permissions: &SchemaPermissions,
+) -> anyhow::Result<(String, String, String)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        anyhow::bail!("Table name cannot be empty");
+    }
+
+    if let Some(dot_idx) = raw.find('.') {
+        let prefix = &raw[..dot_idx];
+        let rest = &raw[dot_idx + 1..];
+        // If prefix is in immutable system schemas or readonly_schemas, reject immediately
+        if IMMUTABLE_SYSTEM_SCHEMAS
+            .iter()
+            .any(|sys| sys.eq_ignore_ascii_case(prefix))
+            || permissions
+                .readonly_schemas
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(prefix))
+        {
+            anyhow::bail!(
+                "MCP write denied: schema '{}' is locked as read-only. Allowed writable schemas: {:?}, locked schemas: {:?}",
+                prefix,
+                permissions.readwrite_schemas,
+                permissions.readonly_schemas
+            );
+        }
+        if permissions.is_schema_writable(prefix) {
+            let clean_table = sanitize_ident(rest);
+            validate_sql_identifier(prefix)?;
+            validate_sql_identifier(&clean_table)?;
+            let schema_lower = prefix.to_ascii_lowercase();
+            let full_name = format!("{}.{}", schema_lower, clean_table);
+            return Ok((schema_lower, clean_table, full_name));
         } else {
-            // Convert spaces, punctuation, dashes, quotes, semicolons to '_'
-            if !last_was_underscore && !sanitized.is_empty() {
-                sanitized.push('_');
-                last_was_underscore = true;
-            }
+            anyhow::bail!(
+                "MCP write denied: schema '{}' is not in allowed writable schemas. Allowed writable schemas: {:?}, locked schemas: {:?}",
+                prefix,
+                permissions.readwrite_schemas,
+                permissions.readonly_schemas
+            );
         }
     }
 
-    if sanitized.ends_with('_') {
-        sanitized.pop();
+    let clean_table = sanitize_ident(raw);
+    let schema = permissions.default_write_schema.to_ascii_lowercase();
+    validate_sql_identifier(&schema)?;
+    validate_sql_identifier(&clean_table)?;
+    if !permissions.is_schema_writable(&schema) {
+        anyhow::bail!(
+            "MCP write denied: default schema '{}' is not writable. Allowed writable schemas: {:?}",
+            schema,
+            permissions.readwrite_schemas
+        );
     }
+    let full_name = format!("{}.{}", schema, clean_table);
+    Ok((schema, clean_table, full_name))
+}
 
-    if sanitized.is_empty() {
-        sanitized = "table".to_string();
-    } else if sanitized
-        .chars()
-        .next()
-        .map_or(false, |c| c.is_ascii_digit())
-    {
-        sanitized = format!("t_{}", sanitized);
+fn split_schema_and_table(full_name: &str) -> (String, String) {
+    if let Some(dot_idx) = full_name.find('.') {
+        (
+            full_name[..dot_idx].to_string(),
+            full_name[dot_idx + 1..].to_string(),
+        )
+    } else {
+        (SCRATCH_SCHEMA.to_string(), full_name.to_string())
     }
-
-    format!("{}{}", schema_prefix, sanitized)
 }
 
 /// Validates that a schema DDL string contains only valid column specifications
@@ -239,11 +875,22 @@ pub struct McpExtension {
     pub schema_resolver: Option<CustomSchemaResolver>,
     pub file_extractor: Option<crate::ingest_formats::CustomFileExtractor>,
     pub additional_tools: Vec<Value>,
+    pub permissions: Option<SchemaPermissions>,
+    pub warehouse: Option<String>,
+    pub config: Option<McpServerConfig>,
 }
 
 pub struct McpServer {
-    session: BenoStreamSession,
+    session: RwLock<BenoStreamSession>,
     extension: McpExtension,
+    permissions: RwLock<SchemaPermissions>,
+    warehouse: RwLock<String>,
+}
+
+impl Default for McpServer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl McpServer {
@@ -251,33 +898,189 @@ impl McpServer {
         Self::with_extension(McpExtension::default())
     }
 
+    pub fn with_config(config: McpServerConfig) -> Self {
+        let extension = McpExtension {
+            config: Some(config),
+            ..Default::default()
+        };
+        Self::with_extension(extension)
+    }
+
     pub fn with_extension(extension: McpExtension) -> Self {
+        let config = extension
+            .config
+            .clone()
+            .unwrap_or_else(McpServerConfig::from_env);
+
+        let warehouse = extension
+            .warehouse
+            .clone()
+            .or_else(|| config.warehouse.clone())
+            .unwrap_or_else(resolve_default_warehouse);
+
+        let _ = std::fs::create_dir_all(&warehouse);
+
+        let client_rw = extension
+            .permissions
+            .as_ref()
+            .map(|p| p.readwrite_schemas.clone())
+            .or_else(|| config.readwrite_schemas.clone());
+        let client_ro = extension
+            .permissions
+            .as_ref()
+            .map(|p| p.readonly_schemas.clone())
+            .or_else(|| config.readonly_schemas.clone());
+        let client_dw = extension
+            .permissions
+            .as_ref()
+            .map(|p| p.default_write_schema.clone())
+            .or_else(|| config.default_write_schema.clone());
+
+        // Untrusted connector policy enforcement:
+        // If an authoritative catalog policy exists in the warehouse, enforce it.
+        // If NO policy exists, untrusted connectors are conservatively locked to read-only on all catalog schemas.
+        let (final_rw, final_ro, default_w) =
+            benostreamdb::core::catalog::resolve_permissions_for_untrusted_connector(
+                &warehouse, client_rw, client_ro, client_dw,
+            );
+
+        let permissions = SchemaPermissions {
+            readwrite_schemas: final_rw,
+            readonly_schemas: final_ro,
+            default_write_schema: default_w,
+        };
+
         let mut session = BenoStreamSession::default();
-        // The engine session does not read `BSDB_WAREHOUSE` itself; wire it in so
-        // DDL/CTAS can derive table URIs (the Flight server does the same). Fall
-        // back to a per-process temp warehouse so scratch tables always work.
-        let warehouse = std::env::var("BSDB_WAREHOUSE")
-            .ok()
-            .filter(|w| !w.is_empty())
-            .unwrap_or_else(|| {
-                let dir = std::env::temp_dir().join(format!(
-                    "benostreamdb_mcp_{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0)
-                ));
-                let _ = std::fs::create_dir_all(&dir);
-                dir.to_string_lossy().to_string()
-            });
-        session.set_warehouse(Some(warehouse));
-        // Pin the GPU device for this process from BSDB_GPU_DEVICE /
-        // BENOSTREAM_GPU_DEVICE (e.g. "cuda:1").
+        session.set_warehouse(Some(warehouse.clone()));
         let _ = benostreamdb::core::index::gpu::apply_gpu_context_from_env();
-        Self { session, extension }
+        Self {
+            session: RwLock::new(session),
+            extension,
+            permissions: RwLock::new(permissions),
+            warehouse: RwLock::new(warehouse),
+        }
+    }
+
+    fn session(&self) -> BenoStreamSession {
+        self.session.read().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    pub fn permissions(&self) -> SchemaPermissions {
+        self.permissions
+            .read()
+            .map(|p| p.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn warehouse(&self) -> String {
+        self.warehouse.read().map(|w| w.clone()).unwrap_or_default()
+    }
+
+    pub async fn apply_config(&self, config: &McpServerConfig) {
+        if let Some(w) = &config.warehouse {
+            if !w.trim().is_empty() {
+                let _ = std::fs::create_dir_all(w);
+                if let Ok(mut wh) = self.warehouse.write() {
+                    *wh = w.clone();
+                }
+                if let Ok(mut sess) = self.session.write() {
+                    sess.set_warehouse(Some(w.clone()));
+                }
+                self.load_warehouse_tables().await;
+            }
+        }
+        let warehouse = self.warehouse();
+        let (current_rw, current_ro, current_dw) = {
+            let perms = self.permissions();
+            (
+                config
+                    .readwrite_schemas
+                    .clone()
+                    .unwrap_or(perms.readwrite_schemas),
+                config
+                    .readonly_schemas
+                    .clone()
+                    .unwrap_or(perms.readonly_schemas),
+                config
+                    .default_write_schema
+                    .clone()
+                    .unwrap_or(perms.default_write_schema),
+            )
+        };
+        let (final_rw, final_ro, default_w) =
+            benostreamdb::core::catalog::resolve_permissions_for_untrusted_connector(
+                &warehouse,
+                Some(current_rw),
+                Some(current_ro),
+                Some(current_dw),
+            );
+        if let Ok(mut perms) = self.permissions.write() {
+            perms.readwrite_schemas = final_rw;
+            perms.readonly_schemas = final_ro;
+            perms.default_write_schema = default_w;
+        }
+    }
+
+    /// Discovers and registers existing tables in the warehouse into the DataFusion session.
+    pub async fn load_warehouse_tables(&self) {
+        let warehouse = self.warehouse();
+        let p = std::path::Path::new(&warehouse);
+        if !p.is_dir() {
+            return;
+        }
+        let Ok(schema_entries) = std::fs::read_dir(p) else {
+            return;
+        };
+        for schema_entry in schema_entries.flatten() {
+            let schema_path = schema_entry.path();
+            if !schema_path.is_dir() {
+                continue;
+            }
+            let schema_name = schema_entry.file_name().to_string_lossy().to_string();
+            if schema_name.starts_with('.') {
+                continue;
+            }
+
+            let Ok(table_entries) = std::fs::read_dir(&schema_path) else {
+                continue;
+            };
+            for table_entry in table_entries.flatten() {
+                let table_path = table_entry.path();
+                if !table_path.is_dir() {
+                    continue;
+                }
+                let table_name = table_entry.file_name().to_string_lossy().to_string();
+                if table_name.starts_with('.') {
+                    continue;
+                }
+
+                if table_path.join("metadata").is_dir() {
+                    let uri = table_path.to_string_lossy().to_string();
+                    if let Ok(table) = benostreamdb::core::table::TableBuilder::new(uri)
+                        .with_index_all(false)
+                        .build_async()
+                        .await
+                    {
+                        let _ = self
+                            .session()
+                            .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", schema_name))
+                            .await;
+                        let _ = self.session().register_table(
+                            &format!("{}.{}", schema_name, table_name),
+                            std::sync::Arc::new(table),
+                        );
+                        debug!(
+                            "Loaded existing warehouse table into session: {}.{}",
+                            schema_name, table_name
+                        );
+                    }
+                }
+            }
+        }
     }
 
     pub async fn run(&self) -> Result<()> {
+        self.load_warehouse_tables().await;
         let stdin = tokio::io::stdin();
         let mut reader = BufReader::new(stdin).lines();
 
@@ -336,7 +1139,7 @@ impl McpServer {
     }
 
     async fn query_to_json(&self, query: &str) -> Result<Vec<Value>> {
-        let (batches, _) = self.session.sql(query).await?;
+        let (batches, _) = self.session().sql(query).await?;
         if batches.is_empty() {
             return Ok(Vec::new());
         }
@@ -499,9 +1302,10 @@ impl McpServer {
         if records.is_empty() {
             return Ok(0);
         }
+        let (schema, _) = split_schema_and_table(full_table_name);
         let _ = self
-            .session
-            .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", SCRATCH_SCHEMA))
+            .session()
+            .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", schema))
             .await;
 
         use std::io::Write;
@@ -518,7 +1322,7 @@ impl McpServer {
         let path = temp_file.path().to_str().unwrap_or("").replace("\\", "/");
         let temp_import_name = format!(
             "{}.temp_import_{}",
-            SCRATCH_SCHEMA,
+            schema,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -529,10 +1333,10 @@ impl McpServer {
             "CREATE EXTERNAL TABLE {} STORED AS JSON LOCATION '{}'",
             temp_import_name, path
         );
-        self.session.sql(&query1).await?;
+        self.session().sql(&query1).await?;
 
         let table_check = self
-            .session
+            .session()
             .sql(&format!("SELECT * FROM {} LIMIT 0", full_table_name))
             .await;
         let res = match table_check {
@@ -554,19 +1358,19 @@ impl McpServer {
                         full_table_name, temp_import_name
                     )
                 };
-                self.session.sql(&query2).await
+                self.session().sql(&query2).await
             }
             Err(_) => {
                 let query_ctas = format!(
                     "CREATE TABLE {} AS SELECT * FROM {}",
                     full_table_name, temp_import_name
                 );
-                self.session.sql(&query_ctas).await
+                self.session().sql(&query_ctas).await
             }
         };
 
         let _ = self
-            .session
+            .session()
             .sql(&format!("DROP TABLE {}", temp_import_name))
             .await;
         res.map(|_| records.len())
@@ -576,6 +1380,12 @@ impl McpServer {
         info!("Handling request method: {}", method);
         match method {
             "initialize" => {
+                if let Some(opts) = params.get("initializationOptions") {
+                    if let Ok(cfg) = serde_json::from_value::<McpServerConfig>(opts.clone()) {
+                        self.apply_config(&cfg).await;
+                    }
+                }
+                self.load_warehouse_tables().await;
                 let name = self
                     .extension
                     .server_name
@@ -863,7 +1673,7 @@ impl McpServer {
                         let schema = parts[0];
                         let table = parts[1];
                         let query = format!("DESCRIBE {}.{}", schema, table);
-                        match self.session.sql(&query).await {
+                        match self.session().sql(&query).await {
                             Ok((batches, _)) => {
                                 let mut buf = Vec::new();
                                 {
@@ -1058,6 +1868,7 @@ impl McpServer {
                 Ok(json!({ "tools": tools }))
             }
             "tools/call" => {
+                let permissions = self.permissions();
                 let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
 
                 match name {
@@ -1067,13 +1878,13 @@ impl McpServer {
                             .and_then(|a| a.get("query"))
                             .and_then(|q| q.as_str())
                             .unwrap_or("");
-                        if let Err(e) = guard_scratch_only(query) {
+                        if let Err(e) = guard_schema_writes(query, &permissions) {
                             return Ok(json!({
                                 "content": [ { "type": "text", "text": e.to_string() } ],
                                 "isError": true
                             }));
                         }
-                        match self.session.sql(query).await {
+                        match self.session().sql(query).await {
                             Ok((batches, _schema)) => {
                                 let mut text_output = String::new();
                                 if !batches.is_empty() {
@@ -1152,17 +1963,22 @@ impl McpServer {
                             }));
                         }
 
-                        let _ = self
-                            .session
-                            .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", SCRATCH_SCHEMA))
-                            .await;
+                        if table_name.trim().is_empty() {
+                            return Ok(json!({
+                                "content": [ { "type": "text", "text": "create_scratch_table requires 'table_name'." } ],
+                                "isError": true
+                            }));
+                        }
 
-                        let clean_table = sanitize_table_name(table_name);
-                        let full_table_name =
-                            if clean_table.starts_with(&format!("{}.", SCRATCH_SCHEMA)) {
-                                clean_table
-                            } else {
-                                format!("{}.{}", SCRATCH_SCHEMA, clean_table)
+                        let (schema, _clean_table, full_table_name) =
+                            match resolve_table_name_and_schema(table_name, &permissions) {
+                                Ok(res) => res,
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "content": [ { "type": "text", "text": e.to_string() } ],
+                                        "isError": true
+                                    }));
+                                }
                             };
 
                         if let Err(e) = validate_schema_ddl(&ddl_to_use) {
@@ -1172,25 +1988,13 @@ impl McpServer {
                             }));
                         }
 
-                        // A real BenoStream table (not a DataFusion listing table),
-                        // so it carries table metadata and supports INSERT. It lives
-                        // in a local scratch dir, not the warehouse.
-                        let scratch_dir = std::env::temp_dir().join(format!(
-                            "benostreamdb_scratch_{}_{}",
-                            full_table_name.replace('.', "_"),
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_nanos())
-                                .unwrap_or(0)
-                        ));
-                        let _ = std::fs::create_dir_all(&scratch_dir);
-                        let scratch_path = scratch_dir.to_str().unwrap_or("").replace("\\", "/");
+                        let _ = self
+                            .session()
+                            .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", schema))
+                            .await;
 
-                        let query = format!(
-                            "CREATE TABLE {} ({}) LOCATION '{}'",
-                            full_table_name, ddl_to_use, scratch_path
-                        );
-                        match self.session.sql(&query).await {
+                        let query = format!("CREATE TABLE {} ({})", full_table_name, ddl_to_use);
+                        match self.session().sql(&query).await {
                             Ok(_) => {
                                 // Declare the graph role via table metadata (the
                                 // engine ignores `WITH (type = ...)`).
@@ -1199,7 +2003,7 @@ impl McpServer {
                                         "ALTER TABLE {} SET TBLPROPERTIES ('table_type' = '{}')",
                                         full_table_name, table_type
                                     );
-                                    if let Err(e) = self.session.sql(&alter).await {
+                                    if let Err(e) = self.session().sql(&alter).await {
                                         error!(
                                             "Failed to set table_type on {}: {}",
                                             full_table_name, e
@@ -1232,11 +2036,18 @@ impl McpServer {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
+                        if let Err(e) = validate_local_path(export_path, "export_path") {
+                            return Ok(json!({
+                                "content": [ { "type": "text", "text": e.to_string() } ],
+                                "isError": true
+                            }));
+                        }
+
                         let clean_table = sanitize_table_name(table_name);
                         let full_table_name = if clean_table.contains('.') {
                             clean_table
                         } else {
-                            format!("{}.{}", SCRATCH_SCHEMA, clean_table)
+                            format!("{}.{}", permissions.default_write_schema, clean_table)
                         };
 
                         let esc_path = escape_sql_literal(&export_path.replace("\\", "/"));
@@ -1244,7 +2055,7 @@ impl McpServer {
                             "COPY {} TO '{}' STORED AS PARQUET",
                             full_table_name, esc_path
                         );
-                        match self.session.sql(&query).await {
+                        match self.session().sql(&query).await {
                             Ok(_) => Ok(json!({
                                 "content": [
                                     { "type": "text", "text": format!("Successfully exported {} to {}", table_name, export_path) }
@@ -1258,7 +2069,7 @@ impl McpServer {
                             })),
                         }
                     }
-                    "list_graph_tables" => match self.session.list_graph_tables().await {
+                    "list_graph_tables" => match self.session().list_graph_tables().await {
                         Ok(infos) => {
                             let text = if infos.is_empty() {
                                 "No graph tables found. Declare one with \
@@ -1311,7 +2122,7 @@ impl McpServer {
                             max_events,
                             timeout_ms
                         );
-                        match self.session.sql(&query).await {
+                        match self.session().sql(&query).await {
                             Ok((batches, _schema)) => {
                                 let mut text_output = String::new();
                                 if !batches.is_empty() {
@@ -1586,23 +2397,25 @@ impl McpServer {
                             }));
                         }
 
-                        let memory_table = format!("{}.agent_memories", SCRATCH_SCHEMA);
+                        let memory_table =
+                            format!("{}.agent_memories", permissions.default_write_schema);
+                        let (mem_schema, _) = split_schema_and_table(&memory_table);
 
                         // Auto-create memory table if needed
                         let table_check = self
-                            .session
+                            .session()
                             .sql(&format!("SELECT * FROM {} LIMIT 0", memory_table))
                             .await;
                         if table_check.is_err() {
                             let _ = self
-                                .session
-                                .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", SCRATCH_SCHEMA))
+                                .session()
+                                .sql(&format!("CREATE SCHEMA IF NOT EXISTS {}", mem_schema))
                                 .await;
                             let create_ddl = format!(
                                 "CREATE TABLE {} (key VARCHAR, content VARCHAR, tags VARCHAR, created_at VARCHAR, embedding VARCHAR)",
                                 memory_table
                             );
-                            let _ = self.session.sql(&create_ddl).await;
+                            let _ = self.session().sql(&create_ddl).await;
                         }
 
                         let embedding: Option<Vec<f32>> =
@@ -1678,9 +2491,10 @@ impl McpServer {
                             }));
                         }
 
-                        let memory_table = format!("{}.agent_memories", SCRATCH_SCHEMA);
+                        let memory_table =
+                            format!("{}.agent_memories", permissions.default_write_schema);
                         if self
-                            .session
+                            .session()
                             .sql(&format!("SELECT * FROM {} LIMIT 0", memory_table))
                             .await
                             .is_err()
@@ -1763,12 +2577,15 @@ impl McpServer {
                             }));
                         }
 
-                        let clean_table = sanitize_table_name(table_name);
-                        let full_table_name =
-                            if clean_table.starts_with(&format!("{}.", SCRATCH_SCHEMA)) {
-                                clean_table
-                            } else {
-                                format!("{}.{}", SCRATCH_SCHEMA, clean_table)
+                        let (_schema, _clean_table, full_table_name) =
+                            match resolve_table_name_and_schema(table_name, &permissions) {
+                                Ok(res) => res,
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "content": [{ "type": "text", "text": e.to_string() }],
+                                        "isError": true
+                                    }));
+                                }
                             };
 
                         if let Some(col) = embed_col {
@@ -1835,6 +2652,13 @@ impl McpServer {
                             }));
                         }
 
+                        if let Err(e) = validate_local_path(file_path, "file_path") {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": e.to_string() }],
+                                "isError": true
+                            }));
+                        }
+
                         let p = std::path::Path::new(file_path);
                         if !p.exists() {
                             return Ok(json!({
@@ -1843,21 +2667,23 @@ impl McpServer {
                             }));
                         }
 
-                        let clean_table = if !user_table_name.trim().is_empty() {
-                            sanitize_table_name(user_table_name.trim())
+                        let raw_table_name = if !user_table_name.trim().is_empty() {
+                            user_table_name.trim()
                         } else {
-                            let stem = p
-                                .file_stem()
+                            p.file_stem()
                                 .and_then(|s| s.to_str())
-                                .unwrap_or("ingested_file");
-                            sanitize_table_name(stem)
+                                .unwrap_or("ingested_file")
                         };
 
-                        let full_table_name =
-                            if clean_table.starts_with(&format!("{}.", SCRATCH_SCHEMA)) {
-                                clean_table
-                            } else {
-                                format!("{}.{}", SCRATCH_SCHEMA, clean_table)
+                        let (_schema, _clean_table, full_table_name) =
+                            match resolve_table_name_and_schema(raw_table_name, &permissions) {
+                                Ok(res) => res,
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "content": [{ "type": "text", "text": e.to_string() }],
+                                        "isError": true
+                                    }));
+                                }
                             };
 
                         let ext = p
@@ -3296,6 +4122,8 @@ mod tests {
                 "description": "Test vertical ping",
                 "inputSchema": { "type": "object", "properties": {} }
             })],
+            permissions: None,
+            ..Default::default()
         };
 
         let server = McpServer::with_extension(extension);
@@ -3807,6 +4635,434 @@ id,title,author,comment
         let q_zip_text = q_zip["content"][0]["text"].as_str().unwrap();
         assert!(
             q_zip_text.contains("notes/readme.txt") || q_zip_text.contains("config/manifest.json")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_configurable_schema_permissions() {
+        let temp_wh = tempfile::tempdir().unwrap();
+        let wh_path = temp_wh.path().to_str().unwrap().to_string();
+
+        // 1. Without policy in warehouse: conservative lockdown for untrusted connectors
+        // Even if client requests readwrite on analytics, without policy it is denied
+        let unprov_server = McpServer::with_extension(McpExtension {
+            warehouse: Some(wh_path.clone()),
+            permissions: Some(SchemaPermissions {
+                readwrite_schemas: vec!["scratch".to_string(), "analytics".to_string()],
+                readonly_schemas: vec!["default".to_string()],
+                default_write_schema: "scratch".to_string(),
+            }),
+            ..Default::default()
+        });
+        let unprov_write = unprov_server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": {
+                        "table_name": "analytics.kpis",
+                        "schema_ddl": "metric VARCHAR, val DOUBLE"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            unprov_write["isError"], true,
+            "expected write rejection under conservative lockdown when warehouse policy is missing"
+        );
+
+        // 2. Authoritative catalog policy stamped by core product:
+        // Core product grants write access to analytics, locks finance_raw read-only
+        let mut policy = benostreamdb::core::catalog::CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["scratch".to_string(), "analytics".to_string()]);
+        policy.readonly_schemas = Some(vec!["default".to_string(), "finance_raw".to_string()]);
+        benostreamdb::core::catalog::set_catalog_policy(&wh_path, &policy).unwrap();
+
+        let server = McpServer::with_extension(McpExtension {
+            warehouse: Some(wh_path.clone()),
+            ..Default::default()
+        });
+
+        // 3. Create table in analytics (allowed by authoritative catalog policy)
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": {
+                        "table_name": "analytics.kpis",
+                        "schema_ddl": "metric VARCHAR, val DOUBLE"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            res.get("isError").is_none(),
+            "expected successful creation in analytics: {res}"
+        );
+
+        // 2. Ingest records into analytics.kpis
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_records",
+                    "arguments": {
+                        "table_name": "analytics.kpis",
+                        "records": [
+                            {"metric": "mrr", "val": 125000.0},
+                            {"metric": "churn", "val": 0.02}
+                        ]
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            res.get("isError").is_none(),
+            "expected successful ingest into analytics: {res}"
+        );
+
+        // 3. Query analytics.kpis
+        let q_res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT metric, val FROM analytics.kpis WHERE metric = 'mrr'"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(q_res.get("isError").is_none());
+        assert!(q_res["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("125000"));
+
+        // 4. Writes to locked read-only schemas are rejected
+        let bad_write = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": {
+                        "table_name": "finance_raw.txns",
+                        "schema_ddl": "id INT"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_write["isError"], true,
+            "expected write rejection for locked finance_raw schema"
+        );
+
+        let bad_sql = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "INSERT INTO default.orders VALUES (1, 2)"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_sql["isError"], true,
+            "expected SQL write rejection for locked default schema"
+        );
+
+        // 5. Even if a user attempts to configure default in readwrite_schemas, immutable system schemas block it
+        let bypass_config = McpServerConfig {
+            readwrite_schemas: Some(vec!["default".to_string(), "scratch".to_string()]),
+            readonly_schemas: Some(vec![]),
+            ..Default::default()
+        };
+        let bypass_server = McpServer::with_config(bypass_config);
+        let bypass_res = bypass_server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": {
+                        "table_name": "default.hacked",
+                        "schema_ddl": "id INT"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bypass_res["isError"], true,
+            "expected write rejection because default is an immutable system schema"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_mcp_warehouse_persistence_across_sessions() {
+        let temp_wh = tempfile::tempdir().unwrap();
+        let wh_path = temp_wh.path().to_str().unwrap().to_string();
+
+        // Session 1: Create a table and ingest records
+        {
+            let server1 = McpServer::with_extension(McpExtension {
+                warehouse: Some(wh_path.clone()),
+                ..Default::default()
+            });
+
+            let create_res = server1
+                .handle_request(
+                    "tools/call",
+                    json!({
+                        "name": "create_scratch_table",
+                        "arguments": {
+                            "table_name": "scratch.session_persist",
+                            "schema_ddl": "id INT, note VARCHAR"
+                        }
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(
+                create_res.get("isError").is_none(),
+                "failed creating table: {create_res}"
+            );
+
+            let ingest_res = server1
+                .handle_request(
+                    "tools/call",
+                    json!({
+                        "name": "ingest_records",
+                        "arguments": {
+                            "table_name": "scratch.session_persist",
+                            "records": [
+                                {"id": 1001, "note": "survives restart"}
+                            ]
+                        }
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(
+                ingest_res.get("isError").is_none(),
+                "failed ingesting: {ingest_res}"
+            );
+        }
+
+        // Session 2: Fresh server pointing at the same warehouse path
+        {
+            let server2 = McpServer::with_extension(McpExtension {
+                warehouse: Some(wh_path.clone()),
+                ..Default::default()
+            });
+            server2.load_warehouse_tables().await;
+
+            let query_res = server2
+                .handle_request(
+                    "tools/call",
+                    json!({
+                        "name": "execute_sql",
+                        "arguments": {
+                            "query": "SELECT id, note FROM scratch.session_persist WHERE id = 1001"
+                        }
+                    }),
+                )
+                .await
+                .unwrap();
+            assert!(
+                query_res.get("isError").is_none(),
+                "expected successful query in session 2: {query_res}"
+            );
+            let text = query_res["content"][0]["text"].as_str().unwrap();
+            assert!(
+                text.contains("survives restart"),
+                "expected persisted content across sessions, got: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_json_configuration_and_initialization_options() {
+        // 1. Deserialization from JSON string (array or comma-separated schemas)
+        let json_config = r#"{
+            "warehouse": "/tmp/custom_wh",
+            "readwrite_schemas": ["scratch", "sandbox"],
+            "readonly_schemas": "default, prod_archive",
+            "default_write_schema": "sandbox"
+        }"#;
+        let config: McpServerConfig = serde_json::from_str(json_config).unwrap();
+        assert_eq!(config.warehouse.as_deref(), Some("/tmp/custom_wh"));
+        let perms = config.to_permissions();
+        assert_eq!(perms.default_write_schema, "sandbox");
+        assert!(perms.is_schema_writable("sandbox"));
+        assert!(perms.is_schema_writable("scratch"));
+        assert!(!perms.is_schema_writable("prod_archive"));
+
+        // 2. CLI Argument parsing
+        let args = vec![
+            "--warehouse".to_string(),
+            "/tmp/cli_wh".to_string(),
+            "--readwrite-schemas".to_string(),
+            "scratch,dev".to_string(),
+            "--readonly-schemas".to_string(),
+            "default,finance".to_string(),
+        ];
+        let cli_cfg = McpServerConfig::from_args(&args).unwrap();
+        assert_eq!(cli_cfg.warehouse.as_deref(), Some("/tmp/cli_wh"));
+        let cli_perms = cli_cfg.to_permissions();
+        assert!(cli_perms.is_schema_writable("dev"));
+        assert!(!cli_perms.is_schema_writable("finance"));
+
+        // 3. Dynamic initializationOptions handshake with catalog policy
+        let temp_wh = tempfile::tempdir().unwrap();
+        let wh_path = temp_wh.path().to_str().unwrap().to_string();
+        let mut policy = benostreamdb::core::catalog::CatalogPolicy::new();
+        policy.readwrite_schemas = Some(vec!["scratch".to_string(), "agent_output".to_string()]);
+        policy.readonly_schemas = Some(vec!["default".to_string(), "legacy".to_string()]);
+        benostreamdb::core::catalog::set_catalog_policy(&wh_path, &policy).unwrap();
+
+        let server = McpServer::with_extension(McpExtension {
+            warehouse: Some(wh_path),
+            ..Default::default()
+        });
+        let init_res = server
+            .handle_request(
+                "initialize",
+                json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": { "name": "Antigravity", "version": "1.0.0" },
+                    "initializationOptions": {
+                        "readwrite_schemas": ["scratch", "agent_output"],
+                        "readonly_schemas": ["default", "legacy"],
+                        "default_write_schema": "agent_output"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(init_res.get("serverInfo").is_some());
+        let updated_perms = server.permissions();
+        assert_eq!(updated_perms.default_write_schema, "agent_output");
+        assert!(updated_perms.is_schema_writable("agent_output"));
+        assert!(!updated_perms.is_schema_writable("legacy"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_storage_lockdown_blocks_remote_uris_and_locations() {
+        let server = McpServer::new();
+
+        // 1. validate_local_path rejects remote object store schemes (MinIO, S3, RustFS, Iceberg REST, GCS)
+        assert!(validate_local_path("s3://bucket/path", "test").is_err());
+        assert!(validate_local_path("minio://host:9000/bucket", "test").is_err());
+        assert!(validate_local_path("rustfs://cluster/data", "test").is_err());
+        assert!(validate_local_path("http://localhost:9000/s3", "test").is_err());
+        assert!(validate_local_path("https://storage.googleapis.com/bucket", "test").is_err());
+        assert!(validate_local_path("gcs://bucket/path", "test").is_err());
+        assert!(validate_local_path("iceberg://catalog.corp:8181", "test").is_err());
+
+        // Local paths are allowed
+        assert!(validate_local_path("/tmp/local_warehouse", "test").is_ok());
+        assert!(validate_local_path("./relative_dir", "test").is_ok());
+        assert!(validate_local_path("file:///tmp/local", "test").is_ok());
+
+        // 2. Reject LOCATION in CREATE TABLE
+        let bad_location = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "CREATE TABLE scratch.s3_table (id INT) LOCATION 's3://my-bucket/data'"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_location["isError"], true,
+            "expected LOCATION rejection: {bad_location}"
+        );
+
+        // 3. Reject CREATE EXTERNAL TABLE
+        let bad_ext = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "CREATE EXTERNAL TABLE scratch.ext_table STORED AS PARQUET LOCATION '/tmp/test'"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_ext["isError"], true,
+            "expected CREATE EXTERNAL TABLE rejection: {bad_ext}"
+        );
+
+        // 4. Reject ATTACH / MOUNT CATALOG
+        let bad_cat = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "ATTACH CATALOG iceberg_prod"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_cat["isError"], true,
+            "expected CATALOG ATTACH rejection: {bad_cat}"
+        );
+
+        // 5. Reject export_table to remote object stores
+        let bad_export = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "export_table",
+                    "arguments": {
+                        "table_name": "scratch.my_table",
+                        "export_path": "s3://remote-bucket/export.parquet"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_export["isError"], true,
+            "expected export_table remote rejection: {bad_export}"
+        );
+
+        // 6. Reject ingest_file with remote object store URL
+        let bad_ingest = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_file",
+                    "arguments": {
+                        "file_path": "https://raw.githubusercontent.com/data.csv"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            bad_ingest["isError"], true,
+            "expected ingest_file remote URL rejection: {bad_ingest}"
         );
     }
 }

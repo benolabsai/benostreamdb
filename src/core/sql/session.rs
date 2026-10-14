@@ -207,6 +207,37 @@ impl BenoStreamSession {
         self.warehouse.as_deref()
     }
 
+    /// Read the catalog policy for the current warehouse, if configured.
+    pub fn catalog_policy(&self) -> Result<Option<crate::core::catalog::CatalogPolicy>> {
+        if let Some(ref wh) = self.warehouse {
+            crate::core::catalog::get_catalog_policy(wh)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Set the authoritative catalog policy for the current warehouse.
+    pub fn set_catalog_policy(&self, policy: &crate::core::catalog::CatalogPolicy) -> Result<()> {
+        if let Some(ref wh) = self.warehouse {
+            crate::core::catalog::set_catalog_policy(wh, policy)
+        } else {
+            anyhow::bail!("Cannot set catalog policy: warehouse is not set in session")
+        }
+    }
+
+    /// Set read-only vs read-write access for a specific schema on the current warehouse.
+    pub fn set_schema_access(
+        &self,
+        schema: &str,
+        read_only: bool,
+    ) -> Result<crate::core::catalog::CatalogPolicy> {
+        if let Some(ref wh) = self.warehouse {
+            crate::core::catalog::set_catalog_schema_access(wh, schema, read_only)
+        } else {
+            anyhow::bail!("Cannot set schema access: warehouse is not set in session")
+        }
+    }
+
     pub fn register_table(&self, name: &str, table: Arc<Table>) -> Result<()> {
         let provider = Arc::new(BenoStreamTableProvider::new(table));
         self.ctx.register_table(name, provider)?;

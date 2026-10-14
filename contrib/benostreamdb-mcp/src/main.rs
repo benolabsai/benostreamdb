@@ -1,7 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use benostreamdb_mcp::McpServer;
+use benostreamdb_mcp::{resolve_default_warehouse, McpServer, McpServerConfig};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -16,20 +16,41 @@ async fn main() -> Result<()> {
 
     info!("BenoStreamDB MCP Server initializing...");
 
-    if std::env::var("BSDB_WAREHOUSE").is_err() {
-        let temp_dir = std::env::temp_dir().join(format!(
-            "benostreamdb_mcp_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let _ = std::fs::create_dir_all(&temp_dir);
-        std::env::set_var("BSDB_WAREHOUSE", temp_dir.to_str().unwrap_or(""));
-        info!("Set BSDB_WAREHOUSE to temporary directory: {:?}", temp_dir);
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        eprintln!(
+            "BenoStreamDB Model Context Protocol (MCP) Server\n\n\
+            USAGE:\n    \
+                benostreamdb-mcp [OPTIONS]\n\n\
+            OPTIONS:\n    \
+                --warehouse <PATH>              Persistent local warehouse path for Iceberg tables\n    \
+                --readwrite-schemas <SCHEMAS>   Comma-separated list of writable schemas (default: scratch)\n    \
+                --readonly-schemas <SCHEMAS>    Comma-separated list of read-only schemas\n    \
+                --default-write-schema <SCHEMA> Default schema for unqualified table creations\n    \
+                --ephemeral                     Use ephemeral temporary directory for this session\n    \
+                --config <JSON_STRING>          Full JSON configuration string\n    \
+                --config-file <PATH>            Path to JSON configuration file\n    \
+                -h, --help                      Print this help message\n\n\
+            ENVIRONMENT VARIABLES:\n    \
+                BSDB_WAREHOUSE                  Local warehouse path\n    \
+                BSDB_READWRITE_SCHEMAS          Comma-separated list of writable schemas\n    \
+                BSDB_READONLY_SCHEMAS           Comma-separated list of read-only schemas\n    \
+                BSDB_DEFAULT_WRITE_SCHEMA       Default schema for writes\n    \
+                BSDB_EPHEMERAL                  Set to 1 or true for ephemeral mode\n    \
+                BSDB_MCP_CONFIG                 JSON string with full server configuration\n"
+        );
+        return Ok(());
     }
 
-    let mcp_server = McpServer::new();
+    let mut config = McpServerConfig::resolve_from_args_and_env(&args)?;
+
+    if config.warehouse.is_none() && !config.ephemeral.unwrap_or(false) {
+        let warehouse_path = resolve_default_warehouse();
+        config.warehouse = Some(warehouse_path.clone());
+        info!("Defaulted warehouse path to: {}", warehouse_path);
+    }
+
+    let mcp_server = McpServer::with_config(config);
     mcp_server.run().await?;
 
     info!("Server loop exited");

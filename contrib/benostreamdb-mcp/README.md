@@ -38,6 +38,8 @@ uvx benostreamdb-mcp
 
 ### Client Configuration
 
+`benostreamdb-mcp` supports multi-channel JSON configuration: CLI flags, JSON string/file flags, environment variables, and standard MCP `initializationOptions` during the JSON-RPC `initialize` handshake.
+
 #### 1. Claude Desktop (`claude_desktop_config.json`)
 
 On macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`  
@@ -49,9 +51,13 @@ On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
   "mcpServers": {
     "benostreamdb": {
       "command": "uvx",
-      "args": ["benostreamdb-mcp"],
+      "args": [
+        "benostreamdb-mcp",
+        "--warehouse", "/path/to/warehouse",
+        "--readwrite-schemas", "scratch,sandbox",
+        "--readonly-schemas", "default,finance_raw"
+      ],
       "env": {
-        "BSDB_WAREHOUSE": "/path/to/warehouse",
         "BSDB_GPU_DEVICE": "auto",
         "BSDB_EMBEDDING_URL": "http://localhost:11434/api/embeddings",
         "BSDB_EMBEDDING_MODEL": "all-minilm"
@@ -61,16 +67,19 @@ On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 }
 ```
 
-#### 2. Antigravity IDE / Cursor (`mcp_config.json` or `settings.json`)
+#### 2. Antigravity IDE / Cursor / VS Code (`settings.json` or `mcp_config.json`)
+
+You can configure options directly via CLI flags, environment variables, or inline JSON configuration:
 
 ```json
 {
   "mcpServers": {
     "benostreamdb": {
       "command": "/path/to/benostreamdb/target/release/benostreamdb-mcp",
-      "args": [],
+      "args": [
+        "--config", "{\"warehouse\":\"/path/to/warehouse\",\"readwrite_schemas\":[\"scratch\",\"analytics\"],\"readonly_schemas\":[\"default\",\"raw\"]}"
+      ],
       "env": {
-        "BSDB_WAREHOUSE": "/path/to/warehouse",
         "BSDB_EMBEDDING_URL": "http://localhost:11434/api/embeddings",
         "BSDB_EMBEDDING_MODEL": "all-minilm"
       }
@@ -79,43 +88,125 @@ On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 }
 ```
 
----
+#### 3. MCP `initializationOptions` (Dynamic JSON Configuration)
 
-## Installation Options
+MCP clients that support `initializationOptions` during protocol negotiation can send configuration parameters directly without modifying server launch arguments:
 
-### From Source (Rust Cargo)
-
-```bash
-# Clone repository
-git clone https://github.com/benolabsai/benostreamdb.git
-cd benostreamdb
-
-# Build optimized release binary
-cargo build --release -p benostreamdb-mcp
-
-# Binary is available at target/release/benostreamdb-mcp
-./target/release/benostreamdb-mcp
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": { "name": "Antigravity", "version": "1.0.0" },
+    "initializationOptions": {
+      "warehouse": "/data/local_warehouse",
+      "readwrite_schemas": ["scratch", "workspace"],
+      "readonly_schemas": ["default", "archive"],
+      "default_write_schema": "scratch",
+      "ephemeral": false
+    }
+  }
+}
 ```
 
-### Via Python / Pip
+---
 
-```bash
-pip install benostreamdb-mcp
-benostreamdb-mcp
-```
+## Storage Lockdown & The Dual-Lock Security Model
+
+### The "Right Call" on Hosted Iceberg Tables & Object Stores
+
+When agents interact with analytical catalogs (Iceberg, Delta Lake, object stores), **relying solely on cloud IAM roles is necessary but dangerous on its own**. 
+
+In staging, local development, or hybrid setups:
+1. Developers often run MinIO, RustFS, or local S3-compatible object stores where IAM roles may not be configured.
+2. Even in cloud environments (AWS, GCP, Azure), CI/CD runners or dev machines frequently have shared write credentials or wildcard S3/GCS bucket write permissions.
+3. If an autonomous agent or untrusted SQL query could dynamically mount remote catalogs or execute `LOCATION 's3://...'` DDL, it could accidentally mutate or overwrite production data tables.
+
+Therefore, `benostreamdb-mcp` implements a **Dual-Lock Defense-in-Depth Model**:
+
+1. **Engine-Level Storage Lockdown (AST & URI Barrier)**:
+   - **Remote URI Guard**: Strictly forbids remote URI schemes (`s3://`, `minio://`, `rustfs://`, `gcs://`, `http://`, `https://`, `iceberg://`, `rest://`, `abfs://`) in warehouse paths, `export_table`, and `ingest_file`. All storage operations must target local filesystem paths.
+   - **Catalog Mounting Ban**: Unconditionally blocks SQL statements with `LOCATION ...`, `CREATE EXTERNAL TABLE`, `ATTACH DATABASE`, `CREATE CATALOG`, `MOUNT`, or engine setting overrides (`SET BENOSTREAM.*`).
+   - **Schema Isolation Barrier**: Tables in protected catalogs/schemas (`default`, `public`, `finance_raw`, etc.) are immutable. Write operations (`CREATE TABLE`, `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`) are rejected unless explicitly targeted at configured writable schemas (default `scratch`).
+2. **Infrastructure-Level IAM Barrier**:
+   - Production IAM roles (e.g. AWS IAM, GCP IAM, Azure RBAC) provide the second lock at the cloud bucket level for release pipelines.
 
 ---
 
-## Environment Variables & Configuration
+## Catalog Policy & Trusted vs. Untrusted Connectors
 
-| Variable | Description | Default |
+BenoStreamDB establishes a formal security boundary between **trusted core analytics engines** and **untrusted user/agent connectors**:
+
+### 1. Trusted vs. Untrusted Boundary
+
+| Category | Components | Permissions Policy & Failure Mode |
 |:---|:---|:---|
-| `BSDB_WAREHOUSE` | Root directory path or object store URI for persistent tables. | System temporary directory |
-| `BSDB_GPU_DEVICE` | Hardware acceleration target (`auto`, `cpu`, `cuda`, `mps`). | `auto` |
-| `BSDB_CONFIG` | Path to YAML/TOML catalog configuration file. | None |
-| `BSDB_EMBEDDING_URL` | Endpoint for generating vector embeddings (e.g. Ollama or OpenAI compatible). | None |
-| `BSDB_EMBEDDING_MODEL` | Model identifier to pass to the embedding endpoint. | `all-minilm` |
-| `BSDB_EMBEDDING_API_KEY`| Bearer authentication token for external embedding APIs. | None |
+| **Trusted Engines** | Core BenoStreamDB kernel, Arrow Flight SQL server, Spark, Trino, dbt | Standard database authority. Operates with full read/write privileges. Can manage catalogs, namespaces, and call policy management APIs (`session.set_catalog_policy(...)`). |
+| **Untrusted Connectors** | BenoStreamDB MCP (`benostreamdb-mcp`), BenoStream Search REST API (`benostreamdb-search`), external AI agents | **Zero-Trust / Conservative Lockdown**: If `.benostream-policy.json` is missing from the warehouse, untrusted connectors are **strictly locked to read-only** across all persistent catalog schemas. Only the ephemeral `scratch` schema is writable. |
+
+### 2. Authoritative Catalog Policy (`.benostream-policy.json`)
+
+To eliminate complex client-side configuration in `settings.json`, permissions are stored directly at the root of the warehouse or bucket as an authoritative catalog property file:
+
+```json
+{
+  "catalog_id": "enterprise-lakehouse",
+  "policy_version": "1.0",
+  "readwrite_schemas": ["scratch", "sandbox"],
+  "readonly_schemas": ["finance_raw", "sec_edgar"],
+  "immutable_schemas": ["default", "public", "information_schema"],
+  "default_write_schema": "scratch"
+}
+```
+
+- When an untrusted connector mounts the warehouse, it reads `.benostream-policy.json`. Client attempts to override locked schemas are rejected.
+- **Fail-Safe Conservative Rule**: If `.benostream-policy.json` is absent, the untrusted connector defaults to complete read-only lockdown on all persistent schemas (only `scratch` allowed).
+
+### 3. Core Database Policy Management APIs
+
+The core database product and administrators can inspect and update policies programmatically:
+
+```rust
+use benostreamdb::core::catalog::{get_catalog_policy, set_catalog_policy, set_catalog_schema_access, lock_catalog_read_only, CatalogPolicy};
+
+// Lock down a schema as read-only
+set_catalog_schema_access("/path/to/warehouse", "finance_raw", true)?;
+
+// Grant an untrusted connector write access to a new sandbox schema
+set_catalog_schema_access("/path/to/warehouse", "sandbox", false)?;
+
+// Lock down all persistent schemas to read-only
+lock_catalog_read_only("/path/to/warehouse")?;
+```
+
+Or via `BenoStreamSession`:
+
+```rust
+session.set_schema_access("finance_raw", true)?;
+```
+
+---
+
+## Configuration Reference
+
+`benostreamdb-mcp` can be configured via CLI flags, environment variables, or JSON:
+
+| CLI Option | Environment Variable | JSON Key | Description | Default |
+|:---|:---|:---|:---|:---|
+| `--warehouse <PATH>` | `BSDB_WAREHOUSE` | `"warehouse"` | Local directory path for persistent Iceberg table storage. | System temp dir / `resolve_default_warehouse()` |
+| `--readwrite-schemas <S>` | `BSDB_READWRITE_SCHEMAS` | `"readwrite_schemas"` | Comma-separated or JSON array of schemas allowing writes. | `["scratch"]` |
+| `--readonly-schemas <S>` | `BSDB_READONLY_SCHEMAS` | `"readonly_schemas"` | Comma-separated or JSON array of schemas locked as read-only. | `["default", "public"]` |
+| `--default-write-schema <S>`| `BSDB_DEFAULT_WRITE_SCHEMA`| `"default_write_schema"`| Default schema for unqualified table creations. | `"scratch"` |
+| `--ephemeral` | `BSDB_EPHEMERAL` | `"ephemeral"` | If true (`1`), uses an ephemeral temporary directory for the session. | `false` |
+| `--config <JSON>` | `BSDB_MCP_CONFIG` | N/A | Full JSON configuration string. | None |
+| `--config-file <PATH>` | N/A | N/A | Path to a `.json` configuration file. | None |
+| N/A | `BSDB_GPU_DEVICE` | N/A | Hardware acceleration target (`auto`, `cpu`, `cuda`, `mps`). | `auto` |
+| N/A | `BSDB_EMBEDDING_URL` | N/A | Endpoint for vector embeddings (Ollama / OpenAI compatible). | None |
+| N/A | `BSDB_EMBEDDING_MODEL`| N/A | Model identifier for embeddings. | `all-minilm` |
+| N/A | `BSDB_EMBEDDING_API_KEY`| N/A | Bearer auth token for embedding APIs. | None |
 
 > [!TIP]
 > If `BSDB_EMBEDDING_URL` is omitted, `ingest_file`, `ingest_records`, `store_memory`, and `hybrid_search` continue to function seamlessly using pre-computed vectors or text-only retrieval.
@@ -253,20 +344,25 @@ Run the full MCP test suite:
 cargo test -p benostreamdb-mcp
 ```
 
-All 16 unit tests cover:
+All 28 unit tests cover:
 - Protocol initialization & tools listing
-- Scratch schema write isolation guard
+- JSON configuration & dynamic MCP `initializationOptions` updates
+- Storage lockdown: rejection of remote URIs (`s3://`, `minio://`, `rustfs://`, `gcs://`) and location clauses
+- Configurable schema read/write permissions & isolation guards
 - Scratch table creation, record insertion, and querying
-- Parquet export workflow
+- Parquet, CSV, and JSON export workflows
 - Graph table discovery and metadata tagging
 - CDC event subscriptions
 - Memory storage and semantic recall
 - Reciprocal rank fusion hybrid search
 - Universal file ingestion:
-  - PNG and SVG multimodal image ingestion with base64 Data URIs
+  - PNG, JPG, and SVG multimodal image ingestion with base64 Data URIs
   - Text and source code chunking with line offsets
   - PDF document extraction & error handling
   - Spreadsheet workbook parsing & corrupted archive rejection
+  - Word (.docx) and PowerPoint (.pptx) extraction
+  - XML and ZIP archive ingestion
+  - CSV, TSV, and PSV delimiter-separated parsing
   - JSON and NDJSON structured dataset loading
 
 ---

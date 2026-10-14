@@ -7,6 +7,7 @@
 //! - Zstandard decompression (.zst, .zstd)
 //! - Zip archive extraction (.zip)
 //! - Plain text / code chunking (.txt, .md, .rs, .py, etc.)
+//!
 //! Domain-specific file formats are handled via pluggable `CustomFileExtractor`
 //! functions configured on `McpServer`.
 
@@ -174,10 +175,8 @@ pub fn extract_pptx_records(data: &[u8], file_path: &str) -> Result<Vec<Value>> 
                 Ok(Event::End(ref e)) => {
                     if e.name().as_ref() == b"a:t" {
                         in_t = false;
-                    } else if e.name().as_ref() == b"a:p" {
-                        if !slide_text.ends_with('\n') {
-                            slide_text.push('\n');
-                        }
+                    } else if e.name().as_ref() == b"a:p" && !slide_text.ends_with('\n') {
+                        slide_text.push('\n');
                     }
                 }
                 Ok(Event::Text(ref e)) => {
