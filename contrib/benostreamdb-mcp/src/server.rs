@@ -1513,15 +1513,19 @@ impl McpServer {
                         });
                         let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(50);
 
-                        if table.is_empty() || seeds.is_none() || seeds.as_ref().unwrap().is_empty()
-                        {
+                        let Some(seeds) = seeds.filter(|s| !s.is_empty()) else {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "graph_rag_search requires 'table' and non-empty 'seeds' array." }],
+                                "isError": true
+                            }));
+                        };
+                        if table.is_empty() {
                             return Ok(json!({
                                 "content": [{ "type": "text", "text": "graph_rag_search requires 'table' and non-empty 'seeds' array." }],
                                 "isError": true
                             }));
                         }
                         let sanitized_table = sanitize_table_name(table);
-                        let seeds = seeds.unwrap();
                         let mut all_rows = Vec::new();
 
                         for seed_val in seeds {
@@ -1740,13 +1744,19 @@ impl McpServer {
                         let records = args.get("records").and_then(|v| v.as_array());
                         let embed_col = args.get("embed_col").and_then(|v| v.as_str());
 
-                        if table_name.is_empty() || records.is_none() {
+                        let Some(records_slice) = records else {
+                            return Ok(json!({
+                                "content": [{ "type": "text", "text": "ingest_records requires 'table_name' and 'records' array." }],
+                                "isError": true
+                            }));
+                        };
+                        if table_name.is_empty() {
                             return Ok(json!({
                                 "content": [{ "type": "text", "text": "ingest_records requires 'table_name' and 'records' array." }],
                                 "isError": true
                             }));
                         }
-                        let mut records = records.unwrap().clone();
+                        let mut records = records_slice.clone();
                         if records.is_empty() {
                             return Ok(json!({
                                 "content": [{ "type": "text", "text": "No records to ingest." }]
@@ -2265,6 +2275,7 @@ impl McpServer {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use serde_json::json;
 
@@ -3024,7 +3035,76 @@ mod tests {
             assert_eq!(res["isError"], true, "expected error for: {bad_sql}");
         }
 
-        // 4. Verify server is still completely healthy and operational
+        // 4. Fuzzing parse_file_bytes with corrupted / random binary inputs across all formats
+        let fuzz_payloads: Vec<&[u8]> = vec![
+            b"",
+            b"\0",
+            b"\0\0\0\0\0\0\0\0",
+            b"\"unclosed quote,col2,col3",
+            b"'unclosed single quote\tcol2",
+            b"|pipe|unclosed|quote\"without\"end|",
+            b"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"",
+            b"\\\\\\\\\\\\\\\\\\\\\\\\\\\\",
+            b"<not<an<xml>tag",
+            b"<?xml?><><><>",
+            b"PK\x03\x04corrupted_truncated_zip_header",
+            b"\x28\xb5\x2f\xfdcorrupted_zstd_magic",
+            b"\xff\xfe\xfd\xfc\xfb\xfa\x00\x01\x02",
+        ];
+
+        for payload in &fuzz_payloads {
+            for ext in ["csv", "tsv", "psv", "xml", "docx", "pptx", "zip", "zst", "txt"] {
+                // Must not panic under any corrupted payload
+                let _ = crate::ingest_formats::parse_file_bytes(payload, "fuzz_input", ext, 500);
+            }
+        }
+
+        // 5. Fuzzing all MCP tools with null, empty, or mismatched parameter types
+        let all_tools = [
+            "execute_sql",
+            "create_scratch_table",
+            "export_table",
+            "subscribe_events",
+            "hybrid_search",
+            "graph_rag_search",
+            "store_memory",
+            "recall_memory",
+            "ingest_records",
+            "ingest_file",
+        ];
+
+        let garbage_args = [
+            json!({}),
+            json!(null),
+            json!([]),
+            json!("string_instead_of_object"),
+            json!({ "query": null, "table": null, "seeds": null, "records": null }),
+            json!({ "query": 12345, "table": true, "seeds": "not_an_array", "records": "not_array" }),
+            json!({ "query": "\0\0\0", "table_name": "", "file_path": "/nonexistent/path/\0" }),
+            json!({ "seeds": [], "records": [] }),
+            json!({ "top_k": -999, "hops": -10, "rrf_k": -1 }),
+        ];
+
+        for tool_name in all_tools {
+            for args in &garbage_args {
+                let call_res = server
+                    .handle_request(
+                        "tools/call",
+                        json!({
+                            "name": tool_name,
+                            "arguments": args
+                        }),
+                    )
+                    .await;
+                // Calls either gracefully return an isError response or Err, but NEVER panic
+                if let Ok(res) = call_res {
+                    // Valid response structure
+                    assert!(res.is_object());
+                }
+            }
+        }
+
+        // 6. Verify server is still completely healthy and operational after all fuzzing
         let ok_res = server
             .handle_request(
                 "tools/call",
