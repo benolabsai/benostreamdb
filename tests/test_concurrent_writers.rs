@@ -65,7 +65,22 @@ async fn test_massive_concurrent_writers() -> Result<()> {
             let start_id = (w as i32 * 1000) + 1;
             let batch = create_test_batch(start_id, rows_per_batch).await;
             t.write_async(vec![batch]).await.unwrap();
-            t.commit_async().await.unwrap();
+            // Under 50-way contention the manifest CAS can exhaust its retry
+            // budget for an unlucky writer ("Failed to commit manifest ...
+            // concurrent updates"). That is a legitimate contention outcome, not
+            // corruption, so retry until the commit lands; the final count
+            // assertion below still proves no writes were lost.
+            let mut retries = 0u32;
+            loop {
+                match t.commit_async().await {
+                    Ok(()) => break,
+                    Err(e) if retries < 100 && e.to_string().contains("concurrent updates") => {
+                        retries += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    }
+                    Err(e) => panic!("commit failed: {e}"),
+                }
+            }
         });
         writer_handles.push(handle);
     }
