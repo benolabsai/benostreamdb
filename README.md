@@ -17,7 +17,6 @@
 | :--- | :--- | :--- |
 | **Preview-Ready** | Embedded Python & Rust engine, Apache Iceberg (V2/V3) Parquet read/write, HNSW (Float32) vector search, in-process CSR graph analytics (PageRank, shortest path), DuckDB/DataFusion SQL compatibility, Puffin sidecar management | ✅ Fully supported & tested for evaluation |
 | **Experimental** | 8-bit TurboQuant (TQ8), OpenSearch 7.10 & Qdrant REST gateway compatibility, Arrow Flight SQL server | ⚠️ Functional; APIs and performance tuning are actively evolving |
-| **Deliberately Deferred** | Distributed multi-node clustering, automatic failover / HA, enterprise multi-tenant RBAC / RLS | ❌ Not in Developer Preview (planned for post-v1.0 / Enterprise edition) |
 
 > **Serverless by default.** BenoStreamDB runs directly against object storage and does not require a database server or always-on cluster. For applications that prefer a network-accessible database endpoint, BenoStreamDB also provides an optional Arrow Flight SQL server interface.
 >
@@ -672,22 +671,15 @@ table.compact()
 
 ## 📊 Performance
 
-The only benchmark we stand behind is the **full-site English-Wikipedia Graph-RAG
-demo** — end-to-end, reproducible, and measured on documented hardware. The
-earlier OpenSearch / Elasticsearch / LanceDB comparisons, the NYC-Taxi micro-runs,
-and the Criterion `benches/` targets have been **removed as stale**; if a number is
-not below, treat it as unverified.
-
-| Stage (whole enwiki: 51.8M live pages / 383M edges) | Wall time | Peak memory |
-| :--- | :--- | :--- |
-| embed (all-MiniLM-L6-v2, 384-d, RTX 3090) | 2.1 h | 8.3 GB RSS, 5.9 GB VRAM |
-| load — nodes (51.8M + HNSW-TQ8 + BM25) | 38.7 min | 13.3–16.2 GB per 10M-row chunk |
-| load — edges (383M + CSR) | 245 s | ~6 GB |
-
-Run it with `python scripts/prepare_demo.py`. Full per-stage timings, the
-per-chunk node-load table, and reproduction commands live in
-[`examples/web_ui/README.md`](examples/web_ui/README.md); methodology is in
-[`docs/BENCHMARKING.md`](docs/BENCHMARKING.md).
+We maintain reproducible benchmark suites under [`benchmarks/`](benchmarks/): an
+ANN-Benchmarks competitor matrix (FAISS, hnswlib, pgvector, LanceDB, OpenSearch,
+Neo4j+GDS, DuckDB, cuGraph), BEIR lexical/hybrid search, ClickBench SQL OLAP,
+graph analytics, and production workload/concurrency/recovery drills. They roll
+up into
+[`benchmarks/results/BENCHMARK_REPORT.md`](benchmarks/results/BENCHMARK_REPORT.md),
+and [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) gives the commands to
+reproduce every number. Treat any figure that is not in one of those files as
+unverified.
 
 ## 🏗️ Architecture
 
@@ -903,6 +895,25 @@ results = search.hybrid_search(
 )
 ```
 
+### MCP Server (AI Agent Tools)
+
+Official **Model Context Protocol (MCP)** server (`contrib/benostreamdb-mcp`,
+crate `benostreamdb-mcp`) that exposes BenoStreamDB to LLM agents (Claude
+Desktop, Cursor, VS Code, Antigravity IDE) as JSON-RPC tools. It ships 11 tools —
+including `execute_sql`, `hybrid_search`, `graph_rag_search`, `ingest_records`,
+and persistent agent memory (`store_memory` / `recall_memory`).
+
+```bash
+# Run instantly without local compilation
+uvx benostreamdb-mcp --warehouse /path/to/warehouse
+```
+
+MCP is treated as an **untrusted connector**: if `.benostream-policy.json` is
+absent, it is locked to read-only across persistent schemas (writes are limited
+to `scratch.*`). See
+[`contrib/benostreamdb-mcp/README.md`](contrib/benostreamdb-mcp/README.md) and
+[`docs/integrations/MCP.md`](docs/integrations/MCP.md).
+
 ### Snowflake (Untested / Developer Preview)
 
 > ⚠️ **Untested:** The Snowflake integration is in developer preview based on the open Iceberg REST and External Volume specifications. Live production certification is in progress.
@@ -1000,7 +1011,8 @@ benostreamdb/
 ├── server/
 │   └── flight_sql/             # Arrow Flight SQL gRPC server (`benostreamdb-flight`)
 ├── contrib/
-│   └── benostreamdb-search/    # OpenSearch 7.10 & Qdrant REST gateway (`benostreamdb-search`)
+│   ├── benostreamdb-search/    # OpenSearch 7.10 & Qdrant REST gateway (`benostreamdb-search`)
+│   └── benostreamdb-mcp/       # Model Context Protocol agent tool server (`benostreamdb-mcp`)
 ├── dbt-benostreamdb/           # Official dbt adapter (Arrow Flight SQL)
 ├── spark-benostreamdb/         # Apache Spark connector (Java, Spark 3.5 / 4.0 / 4.1)
 ├── trino-benostreamdb/         # Trino connector (Java SPI) + `etc/` configuration templates
@@ -1060,7 +1072,7 @@ section.) See
 - [x] **Vector Search Overlays**: Zero-copy Arrow IPC HNSW & IVF-PQ, TurboQuant™ (TQ4/TQ8), SIMD intrinsics, GPU acceleration (`benostream-gpu-ann`: CUDA, Metal, Vulkan).
 - [x] **Text & Scalar Overlays**: Inverted BM25 Okapi indexes, Roaring Bitmap scalar indexes, Composite multi-column filters, Statistics pruning.
 - [x] **Core Graph Engine**: Zero-copy Memory-Mapped CSR Graph Index (`MmapCsrGraph`), Core Graph Traversal operator (`Table::graph_neighborhood`), Graph SQL UDFs.
-- [x] **Connectors & Gateways**: Apache Spark (`spark-benostreamdb`), Trino (`trino-benostreamdb`), dbt (`dbt-benostreamdb`), Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`).
+- [x] **Connectors & Gateways**: Apache Spark (`spark-benostreamdb`), Trino (`trino-benostreamdb`), dbt (`dbt-benostreamdb`), Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`), Contrib MCP server (`contrib/benostreamdb-mcp`).
 
 ### 📋 Active Roadmap Themes
 - [x] **Reactive Lakehouse Streaming**: `Table::subscribe()` core API and predicate-filtered subscriptions are shipped. (Arrow Flight streaming subscriptions are deferred).
