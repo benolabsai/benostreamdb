@@ -73,12 +73,12 @@ jobs:
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' pyproject.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-search/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' server/flight_sql/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-mcp/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
@@ -165,12 +165,12 @@ jobs:
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' pyproject.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-search/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' server/flight_sql/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-mcp/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
@@ -267,12 +267,12 @@ jobs:
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' pyproject.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-search/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' server/flight_sql/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-mcp/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
@@ -349,7 +349,7 @@ jobs:
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' pyproject.toml
           fi
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -479,12 +479,10 @@ jobs:
           # not have to be recompiled from scratch here.
           shared-key: "linux-x86_64-3.10"
           cache-targets: true
-      - name: Install sccache
-        uses: taiki-e/install-action@v2
-        with:
-          tool: sccache
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
       - name: Cache Maven and the portable JDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             .maven
@@ -494,14 +492,14 @@ jobs:
           restore-keys: |
             connectors-${{ runner.os }}-mvn3.9.6-jdk21-
       - name: Setup Java 17 (for Spark)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
       - name: Save Java 17 Home
         run: echo "JAVA_17_HOME=$JAVA_HOME" >> $GITHUB_ENV
       - name: Setup Java 23 (for Trino)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '23'
@@ -540,10 +538,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "linux-x86_64-3.10"
-      - name: Install sccache
-        uses: taiki-e/install-action@v2
-        with:
-          tool: sccache
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -727,18 +723,18 @@ jobs:
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' pyproject.toml
             # The search gateway ships in lockstep with the engine: bump its
             # PyPI distribution version and keep its core dependency pin in step.
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-search/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
             
             # The flight server ships in lockstep with the engine.
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' server/flight_sql/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
             
             # The MCP server ships in lockstep with the engine.
-            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]$/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-mcp/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       # crates.io publishing now happens in the parallel `publish-crates` job
