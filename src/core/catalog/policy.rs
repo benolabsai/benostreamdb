@@ -322,7 +322,7 @@ where
 /// connectors fail closed to scratch-only writable.
 ///
 /// This function is synchronous for its callers; the object-store I/O is driven
-/// on a Tokio runtime via [`block_on_policy`].
+/// on a Tokio runtime via `block_on_policy`.
 pub fn get_catalog_policy(warehouse_path: &str) -> Result<Option<CatalogPolicy>> {
     block_on_policy(read_policy_via_store(warehouse_path))?
 }
@@ -333,7 +333,7 @@ pub fn get_catalog_policy(warehouse_path: &str) -> Result<Option<CatalogPolicy>>
 /// This is an unconditional whole-policy write (the administrator override).
 /// The object write is atomic for S3/GCS/Azure and local fs. The read-modify-write
 /// helpers ([`set_catalog_schema_access`], [`lock_catalog_read_only`]) use
-/// optimistic concurrency ([`update_policy`]) so they do not lose concurrent
+/// optimistic concurrency (`update_policy`) so they do not lose concurrent
 /// updates.
 pub fn set_catalog_policy(warehouse_path: &str, policy: &CatalogPolicy) -> Result<()> {
     block_on_policy(write_policy_via_store(warehouse_path, policy))?
@@ -343,7 +343,7 @@ pub fn set_catalog_policy(warehouse_path: &str, policy: &CatalogPolicy) -> Resul
 ///
 /// Storage-aware: reads and writes the policy through the object store (local
 /// path or `s3://`/`gs://`/`az://`/`memory://`). The read-modify-write runs under
-/// optimistic concurrency control ([`update_policy`]), so a racing writer cannot
+/// optimistic concurrency control (`update_policy`), so a racing writer cannot
 /// silently drop this update.
 pub fn set_catalog_schema_access(
     warehouse_path: &str,
