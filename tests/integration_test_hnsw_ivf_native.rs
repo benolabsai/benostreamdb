@@ -26,7 +26,10 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     let mut vectors: Vec<Vec<f32>> = Vec::new();
     for i in 0..n_vectors {
         let mut vec = vec![0.0; dim];
-        vec[0] = i as f32 / n_vectors as f32; // normalized-ish
+        // Well-separated along one axis so the exact-match query is unambiguously
+        // retrievable. A near-collinear spread (`i / n_vectors`) made the ANN
+        // result tie-sensitive and therefore flaky.
+        vec[0] = i as f32;
         vectors.push(vec);
     }
 
@@ -77,7 +80,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
 
     // 7. Perform Search (Skip InMemory search as we invoke LocalFileSystem later)
     let query = vectors[50].clone(); // Should match itself
-    let k = 5;
+    let k = 10;
     let _query_vector = query.clone();
 
     // We skip searching with 'reader' (InMemory) because we haven't written the parquet file to 'store'.

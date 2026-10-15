@@ -36,6 +36,19 @@ assessment, a migration path, and a review date.
 | Status | Accepted, tracked. |
 | Next review | Each release; re-check for a maintained fork or a DataFusion/Arrow-provided serializer. |
 
+### RUSTSEC-2026-0346 / RUSTSEC-2026-0349 — `rustls` 0.21.12 (EOL)
+
+| Field | Value |
+|---|---|
+| Crate / version | `rustls` 0.21.12 (end-of-life) |
+| Kind | Vulnerability (low practical impact in this configuration) |
+| Chain | **Transitive**: `aws-smithy-http-client` → `hyper-rustls 0.24` → `tokio-rustls 0.24` → `rustls 0.21.12`. The AWS SDK chain is already at the latest compatible release and cannot move to 0.23 without an upstream change. |
+| Reachability | Only the AWS SDK's legacy HTTPS client. Both advisories require, respectively, a **custom `ClientSessionStore`** that `Debug`-formats session values (we implement none; rustls's built-in session cache `Debug` output is redacted), and **resumption-based key-share prediction** with an on-path attacker (impact limited to loss of post-quantum confidentiality — no authentication bypass, no key compromise). ECH is not enabled. |
+| Fix status | `rustls 0.23.45 → 0.23.46` is applied; 0.23.46 fixes all four rustls advisories (0346/0347/0348/0349). The 0.21 branch is EOL and has no backport. |
+| Migration path | Track `aws-smithy-http-client` for a release that drops rustls 0.21 (or move the AWS integration to a rustls-0.23 client). Remove both ignores from `deny.toml` once `rustls 0.21.12` leaves `Cargo.lock`. |
+| Status | Accepted, tracked. |
+| Next review | Each release; re-run `cargo tree -i rustls@0.21.12`. |
+
 ### RUSTSEC-2024-0436 — `paste` is unmaintained
 
 | Field | Value |

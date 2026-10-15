@@ -22,23 +22,23 @@ ignore = [
     "RUSTSEC-2026-0104",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0097",
     "RUSTSEC-2024-0437",
     "RUSTSEC-2026-0177",
     "RUSTSEC-2026-0176",
-    "RUSTSEC-2023-0071",
     "RUSTSEC-2026-0258",
     "RUSTSEC-2026-0195",
     "RUSTSEC-2026-0194",
-    "RUSTSEC-2025-0134",
     "RUSTSEC-2026-0190",
-    "RUSTSEC-2026-0221",
-    "RUSTSEC-2026-0204",
-    "RUSTSEC-2026-0234",
-    "RUSTSEC-2026-0233",
-    "RUSTSEC-2026-0235",
-    "RUSTSEC-2024-0436",
-    "RUSTSEC-2025-0141",
+    # rustls 0.21.12 is EOL and reachable only through the AWS SDK's legacy
+    # `hyper-rustls 0.24` client (aws-smithy-http-client). Both advisories are
+    # non-exploitable in our configuration: we do not implement a custom
+    # `ClientSessionStore` (2026-0346), and we do not enable ECH (2026-0347/0348)
+    # or rely on resumption-based key-share prediction (2026-0349). Our own TLS
+    # paths (reqwest/object_store/metrics) use rustls 0.23.46, where these are
+    # fixed. Tracked in docs/DEPENDENCY_RISK.md; drop when the AWS SDK moves off
+    # rustls 0.21.
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0349",
 ]
 
 [bans]
