@@ -4,7 +4,10 @@ build-backend = "maturin"
 
 [project]
 name = "benostreamdb"
-version = "0.12.0"
+# Single source of truth is Cargo.toml [workspace.package].version; maturin
+# derives the Python version from it (PEP 621 dynamic version). The release
+# workflow overrides this to <base>.postN at build time for a PyPI repack.
+dynamic = ["version"]
 description = "BenoStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
 readme = "README.md"
 requires-python = ">=3.10"

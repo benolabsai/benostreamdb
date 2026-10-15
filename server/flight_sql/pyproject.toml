@@ -4,7 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "benostreamdb-flight"
-version = "0.12.0"
+# Inherits the engine version from Cargo.toml [workspace.package].version.
+dynamic = ["version"]
 description = "BenoStreamDB Flight SQL - Arrow Flight SQL gateway over BenoStreamDB"
 readme = "README.md"
 requires-python = ">=3.10"
