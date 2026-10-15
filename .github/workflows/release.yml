@@ -366,6 +366,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          # Match rust-toolchain.toml so `cargo metadata` inside maturin does
+          # not lazily install rustfmt/clippy and race the runner's cargo-fmt.
+          components: rustfmt, clippy
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -396,6 +400,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -451,12 +457,17 @@ jobs:
     name: Final Release
     runs-on: ubuntu-latest
     if: "startsWith(github.ref, 'refs/tags/')"
-    needs: [linux, macos, windows, sdist, soak-gate]
+    # `reproducibility` is a hard gate: a non-reproducible wheel (or a failure
+    # to even verify it) must block publishing, otherwise the check is
+    # decorative. Keep it out of any `if:` that could skip it on tags.
+    needs: [linux, macos, windows, sdist, soak-gate, reproducibility]
     environment: release_pypi
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
       - name: Update version from tag
         shell: bash
         run: |

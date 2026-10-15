@@ -40,6 +40,12 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          # Install the components declared in rust-toolchain.toml up front so
+          # that a later `cargo`/`cargo metadata` (e.g. inside maturin) does not
+          # trigger rustup's lazy component install, which races the runner's
+          # preinstalled cargo-fmt and fails with "detected conflict".
+          components: rustfmt, clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -81,6 +87,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
 
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.36
@@ -128,6 +136,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -156,6 +166,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -196,6 +208,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
@@ -223,6 +237,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -248,6 +264,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

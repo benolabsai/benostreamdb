@@ -42,6 +42,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -81,6 +83,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
