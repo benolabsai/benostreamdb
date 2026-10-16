@@ -7,9 +7,7 @@ import shutil
 
 @pytest.fixture
 def table():
-    path = f"{tempfile.gettempdir()}/hs_tq_test"
-    if os.path.exists(path):
-        shutil.rmtree(path)
+    path = tempfile.mkdtemp(prefix="hs_tq_test_")
     
     # Create a table with an embedding column
     table = hs.Table.create(

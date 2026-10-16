@@ -405,10 +405,11 @@ impl Table {
         let store = create_object_store(&uri)?;
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
 
-        let (_, version) = manifest_manager.load_latest().await?;
+        let (_, version) = manifest_manager.load_latest_direct().await?;
         if version > 0 {
             return Err(anyhow::anyhow!("Table already exists at {}", uri));
         }
+        manifest_manager.invalidate_caches().await;
 
         let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
         let max_id = manifest_schema
@@ -454,10 +455,11 @@ impl Table {
         let store = create_object_store(&uri)?;
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
 
-        let (_, version) = manifest_manager.load_latest().await?;
+        let (_, version) = manifest_manager.load_latest_direct().await?;
         if version > 0 {
             return Err(anyhow::anyhow!("Table already exists at {}", uri));
         }
+        manifest_manager.invalidate_caches().await;
 
         let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
         let max_id = manifest_schema
@@ -496,10 +498,11 @@ impl Table {
         let store = create_object_store(&uri)?;
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
 
-        let (_, version) = manifest_manager.load_latest().await?;
+        let (_, version) = manifest_manager.load_latest_direct().await?;
         if version > 0 {
             return Err(anyhow::anyhow!("Table already exists at {}", uri));
         }
+        manifest_manager.invalidate_caches().await;
 
         let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
 

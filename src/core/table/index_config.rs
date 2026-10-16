@@ -466,13 +466,9 @@ impl Table {
         let required = self.required_index_types(&target_columns);
         let total = all_entries.len();
         let to_build: Vec<crate::core::manifest::ManifestEntry> = if required.is_empty() {
-            if !target_columns.is_empty() {
-                Vec::new()
-            } else if self.indexing.index_all {
-                all_entries
-            } else {
-                Vec::new()
-            }
+            // No configured algorithms to compare against (e.g. `index_all` or `add_index_columns`):
+            // fall back to rebuilding everything.
+            all_entries
         } else {
             all_entries
                 .into_iter()
