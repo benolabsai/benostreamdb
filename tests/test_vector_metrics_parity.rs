@@ -84,11 +84,11 @@ fn test_all_vector_metrics_against_brute_force() -> Result<()> {
         let mut vectors = raw_vectors.clone();
         let mut query = raw_query.clone();
 
-        // InnerProduct IVF clustering is L2-based, so it needs more clusters
+        // InnerProduct and Cosine IVF clustering is L2-based, so they need more clusters
         // and higher HNSW quality to achieve competitive recall.
         let (n_lists, quality) = match metric {
-            VectorMetric::InnerProduct => (8, 200),
-            _ => (4, 64),
+            VectorMetric::InnerProduct | VectorMetric::Cosine => (8, 200),
+            _ => (4, 128),
         };
 
         if matches!(metric, VectorMetric::Cosine | VectorMetric::InnerProduct) {
