@@ -469,7 +469,7 @@ jobs:
     name: Java Connectors (Spark / Trino)
     needs: [ci]
     runs-on: ubuntu-22.04
-    timeout-minutes: 75
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
       - name: Cache Rust dependencies
