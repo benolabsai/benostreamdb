@@ -65,10 +65,14 @@ impl ManifestManager {
     ) -> Result<Manifest> {
         let max_retries = 100;
         for attempt in 0..max_retries {
-            // Use the version cache (load_latest) instead of listing the
-            // manifest directory on every commit (~4ms). A stale cache entry
-            // just causes a conflict below, which the retry loop rebases.
-            let (current_manifest, current_ver) = self.load_latest().await?;
+            // Use the version cache (load_latest) on the first attempt instead
+            // of listing the manifest directory (~4ms). On conflict/retry, bypass
+            // cache with load_latest_direct to observe the newest committed head.
+            let (current_manifest, current_ver) = if attempt == 0 {
+                self.load_latest().await?
+            } else {
+                self.load_latest_direct().await?
+            };
 
             // 1. Calculate new state
             let all_entries = self.load_all_entries(&current_manifest).await?;
@@ -478,7 +482,7 @@ impl ManifestManager {
                 Ok(_) => {
                     tracing::info!("Committed Manifest: {}", path);
                     // 5. Update Caches
-                    let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
+                    let dir_key = self.get_dir_cache_key();
                     crate::core::cache::LATEST_VERSION_CACHE
                         .invalidate(&dir_key)
                         .await;
@@ -486,20 +490,18 @@ impl ManifestManager {
                         .insert(dir_key, new_ver)
                         .await;
 
-                    let file_key = format!("{}/{}", self.root_uri, path);
+                    let file_key = self.get_cache_key(&path);
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
-                        .await;
-                    // The version cache must reflect the new head so the next
-                    // commit's `load_latest` fast path is correct.
-                    let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .invalidate(&dir_key)
                         .await;
 
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     metrics::counter!("bsdb_manifest_commit_retries_total").increment(1);
                     metrics::counter!("bsdb_manifest_commit_rebases_total").increment(1);
                     if attempt % 10 == 0 || attempt > 90 {
@@ -531,7 +533,11 @@ impl ManifestManager {
         let max_retries = 10;
         let mut attempt = 0;
         loop {
-            let (current_manifest, current_ver) = self.load_latest().await?;
+            let (current_manifest, current_ver) = if attempt == 0 {
+                self.load_latest().await?
+            } else {
+                self.load_latest_direct().await?
+            };
             let all_existing = self.load_all_entries(&current_manifest).await?;
 
             // Merge entries, avoid duplicates, favor NEW entries for the SAME file_path
@@ -599,6 +605,9 @@ impl ManifestManager {
                     crate::core::cache::LATEST_VERSION_CACHE
                         .invalidate(&dir_key)
                         .await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .insert(dir_key, new_ver)
+                        .await;
                     let file_key = self.get_cache_key(&path);
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
@@ -606,6 +615,10 @@ impl ManifestManager {
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     attempt += 1;
                     if attempt >= max_retries {
                         break;
@@ -615,7 +628,9 @@ impl ManifestManager {
                         attempt,
                         max_retries
                     );
-                    tokio::time::sleep(std::time::Duration::from_millis(20 * attempt)).await;
+                    let base_delay = 10 * (2u64.pow(attempt.min(5) as u32));
+                    let jitter = rand::random::<u64>() % base_delay;
+                    tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
                     continue;
                 }
                 Err(e) => {

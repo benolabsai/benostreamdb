@@ -84,19 +84,23 @@ impl Table {
             index_cols.sort();
         }
 
-        // Trigger backfill for updated columns. The backfill bounds its own
-        // per-segment concurrency through the index-build gate (see
-        // `backfill_indexes_async`), so no outer permit is held here — holding
-        // one would starve the inner per-segment permits when the gate is 1.
-        let cols_to_backfill: Vec<String> = column_indexes.keys().cloned().collect();
-        let table_clone = self.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(e) = table_clone.backfill_indexes_async(cols_to_backfill).await {
-                tracing::error!("Failed to backfill indexes: {}", e);
-            }
-        });
+        // Trigger backfill for updated columns that have index algorithms configured.
+        // Dropped columns (empty algorithms) should NOT trigger a backfill.
+        let cols_to_backfill: Vec<String> = column_indexes
+            .iter()
+            .filter(|(_, algs)| !algs.is_empty())
+            .map(|(col, _)| col.clone())
+            .collect();
+        if !cols_to_backfill.is_empty() {
+            let table_clone = self.clone();
+            let handle = tokio::spawn(async move {
+                if let Err(e) = table_clone.backfill_indexes_async(cols_to_backfill).await {
+                    tracing::error!("Failed to backfill indexes: {}", e);
+                }
+            });
 
-        self.background_tasks.lock().await.push(handle);
+            self.background_tasks.lock().await.push(handle);
+        }
 
         Ok(())
     }
@@ -249,6 +253,7 @@ impl Table {
     /// and deletes physical sidecar files.
     pub async fn drop_index(&self, column: String) -> Result<()> {
         let _maintenance_guard = self.maintenance_lock.write().await;
+        let _ = self.wait_for_background_tasks_async().await;
         // Collect all file paths associated with this index from the current manifest.
         let manifest = self.manifest().await?;
         let manager =
@@ -461,9 +466,13 @@ impl Table {
         let required = self.required_index_types(&target_columns);
         let total = all_entries.len();
         let to_build: Vec<crate::core::manifest::ManifestEntry> = if required.is_empty() {
-            // No configured algorithms to compare against (e.g. `index_all`):
-            // fall back to rebuilding everything.
-            all_entries
+            if !target_columns.is_empty() {
+                Vec::new()
+            } else if self.indexing.index_all {
+                all_entries
+            } else {
+                Vec::new()
+            }
         } else {
             all_entries
                 .into_iter()
