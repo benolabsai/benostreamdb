@@ -121,22 +121,22 @@ jobs:
           sccache: "true"
           manylinux: auto
       - name: Upload core wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-core-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
       - name: Upload search gateway wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-search-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
       - name: Upload flight server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
       - name: Upload MCP server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
@@ -208,22 +208,22 @@ jobs:
           args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
           sccache: "true"
       - name: Upload core wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-core-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
       - name: Upload search gateway wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-search-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
       - name: Upload flight server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
       - name: Upload MCP server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
@@ -314,22 +314,22 @@ jobs:
           args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
           sccache: "true"
       - name: Upload core wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-core-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
       - name: Upload search gateway wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-search-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
       - name: Upload flight server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
       - name: Upload MCP server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
@@ -357,7 +357,7 @@ jobs:
           command: sdist
           args: --out dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-core-sdist
           path: dist
@@ -455,7 +455,7 @@ jobs:
           cat soak-report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload soak report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-report
           path: soak-report.md
@@ -515,7 +515,7 @@ jobs:
           chmod +x ./build-connectors.sh
           ./build-connectors.sh
       - name: Upload connector artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: connector-artifacts
           path: connector-artifacts
@@ -593,7 +593,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Download core wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-core-*
           merge-multiple: true
@@ -626,19 +626,19 @@ jobs:
         with:
           python-version: "3.12"
       - name: Download search gateway wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-search-*
           merge-multiple: true
           path: contrib/benostreamdb-search/dist
       - name: Download flight server wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-flight-*
           merge-multiple: true
           path: server/flight_sql/dist
       - name: Download MCP server wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-mcp-*
           merge-multiple: true
@@ -743,25 +743,25 @@ jobs:
       # Publishing happened in the parallel PyPI/crates jobs above; this job only
       # gathers every built distribution so it can be attached to the release.
       - name: Download core wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-core-*
           merge-multiple: true
           path: dist
       - name: Download search gateway wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-search-*
           merge-multiple: true
           path: contrib/benostreamdb-search/dist
       - name: Download flight server wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-flight-*
           merge-multiple: true
           path: server/flight_sql/dist
       - name: Download MCP server wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-mcp-*
           merge-multiple: true
@@ -777,7 +777,7 @@ jobs:
       # The Java connector build moved to the parallel `connectors` job above;
       # here we only collect its artifacts for the GitHub Release.
       - name: Download connector artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: connector-artifacts
           path: connector-artifacts

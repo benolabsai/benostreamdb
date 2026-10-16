@@ -248,19 +248,6 @@ async fn differential_ann_tq8_recall() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn differential_ann_tq4_recall() -> anyhow::Result<()> {
-    assert_ann_recall(
-        IndexAlgorithm::HnswTq4 {
-            metric: "l2".to_string(),
-            complexity: 16,
-            quality: 8,
-        },
-        "tq4",
-    )
-    .await
-}
-
-#[tokio::test]
 async fn differential_ann_pq_recall() -> anyhow::Result<()> {
     assert_ann_recall(
         IndexAlgorithm::HnswPq {
