@@ -125,21 +125,28 @@ jobs:
         with:
           name: wheels-core-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+          # Replace any artifact left by a previous attempt of this run, so a
+          # "re-run failed jobs" can never publish stale (e.g. wrong-version)
+          # wheels alongside fresh ones.
+          overwrite: true
       - name: Upload search gateway wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-search-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
+          overwrite: true
       - name: Upload flight server wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
+          overwrite: true
       - name: Upload MCP server wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
+          overwrite: true
 
   macos:
     needs: [ci]
@@ -212,21 +219,25 @@ jobs:
         with:
           name: wheels-core-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+          overwrite: true
       - name: Upload search gateway wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-search-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
+          overwrite: true
       - name: Upload flight server wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
+          overwrite: true
       - name: Upload MCP server wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
+          overwrite: true
 
   windows:
     needs: [ci]
@@ -318,21 +329,25 @@ jobs:
         with:
           name: wheels-core-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+          overwrite: true
       - name: Upload search gateway wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-search-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
+          overwrite: true
       - name: Upload flight server wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
+          overwrite: true
       - name: Upload MCP server wheels
         uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
+          overwrite: true
 
 
   sdist:
@@ -361,6 +376,7 @@ jobs:
         with:
           name: wheels-core-sdist
           path: dist
+          overwrite: true
 
   # Reproducibility: build the core wheel twice under the pinned
   # SOURCE_DATE_EPOCH and require byte-identical archives, turning the
@@ -459,6 +475,7 @@ jobs:
         with:
           name: soak-report
           path: soak-report.md
+          overwrite: true
 
   # The Java connectors (Spark / Trino) only produce GitHub Release assets.
   # They previously ran INSIDE the release job, after every registry publish
@@ -519,6 +536,7 @@ jobs:
         with:
           name: connector-artifacts
           path: connector-artifacts
+          overwrite: true
 
   # crates.io publishing moved into its own job so it runs in PARALLEL with the
   # PyPI uploads and the connector build. `cargo publish` compiles the crate to
