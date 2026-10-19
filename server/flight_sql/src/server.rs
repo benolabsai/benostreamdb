@@ -44,6 +44,17 @@ struct TransactionState {
     staged: Vec<String>,
 }
 
+/// Whether the Flight SQL server must refuse writes.
+///
+/// `BSDB_FLIGHT_READ_ONLY` is a boolean switch: `1` or `true` enables it.
+/// Bare presence is deliberately not enough, so `BSDB_FLIGHT_READ_ONLY=0`
+/// still allows DDL/DML and ingest.
+fn flight_read_only() -> bool {
+    std::env::var("BSDB_FLIGHT_READ_ONLY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 impl Default for TransactionState {
     fn default() -> Self {
         Self {
@@ -105,10 +116,7 @@ impl BenoStreamFlightSqlService {
         &self,
         sql: &str,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, Status> {
-        let read_only = std::env::var("BSDB_FLIGHT_READ_ONLY")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        if read_only {
+        if flight_read_only() {
             if self.session.is_ddl(sql).await.unwrap_or(true)
                 || self.session.is_dml(sql).await.unwrap_or(true)
             {
@@ -313,10 +321,7 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         if self.session.is_ddl(&sql).await.unwrap_or(true)
             || self.session.is_dml(&sql).await.unwrap_or(true)
         {
-            let read_only = std::env::var("BSDB_FLIGHT_READ_ONLY")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-            if read_only {
+            if flight_read_only() {
                 return Err(Status::permission_denied("Server is in read-only mode"));
             }
             self.execute_statement(&sql).await?;
@@ -388,10 +393,7 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         if self.session.is_ddl(&sql).await.unwrap_or(true)
             || self.session.is_dml(&sql).await.unwrap_or(true)
         {
-            let read_only = std::env::var("BSDB_FLIGHT_READ_ONLY")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-            if read_only {
+            if flight_read_only() {
                 return Err(Status::permission_denied("Server is in read-only mode"));
             }
             self.execute_statement(&sql).await?;
@@ -875,7 +877,7 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         query: CommandStatementUpdate,
         _request: Request<arrow_flight::sql::server::PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+        if flight_read_only() {
             return Err(Status::permission_denied("Server is in read-only mode"));
         }
         let sql = query.query;
@@ -907,7 +909,7 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         query: CommandPreparedStatementUpdate,
         _request: Request<arrow_flight::sql::server::PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+        if flight_read_only() {
             return Err(Status::permission_denied("Server is in read-only mode"));
         }
         let sql = self.prepared_sql(&query.prepared_statement_handle).await?;
@@ -1061,7 +1063,7 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         ticket: CommandStatementIngest,
         request: Request<arrow_flight::sql::server::PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+        if flight_read_only() {
             return Err(Status::permission_denied("Server is in read-only mode"));
         }
         // Decode the incoming Arrow stream and append it to the target table.

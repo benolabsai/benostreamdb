@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0]
+
+### Added
+- **Embedding provenance and vector-space guard (core)** — tables can declare
+  `benostream.embedding.model`, `.dim`, `.provider`, `.endpoint`, and
+  `.query_prefix` as Iceberg table properties. The engine mirrors them into
+  `metadata/vN.metadata.json`, derives the dimension from a known-model
+  catalogue or a `FixedSizeList` column, validates writes against the declared
+  dimension, and refuses to change or remove a declared model/dimension on a
+  non-empty table. Covers Python, SQL/Flight SQL, MCP, bulk ingest, and
+  catalog-driven `set-properties` (Spark/Trino).
+- **Local, no-LLM embeddings in the MCP server** — `fastembed`/ONNX Runtime with
+  `BAAI/bge-small-en-v1.5` (384-d, quantized) as the default, plus Ollama,
+  OpenAI-compatible, and TEI HTTP endpoints. New `--embedding-*` flags and
+  `BSDB_EMBEDDING_*` variables; `list_embedding_models` exposes the active
+  provider, model, dimension, cache, and local catalogue.
+- **Cross-connector configuration and API documentation** — `docs/CONFIGURATION.md`
+  now covers every `BSDB_*` variable, including embeddings, catalog, GPU/HNSW,
+  OTLP, Flight SQL, and MCP.
+
+### Changed
+- **MCP default embeddings are local** — the first embedding call downloads the
+  model into a private cache (`~/.benostreamdb/models` by default). Set
+  `BSDB_EMBEDDING_PROVIDER=http` or `none` to avoid the download.
+- Examples and demo builders default to `BAAI/bge-small-en-v1.5` instead of
+  `all-MiniLM-L6-v2` / `bge-large-en-v1.5`.
+- `BSDB_FLIGHT_READ_ONLY` is consistently a boolean: `1`/`true` enables it, and
+  `0` no longer blocks the ingest/update paths.
+
+### Fixed
+- **Table properties reach external readers** — metadata-only property commits
+  now write `TableMetadata.properties` alongside the manifest, so Spark, Trino,
+  and PyIceberg see `SET TBLPROPERTIES` values (including embedding provenance).
+- **`version-hint.text` no longer regresses** when a concurrent writer commits a
+  newer metadata version first.
+- Metadata-only property commits preserve the existing snapshot list and do not
+  fabricate a data snapshot.
+
+### Notes
+- Model identity is not recoverable from a vector; the declared table property is
+  the contract. Writes that bypass the engine and catalog (direct
+  Parquet/object-store mutation) remain outside the guard.
+- `BSDB_VALIDATE_EMBEDDINGS=strict` enables per-row `List`/stringified-vector
+  length checks; the default only validates `FixedSizeList` columns.
+
 ## [0.12.0]
 
 ### Benchmarks

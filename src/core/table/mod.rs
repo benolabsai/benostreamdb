@@ -40,7 +40,12 @@ pub mod maintenance;
 pub mod merge;
 pub use merge::MergeMode;
 pub mod preload;
+pub mod properties;
 pub use preload::{PreloadOptions, PreloadStats};
+pub use properties::{
+    EMBEDDING_DIM_PROP, EMBEDDING_ENDPOINT_PROP, EMBEDDING_MODEL_PROP, EMBEDDING_PROVIDER_PROP,
+    EMBEDDING_QUERY_PREFIX_PROP,
+};
 pub mod primary_key;
 pub mod read;
 pub mod schema;

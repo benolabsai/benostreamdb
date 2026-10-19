@@ -17,7 +17,7 @@ scale test of the engine:
      subgraph with the subgraph() UDF (multi-hop induced subgraph from the
      highest-degree hubs of the largest component).
   5. Filter nodes to the kept ids and embed summaries with
-     sentence-transformers (BAAI/bge-large-en-v1.5, 1024d) for semantic
+     sentence-transformers (BAAI/bge-small-en-v1.5, 384d) for semantic
      entity resolution in the UI.
   6. Write data/demo_nodes.parquet and data/demo_edges.parquet (int64 ids).
 
@@ -293,9 +293,9 @@ def main() -> None:
                         help="default: <dumps-dir>/demo_edges.parquet")
     parser.add_argument("--max-nodes", type=int, default=50_000,
                         help="Cap the demo to N nodes (0 = no cap)")
-    parser.add_argument("--embed-model", default="BAAI/bge-large-en-v1.5",
-                        help="SentenceTransformer model (1024-d default; "
-                             "'all-MiniLM-L6-v2' is a fast 384-d fallback)")
+    parser.add_argument("--embed-model", default="BAAI/bge-small-en-v1.5",
+                        help="SentenceTransformer model (384-d retrieval-tuned default; "
+                             "'BAAI/bge-large-en-v1.5' is the 1024-d quality option)")
     parser.add_argument("--no-embed", action="store_true",
                         help="Skip sentence-transformers embeddings "
                              "(UI falls back to fuzzy title match)")

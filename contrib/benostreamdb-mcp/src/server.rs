@@ -1,16 +1,50 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::Write;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info};
 
+use crate::embedding::{EmbeddingConfig, EmbeddingProvider, LocalEmbedder};
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 use benostreamdb::core::sql::session::BenoStreamSession;
 
 /// The default schema the MCP server creates objects in if unqualified.
 pub const SCRATCH_SCHEMA: &str = "scratch";
+
+/// Table properties recording which embedding space produced the vectors.
+/// Defined in the engine so Python, SQL, Spark, and Trino share the same keys.
+pub use benostreamdb::core::table::{
+    EMBEDDING_DIM_PROP, EMBEDDING_ENDPOINT_PROP, EMBEDDING_MODEL_PROP, EMBEDDING_PROVIDER_PROP,
+    EMBEDDING_QUERY_PREFIX_PROP,
+};
+
+#[derive(Debug, Clone)]
+struct TableEmbeddingMeta {
+    model: String,
+    dim: Option<usize>,
+    provider: String,
+    /// Endpoint URL for HTTP providers. Never contains the API key.
+    endpoint: Option<String>,
+    query_prefix: Option<String>,
+}
+
+/// Extract the dimension from the stringified vectors this server writes
+/// (`"[0.1, 0.2, ...]"`).
+fn vector_dim_from_string(value: &str) -> Option<usize> {
+    let trimmed = value.trim().trim_start_matches('[').trim_end_matches(']');
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(
+        trimmed
+            .split(',')
+            .filter(|part| !part.trim().is_empty())
+            .count(),
+    )
+}
 
 /// Derives the default warehouse directory path.
 /// If `BSDB_WAREHOUSE` is already set, returns its value.
@@ -329,6 +363,9 @@ pub struct McpServerConfig {
     /// Whether to force ephemeral temporary directories instead of the persistent warehouse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ephemeral: Option<bool>,
+    /// Embedding provider/model configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<EmbeddingConfig>,
 }
 
 impl McpServerConfig {
@@ -372,6 +409,11 @@ impl McpServerConfig {
         if let Ok(e) = std::env::var("BSDB_EPHEMERAL") {
             config.ephemeral = Some(e == "1" || e.eq_ignore_ascii_case("true"));
         }
+        // Always materialize the effective embedding config so BSDB_EMBEDDING_*
+        // overrides apply to defaults, JSON config, and CLI flags consistently.
+        let mut embedding = config.embedding.take().unwrap_or_default();
+        embedding.apply_env();
+        config.embedding = Some(embedding);
         config
     }
 
@@ -437,6 +479,124 @@ impl McpServerConfig {
                         config = config.merge(parsed);
                     }
                 }
+                "--embedding-model" => {
+                    i += 1;
+                    if i < args.len() {
+                        config
+                            .embedding
+                            .get_or_insert_with(EmbeddingConfig::default)
+                            .model = args[i].clone();
+                    }
+                }
+                "--embedding-provider" => {
+                    i += 1;
+                    if i < args.len() {
+                        let provider = match args[i].trim().to_ascii_lowercase().as_str() {
+                            "local" | "fastembed" | "onnx" => Some(EmbeddingProvider::Local),
+                            "http" | "remote" | "ollama" | "openai" | "tei" => {
+                                Some(EmbeddingProvider::Http)
+                            }
+                            "none" | "off" | "disabled" => Some(EmbeddingProvider::None),
+                            _ => None,
+                        };
+                        if let Some(provider) = provider {
+                            config
+                                .embedding
+                                .get_or_insert_with(EmbeddingConfig::default)
+                                .provider = Some(provider);
+                        }
+                    }
+                }
+                "--no-embeddings" => {
+                    config
+                        .embedding
+                        .get_or_insert_with(EmbeddingConfig::default)
+                        .provider = Some(EmbeddingProvider::None);
+                }
+                "--embedding-cache-dir" => {
+                    i += 1;
+                    if i < args.len() {
+                        config
+                            .embedding
+                            .get_or_insert_with(EmbeddingConfig::default)
+                            .cache_dir = std::path::PathBuf::from(&args[i]);
+                    }
+                }
+                "--embedding-url" => {
+                    i += 1;
+                    if i < args.len() {
+                        config
+                            .embedding
+                            .get_or_insert_with(EmbeddingConfig::default)
+                            .url = Some(args[i].clone());
+                    }
+                }
+                "--embedding-api-key" => {
+                    i += 1;
+                    if i < args.len() {
+                        config
+                            .embedding
+                            .get_or_insert_with(EmbeddingConfig::default)
+                            .api_key = Some(args[i].clone());
+                    }
+                }
+                "--embedding-model-path" => {
+                    i += 1;
+                    if i < args.len() {
+                        config
+                            .embedding
+                            .get_or_insert_with(EmbeddingConfig::default)
+                            .model_path = Some(std::path::PathBuf::from(&args[i]));
+                    }
+                }
+                "--embedding-batch-size" => {
+                    i += 1;
+                    if i < args.len() {
+                        if let Ok(n) = args[i].trim().parse::<usize>() {
+                            if n > 0 {
+                                config
+                                    .embedding
+                                    .get_or_insert_with(EmbeddingConfig::default)
+                                    .batch_size = n;
+                            }
+                        }
+                    }
+                }
+                "--embedding-max-length" => {
+                    i += 1;
+                    if i < args.len() {
+                        if let Ok(n) = args[i].trim().parse::<usize>() {
+                            if n > 0 {
+                                config
+                                    .embedding
+                                    .get_or_insert_with(EmbeddingConfig::default)
+                                    .max_length = n;
+                            }
+                        }
+                    }
+                }
+                "--embedding-dim" => {
+                    i += 1;
+                    if i < args.len() {
+                        if let Ok(n) = args[i].trim().parse::<usize>() {
+                            if n > 0 {
+                                config
+                                    .embedding
+                                    .get_or_insert_with(EmbeddingConfig::default)
+                                    .dim = Some(n);
+                            }
+                        }
+                    }
+                }
+                "--embedding-device" => {
+                    i += 1;
+                    if i < args.len() {
+                        config
+                            .embedding
+                            .get_or_insert_with(EmbeddingConfig::default)
+                            .device = args[i].trim().to_ascii_lowercase();
+                    }
+                }
                 _ => {}
             }
             i += 1;
@@ -457,6 +617,7 @@ impl McpServerConfig {
             readonly_schemas: overlay.readonly_schemas.or(self.readonly_schemas),
             default_write_schema: overlay.default_write_schema.or(self.default_write_schema),
             ephemeral: overlay.ephemeral.or(self.ephemeral),
+            embedding: overlay.embedding.or(self.embedding),
         }
     }
 
@@ -885,6 +1046,9 @@ pub struct McpServer {
     extension: McpExtension,
     permissions: RwLock<SchemaPermissions>,
     warehouse: RwLock<String>,
+    embedding_config: RwLock<EmbeddingConfig>,
+    /// Lazily loaded so `initialize` and SQL-only sessions pay no model cost.
+    local_embedder: Arc<std::sync::Mutex<Option<LocalEmbedder>>>,
 }
 
 impl Default for McpServer {
@@ -953,11 +1117,14 @@ impl McpServer {
         let mut session = BenoStreamSession::default();
         session.set_warehouse(Some(warehouse.clone()));
         let _ = benostreamdb::core::index::gpu::apply_gpu_context_from_env();
+        let embedding_config = config.embedding.clone().unwrap_or_default();
         Self {
             session: RwLock::new(session),
             extension,
             permissions: RwLock::new(permissions),
             warehouse: RwLock::new(warehouse),
+            embedding_config: RwLock::new(embedding_config),
+            local_embedder: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -977,6 +1144,16 @@ impl McpServer {
     }
 
     pub async fn apply_config(&self, config: &McpServerConfig) {
+        if let Some(embedding) = &config.embedding {
+            if let Ok(mut current) = self.embedding_config.write() {
+                *current = embedding.clone();
+            }
+            // Drop the loaded ONNX session so the next embedding call reloads
+            // with the new model/cache configuration.
+            if let Ok(mut embedder) = self.local_embedder.lock() {
+                *embedder = None;
+            }
+        }
         if let Some(w) = &config.warehouse {
             if !w.trim().is_empty() {
                 let _ = std::fs::create_dir_all(w);
@@ -1163,88 +1340,311 @@ impl McpServer {
         Ok(rows)
     }
 
+    /// Inspect the active embedding configuration and enumerate every local
+    /// Hugging Face model that can be selected without an LLM/HTTP endpoint.
+    async fn embedding_status(&self) -> Value {
+        let config = self
+            .embedding_config
+            .read()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        let (loaded, active_dim) = match self.local_embedder.try_lock() {
+            Ok(guard) => (guard.is_some(), guard.as_ref().map(|model| model.dim)),
+            // A lock conflict means an embedding call is in flight, which
+            // implies the model is loaded; dimension is already in the config.
+            Err(_) => (true, None),
+        };
+        crate::embedding::embedding_status(&config, loaded, active_dim)
+    }
+
+    fn current_table_embedding_meta(
+        config: &EmbeddingConfig,
+        actual_dim: Option<usize>,
+    ) -> TableEmbeddingMeta {
+        TableEmbeddingMeta {
+            model: config
+                .canonical_model_id()
+                .unwrap_or_else(|_| config.model.clone()),
+            dim: actual_dim.or_else(|| config.resolved_dim()),
+            provider: config.resolved_provider().as_str().to_string(),
+            endpoint: if config.resolved_provider() == EmbeddingProvider::Http {
+                config.url.clone()
+            } else {
+                None
+            },
+            query_prefix: Some(config.effective_query_prefix()),
+        }
+    }
+
+    async fn read_table_embedding_meta(&self, table_name: &str) -> Option<TableEmbeddingMeta> {
+        let table = self.session().resolve_table(table_name).await.ok()?;
+        let properties = table.properties_async().await.ok()?;
+        let model = properties.get(EMBEDDING_MODEL_PROP)?.clone();
+        Some(TableEmbeddingMeta {
+            model,
+            dim: properties
+                .get(EMBEDDING_DIM_PROP)
+                .and_then(|value| value.parse::<usize>().ok()),
+            provider: properties
+                .get(EMBEDDING_PROVIDER_PROP)
+                .cloned()
+                .unwrap_or_default(),
+            endpoint: properties.get(EMBEDDING_ENDPOINT_PROP).cloned(),
+            query_prefix: properties.get(EMBEDDING_QUERY_PREFIX_PROP).cloned(),
+        })
+    }
+
+    async fn stamp_table_embedding_meta(
+        &self,
+        table_name: &str,
+        meta: &TableEmbeddingMeta,
+    ) -> Result<()> {
+        let table = self.session().resolve_table(table_name).await?;
+        let mut properties = HashMap::new();
+        properties.insert(EMBEDDING_MODEL_PROP.to_string(), meta.model.clone());
+        if let Some(dim) = meta.dim {
+            properties.insert(EMBEDDING_DIM_PROP.to_string(), dim.to_string());
+        }
+        properties.insert(EMBEDDING_PROVIDER_PROP.to_string(), meta.provider.clone());
+        if let Some(endpoint) = &meta.endpoint {
+            properties.insert(EMBEDDING_ENDPOINT_PROP.to_string(), endpoint.clone());
+        }
+        if let Some(prefix) = &meta.query_prefix {
+            properties.insert(EMBEDDING_QUERY_PREFIX_PROP.to_string(), prefix.clone());
+        }
+        table.set_properties_async(properties).await?;
+        Ok(())
+    }
+
+    async fn table_has_vectors(&self, table_name: &str) -> bool {
+        let sql = format!(
+            "SELECT COUNT(*) AS n FROM {} WHERE embedding IS NOT NULL",
+            table_name
+        );
+        self.query_to_json(&sql)
+            .await
+            .ok()
+            .and_then(|rows| {
+                rows.first()
+                    .and_then(|row| row.get("n"))
+                    .and_then(|value| value.as_u64())
+            })
+            .unwrap_or(0)
+            > 0
+    }
+
+    /// Refuse to mix vector spaces. Tables created by this server carry
+    /// `benostream.embedding.*` properties. A model change is an error unless
+    /// the table is still empty or the user re-ingests into a new table.
+    async fn validate_embedding_space(
+        &self,
+        table_name: &str,
+        config: &EmbeddingConfig,
+        actual_dim: Option<usize>,
+        strict_legacy: bool,
+    ) -> Result<()> {
+        if !config.is_enabled() {
+            return Ok(());
+        }
+        let current = Self::current_table_embedding_meta(config, actual_dim);
+        if let Some(stored) = self.read_table_embedding_meta(table_name).await {
+            if stored.model != current.model {
+                anyhow::bail!(
+                    "embedding model mismatch for table '{table_name}': stored model is '{}'{} but current config is '{}'{}; refusing to mix vector spaces. Re-ingest into a new table with the current model, or restore the original embedding configuration.",
+                    stored.model,
+                    stored
+                        .dim
+                        .map(|dim| format!(" (dim {dim})"))
+                        .unwrap_or_default(),
+                    current.model,
+                    current
+                        .dim
+                        .map(|dim| format!(" (dim {dim})"))
+                        .unwrap_or_default(),
+                );
+            }
+            if let (Some(stored_dim), Some(current_dim)) = (stored.dim, current.dim) {
+                if stored_dim != current_dim {
+                    anyhow::bail!(
+                        "embedding dimension mismatch for table '{table_name}': stored dim {stored_dim} but current model '{}' produces dim {current_dim}; refusing to mix vector spaces.",
+                        current.model
+                    );
+                }
+            }
+            return Ok(());
+        }
+
+        // Legacy table: no provenance. Writes are refused because adding a new
+        // model's vectors would create a mixed space. Reads are allowed (with a
+        // warning) so old tables remain searchable.
+        if self.table_has_vectors(table_name).await {
+            if strict_legacy {
+                anyhow::bail!(
+                    "table '{table_name}' contains embeddings without {EMBEDDING_MODEL_PROP} metadata, so it cannot be safely mixed with model '{}'. Re-ingest the table with the current model, or set the table properties {EMBEDDING_MODEL_PROP} and {EMBEDDING_DIM_PROP} explicitly.",
+                    current.model
+                );
+            }
+            tracing::warn!(
+                "table '{}' has embeddings but no {} metadata; allowing read with model '{}'",
+                table_name,
+                EMBEDDING_MODEL_PROP,
+                current.model
+            );
+        }
+        Ok(())
+    }
+
+    /// Embed a document chunk (document-side prefix, when the model uses one).
     async fn fetch_embedding(&self, text: &str) -> Option<Vec<f32>> {
-        let url = std::env::var("BSDB_EMBEDDING_URL")
-            .ok()
-            .filter(|s| !s.is_empty())?;
-        let model =
-            std::env::var("BSDB_EMBEDDING_MODEL").unwrap_or_else(|_| "all-minilm".to_string());
-        let api_key = std::env::var("BSDB_EMBEDDING_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty());
+        self.fetch_embedding_inner(text, false).await
+    }
+
+    /// Embed a search query (query-side instruction prefix for BGE/E5/Nomic).
+    async fn fetch_query_embedding(&self, text: &str) -> Option<Vec<f32>> {
+        self.fetch_embedding_inner(text, true).await
+    }
+
+    async fn fetch_embedding_inner(&self, text: &str, is_query: bool) -> Option<Vec<f32>> {
+        let config = self
+            .embedding_config
+            .read()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        match config.resolved_provider() {
+            EmbeddingProvider::None => None,
+            EmbeddingProvider::Http => self.fetch_http_embedding(text, is_query, &config).await,
+            EmbeddingProvider::Local => {
+                match self.embed_local(config, text.to_string(), is_query).await {
+                    Ok(vector) => Some(vector),
+                    Err(e) => {
+                        error!("local embedding failed: {e:#}");
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    /// Run the in-process ONNX model. Loading is lazy and happens on the
+    /// blocking pool; the model is cached for the life of the server.
+    async fn embed_local(
+        &self,
+        config: EmbeddingConfig,
+        text: String,
+        is_query: bool,
+    ) -> Result<Vec<f32>> {
+        let embedder = self.local_embedder.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
+            let mut guard = embedder
+                .lock()
+                .map_err(|_| anyhow::anyhow!("embedding model lock poisoned"))?;
+            if guard.is_none() {
+                *guard = Some(LocalEmbedder::load(&config)?);
+            }
+            let model = guard
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("embedding model not initialized"))?;
+            if is_query {
+                model.embed_query(&text)
+            } else {
+                let mut vectors = model.embed_documents(std::slice::from_ref(&text))?;
+                vectors
+                    .pop()
+                    .ok_or_else(|| anyhow::anyhow!("embedding model returned no vector"))
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("embedding task failed: {e}"))?
+    }
+
+    async fn fetch_http_embedding(
+        &self,
+        text: &str,
+        is_query: bool,
+        config: &EmbeddingConfig,
+    ) -> Option<Vec<f32>> {
+        let url = config.url.as_deref().filter(|s| !s.is_empty())?;
+        let model = if config.model.trim().is_empty() {
+            crate::embedding::DEFAULT_EMBEDDING_MODEL
+        } else {
+            config.model.as_str()
+        };
+        let prefix = if is_query {
+            config.effective_query_prefix()
+        } else {
+            config.effective_document_prefix()
+        };
+        let input = format!("{}{}", prefix, text);
 
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .ok()?;
 
-        let mut req = client.post(&url);
-        if let Some(key) = api_key {
+        let mut req = client.post(url);
+        if let Some(key) = config.api_key.as_deref().filter(|k| !k.is_empty()) {
             req = req.header("Authorization", format!("Bearer {}", key));
         }
 
         let is_ollama = url.contains("ollama") || url.ends_with("/api/embeddings");
         let body = if is_ollama {
-            json!({
-                "model": model,
-                "prompt": text
-            })
+            json!({ "model": model, "prompt": input })
         } else {
-            json!({
-                "model": model,
-                "input": text
-            })
+            json!({ "model": model, "input": input })
         };
 
         let resp = req.json(&body).send().await.ok()?;
         if !resp.status().is_success() {
+            error!("embedding endpoint {} returned HTTP {}", url, resp.status());
             return None;
         }
         let json_val: Value = resp.json().await.ok()?;
-
-        if let Some(arr) = json_val.get("embedding").and_then(|v| v.as_array()) {
-            let vec: Vec<f32> = arr
-                .iter()
-                .filter_map(|x| x.as_f64().map(|f| f as f32))
-                .collect();
-            if !vec.is_empty() {
-                return Some(vec);
-            }
+        let arr = if let Some(arr) = json_val.get("embedding").and_then(|v| v.as_array()) {
+            arr
+        } else {
+            json_val
+                .get("data")
+                .and_then(|v| v.as_array())
+                .and_then(|data| data.first())
+                .and_then(|first| first.get("embedding"))
+                .and_then(|v| v.as_array())?
+        };
+        let vec: Vec<f32> = arr
+            .iter()
+            .filter_map(|x| x.as_f64().map(|f| f as f32))
+            .collect();
+        if vec.is_empty() {
+            error!("embedding endpoint {} returned an empty vector", url);
+            None
+        } else {
+            Some(vec)
         }
-        if let Some(data) = json_val.get("data").and_then(|v| v.as_array()) {
-            if let Some(first) = data.first() {
-                if let Some(arr) = first.get("embedding").and_then(|v| v.as_array()) {
-                    let vec: Vec<f32> = arr
-                        .iter()
-                        .filter_map(|x| x.as_f64().map(|f| f as f32))
-                        .collect();
-                    if !vec.is_empty() {
-                        return Some(vec);
-                    }
-                }
-            }
-        }
-
-        None
     }
 
     async fn fetch_image_embedding(&self, image_base64: &str) -> Option<Vec<f32>> {
-        let url = std::env::var("BSDB_EMBEDDING_URL")
-            .ok()
-            .filter(|s| !s.is_empty())?;
-        let model =
-            std::env::var("BSDB_EMBEDDING_MODEL").unwrap_or_else(|_| "all-minilm".to_string());
-        let api_key = std::env::var("BSDB_EMBEDDING_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty());
+        let config = self
+            .embedding_config
+            .read()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        // Local text models cannot embed images; use the HTTP multimodal path.
+        if config.resolved_provider() != EmbeddingProvider::Http {
+            return None;
+        }
+        let url = config.url.as_deref().filter(|s| !s.is_empty())?;
+        let model = if config.model.trim().is_empty() {
+            crate::embedding::DEFAULT_EMBEDDING_MODEL
+        } else {
+            config.model.as_str()
+        };
 
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .ok()?;
 
-        let mut req = client.post(&url);
-        if let Some(key) = api_key {
+        let mut req = client.post(url);
+        if let Some(key) = config.api_key.as_deref().filter(|k| !k.is_empty()) {
             req = req.header("Authorization", format!("Bearer {}", key));
         }
 
@@ -1391,7 +1791,11 @@ impl McpServer {
                     .server_name
                     .as_deref()
                     .unwrap_or("benostreamdb-mcp");
-                let version = self.extension.server_version.as_deref().unwrap_or("0.12.0");
+                let version = self
+                    .extension
+                    .server_version
+                    .as_deref()
+                    .unwrap_or(env!("CARGO_PKG_VERSION"));
                 Ok(json!({
                     "protocolVersion": "2024-11-05",
                     "serverInfo": {
@@ -1774,8 +2178,16 @@ impl McpServer {
                         }
                     },
                     {
+                        "name": "list_embedding_models",
+                        "description": "Reports the active embedding provider/model/dimension/cache and lists every Hugging Face model available for local, no-LLM inference. Use the returned huggingface_id or fastembed_name as the embedding.model value.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    },
+                    {
                         "name": "hybrid_search",
-                        "description": "Performs hybrid search combining BM25 lexical search and dense vector similarity using Reciprocal Rank Fusion (RRF). If query_vector is omitted and BSDB_EMBEDDING_URL is configured, dense embeddings are auto-generated from query_text.",
+                        "description": "Performs hybrid search combining BM25 lexical search and dense vector similarity using Reciprocal Rank Fusion (RRF). If query_vector is omitted, the configured embedding provider (local BGE-small by default) embeds query_text.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -2150,6 +2562,15 @@ impl McpServer {
                             })),
                         }
                     }
+                    "list_embedding_models" => {
+                        let status = self.embedding_status().await;
+                        Ok(json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&status).unwrap_or_default()
+                            }]
+                        }))
+                    }
                     "hybrid_search" => {
                         let args = params.get("arguments").cloned().unwrap_or(json!({}));
                         let table = args.get("table").and_then(|v| v.as_str()).unwrap_or("");
@@ -2199,8 +2620,32 @@ impl McpServer {
                                     .collect(),
                             )
                         } else {
-                            self.fetch_embedding(query_text).await
+                            self.fetch_query_embedding(query_text).await
                         };
+
+                        if let Some(vector) = &query_vector {
+                            let embedding_config = self
+                                .embedding_config
+                                .read()
+                                .map(|config| config.clone())
+                                .unwrap_or_default();
+                            if embedding_config.is_enabled() {
+                                if let Err(e) = self
+                                    .validate_embedding_space(
+                                        &sanitized_table,
+                                        &embedding_config,
+                                        Some(vector.len()),
+                                        false,
+                                    )
+                                    .await
+                                {
+                                    return Ok(json!({
+                                        "content": [{ "type": "text", "text": format!("{e}") }],
+                                        "isError": true
+                                    }));
+                                }
+                            }
+                        }
 
                         let esc_text = escape_sql_literal(query_text);
                         let candidate_k = (top_k * 3).max(20);
@@ -2418,6 +2863,11 @@ impl McpServer {
                             let _ = self.session().sql(&create_ddl).await;
                         }
 
+                        let embedding_config = self
+                            .embedding_config
+                            .read()
+                            .map(|config| config.clone())
+                            .unwrap_or_default();
                         let embedding: Option<Vec<f32>> =
                             if let Some(arr) = args.get("embedding").and_then(|v| v.as_array()) {
                                 Some(
@@ -2428,6 +2878,23 @@ impl McpServer {
                             } else {
                                 self.fetch_embedding(content).await
                             };
+                        let embedding_dim = embedding.as_ref().map(|vector| vector.len());
+                        if embedding_dim.is_some() && embedding_config.is_enabled() {
+                            if let Err(e) = self
+                                .validate_embedding_space(
+                                    &memory_table,
+                                    &embedding_config,
+                                    embedding_dim,
+                                    true,
+                                )
+                                .await
+                            {
+                                return Ok(json!({
+                                    "content": [{ "type": "text", "text": format!("{e}") }],
+                                    "isError": true
+                                }));
+                            }
+                        }
 
                         let tags_str = tags
                             .map(|arr| {
@@ -2466,12 +2933,34 @@ impl McpServer {
                         });
 
                         match self.insert_records_internal(&memory_table, &[record]).await {
-                            Ok(_) => Ok(json!({
-                                "content": [{
-                                    "type": "text",
-                                    "text": format!("Memory stored successfully with key: '{}' (embedding: {}).", key, embedding.is_some())
-                                }]
-                            })),
+                            Ok(_) => {
+                                let mut warnings = Vec::new();
+                                if let (Some(dim), true) =
+                                    (embedding_dim, embedding_config.is_enabled())
+                                {
+                                    let meta = Self::current_table_embedding_meta(
+                                        &embedding_config,
+                                        Some(dim),
+                                    );
+                                    if let Err(e) =
+                                        self.stamp_table_embedding_meta(&memory_table, &meta).await
+                                    {
+                                        warnings.push(format!(
+                                            "embedding metadata was not stored: {e}"
+                                        ));
+                                    }
+                                }
+                                let mut response = json!({
+                                    "content": [{
+                                        "type": "text",
+                                        "text": format!("Memory stored successfully with key: '{}' (embedding: {}).", key, embedding.is_some())
+                                    }]
+                                });
+                                if !warnings.is_empty() {
+                                    response["warnings"] = json!(warnings);
+                                }
+                                Ok(response)
+                            }
                             Err(e) => Ok(json!({
                                 "content": [{ "type": "text", "text": format!("Error storing memory: {}", e) }],
                                 "isError": true
@@ -2504,6 +2993,11 @@ impl McpServer {
                             }));
                         }
 
+                        let embedding_config = self
+                            .embedding_config
+                            .read()
+                            .map(|config| config.clone())
+                            .unwrap_or_default();
                         let query_vector: Option<Vec<f32>> =
                             if let Some(arr) = args.get("embedding").and_then(|v| v.as_array()) {
                                 Some(
@@ -2512,8 +3006,27 @@ impl McpServer {
                                         .collect(),
                                 )
                             } else {
-                                self.fetch_embedding(query).await
+                                self.fetch_query_embedding(query).await
                             };
+
+                        if let Some(vector) = &query_vector {
+                            if embedding_config.is_enabled() {
+                                if let Err(e) = self
+                                    .validate_embedding_space(
+                                        &memory_table,
+                                        &embedding_config,
+                                        Some(vector.len()),
+                                        false,
+                                    )
+                                    .await
+                                {
+                                    return Ok(json!({
+                                        "content": [{ "type": "text", "text": format!("{e}") }],
+                                        "isError": true
+                                    }));
+                                }
+                            }
+                        }
 
                         let esc_query = query.replace('\'', "''");
                         let tag_filter = tag
@@ -2588,6 +3101,29 @@ impl McpServer {
                                 }
                             };
 
+                        let embedding_config = self
+                            .embedding_config
+                            .read()
+                            .map(|config| config.clone())
+                            .unwrap_or_default();
+                        let mut embedding_dim: Option<usize> = None;
+                        if embed_col.is_some() && embedding_config.is_enabled() {
+                            if let Err(e) = self
+                                .validate_embedding_space(
+                                    &full_table_name,
+                                    &embedding_config,
+                                    None,
+                                    true,
+                                )
+                                .await
+                            {
+                                return Ok(json!({
+                                    "content": [{ "type": "text", "text": format!("{e}") }],
+                                    "isError": true
+                                }));
+                            }
+                        }
+
                         if let Some(col) = embed_col {
                             if let Err(e) = validate_sql_identifier(col) {
                                 return Ok(json!({
@@ -2600,6 +3136,9 @@ impl McpServer {
                                     if !obj.contains_key("embedding") {
                                         if let Some(text) = obj.get(col).and_then(|v| v.as_str()) {
                                             if let Some(vec) = self.fetch_embedding(text).await {
+                                                if embedding_dim.is_none() {
+                                                    embedding_dim = Some(vec.len());
+                                                }
                                                 let vec_str = format!(
                                                     "[{}]",
                                                     vec.iter()
@@ -2619,9 +3158,30 @@ impl McpServer {
                             .insert_records_internal(&full_table_name, &records)
                             .await
                         {
-                            Ok(count) => Ok(json!({
-                                "content": [{ "type": "text", "text": format!("Ingested {} records into {}.", count, full_table_name) }]
-                            })),
+                            Ok(count) => {
+                                let mut warnings = Vec::new();
+                                if let Some(dim) = embedding_dim {
+                                    let meta = Self::current_table_embedding_meta(
+                                        &embedding_config,
+                                        Some(dim),
+                                    );
+                                    if let Err(e) = self
+                                        .stamp_table_embedding_meta(&full_table_name, &meta)
+                                        .await
+                                    {
+                                        warnings.push(format!(
+                                            "embedding metadata was not stored: {e}"
+                                        ));
+                                    }
+                                }
+                                let mut response = json!({
+                                    "content": [{ "type": "text", "text": format!("Ingested {} records into {}.", count, full_table_name) }]
+                                });
+                                if !warnings.is_empty() {
+                                    response["warnings"] = json!(warnings);
+                                }
+                                Ok(response)
+                            }
                             Err(e) => Ok(json!({
                                 "content": [{ "type": "text", "text": format!("Error ingesting records into {}: {}", full_table_name, e) }],
                                 "isError": true
@@ -2685,6 +3245,28 @@ impl McpServer {
                                     }));
                                 }
                             };
+
+                        let embedding_config = self
+                            .embedding_config
+                            .read()
+                            .map(|config| config.clone())
+                            .unwrap_or_default();
+                        if embed_chunks && embedding_config.is_enabled() {
+                            if let Err(e) = self
+                                .validate_embedding_space(
+                                    &full_table_name,
+                                    &embedding_config,
+                                    None,
+                                    true,
+                                )
+                                .await
+                            {
+                                return Ok(json!({
+                                    "content": [{ "type": "text", "text": format!("{e}") }],
+                                    "isError": true
+                                }));
+                            }
+                        }
 
                         let ext = p
                             .extension()
@@ -3076,9 +3658,38 @@ impl McpServer {
                             .insert_records_internal(&full_table_name, &records)
                             .await
                         {
-                            Ok(count) => Ok(json!({
-                                "content": [{ "type": "text", "text": format!("Ingested {} records from '{}' into {}.", count, file_path, full_table_name) }]
-                            })),
+                            Ok(count) => {
+                                let mut warnings = Vec::new();
+                                if embed_chunks {
+                                    let embedding_dim = records.iter().find_map(|record| {
+                                        record
+                                            .get("embedding")
+                                            .and_then(|value| value.as_str())
+                                            .and_then(vector_dim_from_string)
+                                    });
+                                    if let Some(dim) = embedding_dim {
+                                        let meta = Self::current_table_embedding_meta(
+                                            &embedding_config,
+                                            Some(dim),
+                                        );
+                                        if let Err(e) = self
+                                            .stamp_table_embedding_meta(&full_table_name, &meta)
+                                            .await
+                                        {
+                                            warnings.push(format!(
+                                                "embedding metadata was not stored: {e}"
+                                            ));
+                                        }
+                                    }
+                                }
+                                let mut response = json!({
+                                    "content": [{ "type": "text", "text": format!("Ingested {} records from '{}' into {}.", count, file_path, full_table_name) }]
+                                });
+                                if !warnings.is_empty() {
+                                    response["warnings"] = json!(warnings);
+                                }
+                                Ok(response)
+                            }
                             Err(e) => Ok(json!({
                                 "content": [{ "type": "text", "text": format!("Error ingesting file into {}: {}", full_table_name, e) }],
                                 "isError": true
@@ -3141,6 +3752,45 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "recall_memory"));
         assert!(tools.iter().any(|t| t["name"] == "ingest_records"));
         assert!(tools.iter().any(|t| t["name"] == "ingest_file"));
+        assert!(tools.iter().any(|t| t["name"] == "list_embedding_models"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_list_embedding_models_reports_local_catalogue() {
+        let server = McpServer::new();
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "list_embedding_models",
+                    "arguments": {}
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none(), "unexpected error: {res}");
+        let text = res["content"][0]["text"].as_str().unwrap();
+        let status: Value = serde_json::from_str(text).unwrap();
+
+        assert_eq!(status["provider"], "local");
+        assert_eq!(status["model"], "BAAI/bge-small-en-v1.5");
+        assert_eq!(status["dim"], 384);
+        assert_eq!(status["loaded"], false);
+        assert!(status["cache_dir"].as_str().unwrap().ends_with("models"));
+
+        let models = status["local_models"].as_array().unwrap();
+        assert!(
+            models
+                .iter()
+                .any(|m| m["huggingface_id"] == "BAAI/bge-small-en-v1.5"),
+            "default model missing from local catalogue"
+        );
+        assert!(
+            models
+                .iter()
+                .any(|m| m["fastembed_name"] == "BGESmallENV15Q"),
+            "quantized BGE-small variant missing"
+        );
     }
 
     #[tokio::test]
@@ -4974,7 +5624,13 @@ id,title,author,comment
             "warehouse": "/tmp/custom_wh",
             "readwrite_schemas": ["scratch", "sandbox"],
             "readonly_schemas": "default, prod_archive",
-            "default_write_schema": "sandbox"
+            "default_write_schema": "sandbox",
+            "embedding": {
+                "provider": "http",
+                "model": "text-embedding-3-small",
+                "url": "https://api.openai.com/v1/embeddings",
+                "api_key": "sk-test"
+            }
         }"#;
         let config: McpServerConfig = serde_json::from_str(json_config).unwrap();
         assert_eq!(config.warehouse.as_deref(), Some("/tmp/custom_wh"));
@@ -4984,6 +5640,19 @@ id,title,author,comment
         assert!(perms.is_schema_writable("scratch"));
         assert!(!perms.is_schema_writable("prod_archive"));
 
+        // OpenAI-compatible settings must survive JSON deserialization and must
+        // not inherit the BGE query prefix.
+        let embedding = config.embedding.as_ref().expect("embedding config");
+        assert_eq!(embedding.provider, Some(EmbeddingProvider::Http));
+        assert_eq!(embedding.resolved_provider(), EmbeddingProvider::Http);
+        assert_eq!(embedding.model, "text-embedding-3-small");
+        assert_eq!(
+            embedding.url.as_deref(),
+            Some("https://api.openai.com/v1/embeddings")
+        );
+        assert_eq!(embedding.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(embedding.effective_query_prefix(), "");
+
         // 2. CLI Argument parsing
         let args = vec![
             "--warehouse".to_string(),
@@ -4992,12 +5661,25 @@ id,title,author,comment
             "scratch,dev".to_string(),
             "--readonly-schemas".to_string(),
             "default,finance".to_string(),
+            "--embedding-provider".to_string(),
+            "http".to_string(),
+            "--embedding-model".to_string(),
+            "text-embedding-3-small".to_string(),
+            "--embedding-url".to_string(),
+            "https://api.openai.com/v1/embeddings".to_string(),
         ];
         let cli_cfg = McpServerConfig::from_args(&args).unwrap();
         assert_eq!(cli_cfg.warehouse.as_deref(), Some("/tmp/cli_wh"));
         let cli_perms = cli_cfg.to_permissions();
         assert!(cli_perms.is_schema_writable("dev"));
         assert!(!cli_perms.is_schema_writable("finance"));
+        let cli_embedding = cli_cfg.embedding.as_ref().expect("CLI embedding config");
+        assert_eq!(cli_embedding.provider, Some(EmbeddingProvider::Http));
+        assert_eq!(cli_embedding.model, "text-embedding-3-small");
+        assert_eq!(
+            cli_embedding.url.as_deref(),
+            Some("https://api.openai.com/v1/embeddings")
+        );
 
         // 3. Dynamic initializationOptions handshake with catalog policy
         let temp_wh = tempfile::tempdir().unwrap();
@@ -5141,6 +5823,377 @@ id,title,author,comment
         assert_eq!(
             bad_ingest["isError"], true,
             "expected ingest_file remote URL rejection: {bad_ingest}"
+        );
+    }
+
+    /// Minimal one-shot HTTP server for embedding-provider tests. Returns the
+    /// base URL and a receiver for the raw request line/headers/body.
+    fn spawn_mock_embedding_server(
+        response_body: &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock embedding server");
+        let addr = listener.local_addr().expect("mock embedding server addr");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 16 * 1024];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                let _ = tx.send(request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://{}", addr), rx)
+    }
+
+    #[tokio::test]
+    async fn test_openai_compatible_embedding_endpoint() {
+        let (base_url, rx) =
+            spawn_mock_embedding_server(r#"{"data":[{"embedding":[0.1,0.2,0.3]}]}"#);
+        let server = McpServer::new();
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            *config = EmbeddingConfig {
+                provider: Some(EmbeddingProvider::Http),
+                model: "text-embedding-3-small".to_string(),
+                url: Some(format!("{base_url}/v1/embeddings")),
+                api_key: Some("sk-test".to_string()),
+                ..Default::default()
+            };
+        }
+
+        let vector = server
+            .fetch_query_embedding("hello")
+            .await
+            .expect("OpenAI-compatible embedding");
+        assert_eq!(vector, vec![0.1, 0.2, 0.3]);
+
+        let request = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("mock server received request");
+        assert!(
+            request.contains("Bearer sk-test"),
+            "missing bearer auth: {request}"
+        );
+        assert!(
+            request.contains(r#""model":"text-embedding-3-small""#),
+            "missing model: {request}"
+        );
+        assert!(
+            request.contains(r#""input":"hello""#),
+            "OpenAI models must not get the BGE prefix: {request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ollama_bge_endpoint_applies_query_prefix_only_to_queries() {
+        let (base_url, rx) = spawn_mock_embedding_server(r#"{"embedding":[0.5,0.5]}"#);
+        let server = McpServer::new();
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            *config = EmbeddingConfig {
+                provider: Some(EmbeddingProvider::Http),
+                model: "BAAI/bge-small-en-v1.5".to_string(),
+                url: Some(format!("{base_url}/api/embeddings")),
+                ..Default::default()
+            };
+        }
+
+        let vector = server
+            .fetch_query_embedding("vector search")
+            .await
+            .expect("Ollama query embedding");
+        assert_eq!(vector, vec![0.5, 0.5]);
+        let request = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("mock server received query request");
+        assert!(
+            request.contains(
+                r#""prompt":"Represent this sentence for searching relevant passages: vector search""#
+            ),
+            "BGE query prefix missing: {request}"
+        );
+
+        // A document embedding must use the same endpoint without the query prefix.
+        let (base_url, rx) = spawn_mock_embedding_server(r#"{"embedding":[0.25,0.75]}"#);
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            config.url = Some(format!("{base_url}/api/embeddings"));
+        }
+        let vector = server
+            .fetch_embedding("document text")
+            .await
+            .expect("Ollama document embedding");
+        assert_eq!(vector, vec![0.25, 0.75]);
+        let request = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("mock server received document request");
+        assert!(
+            request.contains(r#""prompt":"document text""#),
+            "documents must not get the query prefix: {request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_disabled_embeddings_return_none_without_io() {
+        let server = McpServer::new();
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            config.provider = Some(EmbeddingProvider::None);
+            config.url = Some("http://127.0.0.1:9/never".to_string());
+        }
+        assert!(server.fetch_query_embedding("anything").await.is_none());
+        assert!(server.fetch_embedding("anything").await.is_none());
+        assert!(server.fetch_image_embedding("aGVsbG8=").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_local_provider_does_not_attempt_image_embeddings() {
+        let server = McpServer::new();
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            *config = EmbeddingConfig {
+                provider: Some(EmbeddingProvider::Local),
+                ..Default::default()
+            };
+        }
+        // No model load should occur for images under the local text provider.
+        assert!(server.fetch_image_embedding("aGVsbG8=").await.is_none());
+    }
+
+    async fn create_vector_table(server: &McpServer, table: &str) {
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": {
+                        "table_name": table,
+                        "schema_ddl": "content VARCHAR, embedding VARCHAR"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none(), "create table failed: {res}");
+    }
+
+    async fn insert_vector_row(server: &McpServer, table: &str, content: &str, vector: &str) {
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_records",
+                    "arguments": {
+                        "table_name": table,
+                        "records": [{ "content": content, "embedding": vector }]
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none(), "insert failed: {res}");
+    }
+
+    async fn set_embedding_properties(
+        server: &McpServer,
+        table: &str,
+        model: &str,
+        dim: usize,
+        provider: &str,
+    ) {
+        let sql = format!(
+            "ALTER TABLE scratch.{table} SET TBLPROPERTIES \
+             ('{EMBEDDING_MODEL_PROP}' = '{model}', \
+              '{EMBEDDING_DIM_PROP}' = '{dim}', \
+              '{EMBEDDING_PROVIDER_PROP}' = '{provider}')"
+        );
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({"name": "execute_sql", "arguments": {"query": sql}}),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none(), "set properties failed: {res}");
+    }
+
+    #[tokio::test]
+    async fn test_http_ingest_stamps_embedding_metadata() {
+        let (base_url, rx) = spawn_mock_embedding_server(r#"{"data":[{"embedding":[0.1,0.2]}]}"#);
+        let server = McpServer::new();
+        let url = format!("{base_url}/v1/embeddings");
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            *config = EmbeddingConfig {
+                provider: Some(EmbeddingProvider::Http),
+                model: "custom-embed-v1".to_string(),
+                url: Some(url.clone()),
+                api_key: Some("sk-test".to_string()),
+                ..Default::default()
+            };
+        }
+
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_records",
+                    "arguments": {
+                        "table_name": "stamped",
+                        "records": [{ "content": "hello world" }],
+                        "embed_col": "content"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(res.get("isError").is_none(), "ingest failed: {res}");
+        let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+
+        let table = server
+            .session()
+            .resolve_table("scratch.stamped")
+            .await
+            .expect("resolve stamped table");
+        let props = table.properties_async().await.expect("table properties");
+        assert_eq!(
+            props.get(EMBEDDING_MODEL_PROP).map(String::as_str),
+            Some("custom-embed-v1")
+        );
+        assert_eq!(props.get(EMBEDDING_DIM_PROP).map(String::as_str), Some("2"));
+        assert_eq!(
+            props.get(EMBEDDING_PROVIDER_PROP).map(String::as_str),
+            Some("http")
+        );
+        assert_eq!(
+            props.get(EMBEDDING_ENDPOINT_PROP).map(String::as_str),
+            Some(url.as_str())
+        );
+        // The API key must never be persisted.
+        assert!(!props.values().any(|value| value.contains("sk-test")));
+    }
+
+    #[tokio::test]
+    async fn test_write_refuses_embedding_model_mismatch() {
+        let server = McpServer::new();
+        create_vector_table(&server, "guarded").await;
+        insert_vector_row(&server, "guarded", "legacy", "[0.1, 0.2]").await;
+        set_embedding_properties(&server, "guarded", "other-model", 2, "local").await;
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            *config = EmbeddingConfig {
+                provider: Some(EmbeddingProvider::Local),
+                model: "BAAI/bge-small-en-v1.5".to_string(),
+                ..Default::default()
+            };
+        }
+
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "ingest_records",
+                    "arguments": {
+                        "table_name": "guarded",
+                        "records": [{ "content": "new document" }],
+                        "embed_col": "content"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res["isError"], true, "expected refusal: {res}");
+        let message = res["content"][0]["text"].as_str().unwrap();
+        assert!(
+            message.contains("embedding model mismatch"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_search_refuses_embedding_dimension_mismatch() {
+        let server = McpServer::new();
+        create_vector_table(&server, "dim_guard").await;
+        insert_vector_row(&server, "dim_guard", "alpha", "[0.1, 0.2]").await;
+        set_embedding_properties(&server, "dim_guard", "custom-model", 2, "http").await;
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            *config = EmbeddingConfig {
+                provider: Some(EmbeddingProvider::Http),
+                model: "custom-model".to_string(),
+                url: Some("http://127.0.0.1:9/v1/embeddings".to_string()),
+                ..Default::default()
+            };
+        }
+
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "hybrid_search",
+                    "arguments": {
+                        "table": "scratch.dim_guard",
+                        "query_text": "alpha",
+                        "query_vector": [0.1, 0.2, 0.3],
+                        "text_col": "content",
+                        "vector_col": "embedding"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res["isError"], true, "expected refusal: {res}");
+        let message = res["content"][0]["text"].as_str().unwrap();
+        assert!(
+            message.contains("dimension mismatch"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_legacy_vectors_without_metadata_remain_searchable() {
+        let server = McpServer::new();
+        create_vector_table(&server, "legacy_search").await;
+        insert_vector_row(&server, "legacy_search", "alpha", "[0.1, 0.2]").await;
+        {
+            let mut config = server.embedding_config.write().unwrap();
+            *config = EmbeddingConfig {
+                provider: Some(EmbeddingProvider::Http),
+                model: "custom-model".to_string(),
+                url: Some("http://127.0.0.1:9/v1/embeddings".to_string()),
+                ..Default::default()
+            };
+        }
+
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "hybrid_search",
+                    "arguments": {
+                        "table": "scratch.legacy_search",
+                        "query_text": "alpha",
+                        "query_vector": [0.1, 0.2],
+                        "text_col": "content",
+                        "vector_col": "embedding"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            res.get("isError").is_none(),
+            "legacy read should not be refused: {res}"
         );
     }
 }

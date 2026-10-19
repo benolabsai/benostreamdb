@@ -19,7 +19,7 @@ It exposes analytical streaming SQL, vector similarity search, reciprocal rank f
 - **Multi-Modal Document & Asset Ingestion**:
   - **PDF Documents** (`.pdf`): In-memory full-text extraction via `pdf-extract` with line-bounded semantic chunking.
   - **Excel & Spreadsheets** (`.xlsx`, `.xls`, `.xlsb`, `.ods`): Pure-Rust workbook parsing via `calamine` with automatic schema inference, sheet & row tracking, and typed columns.
-  - **Multimodal Images** (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`): Byte conversion to base64 Data URIs (`data:image/...`) ready for vision LLMs, with optional multimodal vision embeddings.
+  - **Multimodal Images** (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`): Byte conversion to base64 Data URIs (`data:image/...`) ready for vision LLMs. Image vectors are generated only when `embed_chunks: true` **and** an HTTP multimodal endpoint is configured; the local text model does not embed images.
   - **Source Code & Text** (`.rs`, `.py`, `.ts`, `.md`, `.txt`, `.csv`, `.log`): Configurable line chunking with start/end line offsets.
   - **JSON & NDJSON** (`.json`, `.jsonl`, `.ndjson`): Direct batch or streaming record ingestion.
 - **Safe Scratchpad Isolation**: Strict security guard ensuring the primary catalog remains read-only, while granting agents complete freedom to create, populate, query, and index ephemeral tables in the `scratch` schema.
@@ -59,8 +59,7 @@ On Windows: `%APPDATA%\Claude\claude_desktop_config.json`
       ],
       "env": {
         "BSDB_GPU_DEVICE": "auto",
-        "BSDB_EMBEDDING_URL": "http://localhost:11434/api/embeddings",
-        "BSDB_EMBEDDING_MODEL": "all-minilm"
+        "BSDB_EMBEDDING_MODEL": "BAAI/bge-small-en-v1.5"
       }
     }
   }
@@ -80,8 +79,8 @@ You can configure options directly via CLI flags, environment variables, or inli
         "--config", "{\"warehouse\":\"/path/to/warehouse\",\"readwrite_schemas\":[\"scratch\",\"analytics\"],\"readonly_schemas\":[\"default\",\"raw\"]}"
       ],
       "env": {
-        "BSDB_EMBEDDING_URL": "http://localhost:11434/api/embeddings",
-        "BSDB_EMBEDDING_MODEL": "all-minilm"
+        "BSDB_EMBEDDING_MODEL": "BAAI/bge-small-en-v1.5",
+        "BSDB_EMBEDDING_CACHE_DIR": "/home/me/.benostreamdb/models"
       }
     }
   }
@@ -203,17 +202,184 @@ session.set_schema_access("finance_raw", true)?;
 | `--ephemeral` | `BSDB_EPHEMERAL` | `"ephemeral"` | If true (`1`), uses an ephemeral temporary directory for the session. | `false` |
 | `--config <JSON>` | `BSDB_MCP_CONFIG` | N/A | Full JSON configuration string. | None |
 | `--config-file <PATH>` | N/A | N/A | Path to a `.json` configuration file. | None |
-| N/A | `BSDB_GPU_DEVICE` | N/A | Hardware acceleration target (`auto`, `cpu`, `cuda`, `mps`). | `auto` |
-| N/A | `BSDB_EMBEDDING_URL` | N/A | Endpoint for vector embeddings (Ollama / OpenAI compatible). | None |
-| N/A | `BSDB_EMBEDDING_MODEL`| N/A | Model identifier for embeddings. | `all-minilm` |
-| N/A | `BSDB_EMBEDDING_API_KEY`| N/A | Bearer auth token for embedding APIs. | None |
+| N/A | `BSDB_GPU_DEVICE` | N/A | Hardware acceleration target for vector indexes (`auto`, `cpu`, `cuda`, `mps`). | `auto` |
+| `--embedding-model <HF_ID>` | `BSDB_EMBEDDING_MODEL` | `"embedding": {"model": "..."}` | Hugging Face embedding model. | `BAAI/bge-small-en-v1.5` |
+| `--embedding-provider <P>` | `BSDB_EMBEDDING_PROVIDER` | `"embedding": {"provider": "..."}` | `local` (in-process ONNX), `http`, or `none`. | `local` unless `url` is set |
+| `--embedding-cache-dir <PATH>` | `BSDB_EMBEDDING_CACHE_DIR` | `"embedding": {"cache_dir": "..."}` | Private model cache; reused after the first download. | `<data-dir>/models` |
+| `--embedding-url <URL>` | `BSDB_EMBEDDING_URL` | `"embedding": {"url": "..."}` | Ollama / OpenAI-compatible / TEI endpoint. | None |
+| `--embedding-api-key <KEY>` | `BSDB_EMBEDDING_API_KEY` | `"embedding": {"api_key": "..."}` | Bearer token for the HTTP endpoint. | None |
+| `--embedding-model-path <PATH>` | `BSDB_EMBEDDING_MODEL_PATH` | `"embedding": {"model_path": "..."}` | Local ONNX directory for arbitrary HF models. | None |
+| `--embedding-batch-size <N>` | `BSDB_EMBEDDING_BATCH_SIZE` | `"embedding": {"batch_size": N}` | ONNX inference batch size. | `32` |
+| `--embedding-max-length <N>` | `BSDB_EMBEDDING_MAX_LENGTH` | `"embedding": {"max_length": N}` | Tokenizer truncation length. | `512` |
+| `--embedding-dim <N>` | `BSDB_EMBEDDING_DIM` | `"embedding": {"dim": N}` | Override/declare vector dimension. | Model default |
+| `--embedding-device <D>` | `BSDB_EMBEDDING_DEVICE` | `"embedding": {"device": "..."}` | `cpu`, `auto`, or `cuda` (local build is CPU-only). | `cpu` |
+| N/A | `BSDB_EMBEDDING_INTRA_THREADS` | `"embedding": {"intra_threads": N}` | ONNX Runtime intra-op thread count. | Auto |
+| N/A | `BSDB_EMBEDDING_QUANTIZED` | `"embedding": {"quantized": bool}` | Prefer the quantized ONNX variant when available. | `true` |
+| N/A | `BSDB_EMBEDDING_QUERY_PREFIX` | `"embedding": {"query_prefix": "..."}` | Override the query instruction prefix. Empty string disables it. | Model default |
+| N/A | `BSDB_EMBEDDING_DOCUMENT_PREFIX` | `"embedding": {"document_prefix": "..."}` | Override the document instruction prefix. Empty string disables it. | Model default |
+| N/A | `BSDB_EMBEDDING_POOLING` | `"embedding": {"pooling": "mean"}` | Pooling for `model_path` models: `mean` or `cls`. | `cls` |
+| N/A | `BSDB_EMBEDDING_SHOW_DOWNLOAD_PROGRESS` | `"embedding": {"show_download_progress": bool}` | Show Hugging Face download progress on first use. | `true` |
+| `--no-embeddings` | N/A | `"embedding": {"provider": "none"}` | Disable embedding generation entirely. | Off |
 
 > [!TIP]
-> If `BSDB_EMBEDDING_URL` is omitted, `ingest_file`, `ingest_records`, `store_memory`, and `hybrid_search` continue to function seamlessly using pre-computed vectors or text-only retrieval.
+> `local` is the default and needs no API key or daemon. The first embedding call downloads the
+> quantized ONNX model into the BenoStreamDB private cache (`~/.benostreamdb/models` by default)
+> and reuses it on every subsequent start. `BSDB_EMBEDDING_URL` switches to HTTP automatically
+> when `provider` is not set, preserving the previous Ollama/OpenAI-compatible workflow.
+
+#### Embedding configuration
+
+```json
+{
+  "warehouse": "/path/to/warehouse",
+  "embedding": {
+    "provider": "local",
+    "model": "BAAI/bge-small-en-v1.5",
+    "quantized": true,
+    "cache_dir": "/home/me/.benostreamdb/models",
+    "batch_size": 32,
+    "max_length": 512,
+    "device": "cpu"
+  }
+}
+```
+
+**How embeddings are used**
+
+Embedding generation is automatic once a provider is configured (local is the default):
+
+| Tool | Embedding behavior |
+|:---|:---|
+| `ingest_file` | Only when `embed_chunks: true`. Text/code/PDF/Office chunks are embedded; images require an HTTP multimodal endpoint. |
+| `ingest_records` | Only when `embed_col` names a text column. |
+| `store_memory` | Auto-embeds `content` unless an `embedding` is supplied. |
+| `recall_memory` | Auto-embeds `query` unless an `embedding` is supplied. |
+| `hybrid_search` | Auto-embeds `query_text` unless `query_vector` is supplied. |
+| `graph_rag_search` | Requires `query_vector`; compute it with the same model as the table. |
+
+**Local Hugging Face model (default)**
+
+- `BAAI/bge-small-en-v1.5` is retrieval-tuned, 384-d, and quantized by default.
+- Documents are embedded plain; queries get
+  `Represent this sentence for searching relevant passages: `. The prefix is applied automatically.
+  Override it with `query_prefix` / `BSDB_EMBEDDING_QUERY_PREFIX` only if the model expects
+  something different.
+- The model is downloaded once into `~/.benostreamdb/models` (or `$XDG_DATA_HOME/benostreamdb/models`)
+  and reused. Set `cache_dir` / `BSDB_EMBEDDING_CACHE_DIR` to move it.
+- Loading is lazy: the first embedding call pays the model load; `initialize` and SQL-only sessions
+  do not.
+
+**Selecting a different local model**
+
+Any model in the `fastembed` catalogue can be selected by Hugging Face id:
+
+```json
+{ "embedding": { "model": "BAAI/bge-base-en-v1.5", "quantized": true } }
+```
+
+Common choices: `BAAI/bge-base-en-v1.5` (768-d), `BAAI/bge-large-en-v1.5` (1024-d),
+`intfloat/multilingual-e5-small`, `nomic-ai/nomic-embed-text-v1.5`,
+`mixedbread-ai/mxbai-embed-large-v1`, `jinaai/jina-embeddings-v2-base-code`.
+
+For a model outside the catalogue, either:
+
+- point `model_path` at a directory containing `model.onnx`, `tokenizer.json`, `config.json`, and the
+  optional tokenizer config files (`pooling: "mean"` or `"cls"` as required), or
+- use an HTTP embedding endpoint (next section).
+
+**Override with an OpenAI-compatible / LLM vendor endpoint**
+
+Embeddings must come from an **embedding** endpoint, not a chat completion. Set
+`provider: "http"` and point `url` at the vendor endpoint:
+
+Inside the server JSON/config file:
+
+```json
+{
+  "embedding": {
+    "provider": "http",
+    "model": "text-embedding-3-small",
+    "url": "https://api.openai.com/v1/embeddings",
+    "api_key": "sk-..."
+  }
+}
+```
+
+Complete MCP client settings example (preferred: keep the key in an environment variable rather
+than the JSON file):
+
+```json
+{
+  "mcpServers": {
+    "benostreamdb": {
+      "command": "benostreamdb-mcp",
+      "args": ["--warehouse", "/path/to/warehouse"],
+      "env": {
+        "BSDB_EMBEDDING_PROVIDER": "http",
+        "BSDB_EMBEDDING_MODEL": "text-embedding-3-small",
+        "BSDB_EMBEDDING_URL": "https://api.openai.com/v1/embeddings",
+        "BSDB_EMBEDDING_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+The local model is not loaded and the model cache is unused when `provider` is `http`. The
+`embedding` object and the `BSDB_EMBEDDING_*` variables are equivalent; use whichever your MCP client
+supports.
+
+Ollama:
+
+```json
+{
+  "embedding": {
+    "provider": "http",
+    "model": "nomic-embed-text",
+    "url": "http://localhost:11434/api/embeddings"
+  }
+}
+```
+
+Hugging Face Text Embeddings Inference (TEI) or any OpenAI-compatible server:
+
+```json
+{
+  "embedding": {
+    "provider": "http",
+    "model": "BAAI/bge-small-en-v1.5",
+    "url": "http://localhost:8080/v1/embeddings"
+  }
+}
+```
+
+When `provider` is `http`, the `model` string is sent verbatim. Instruction prefixes are applied
+only for known BGE/E5/Nomic ids; OpenAI-style ids such as `text-embedding-3-small` are sent as-is.
+
+**Changing models forces a re-embed.** This server stamps `benostream.embedding.model`,
+`benostream.embedding.dim`, and the provider/prefix onto the table as Iceberg table properties. Those
+properties are mirrored into `metadata/vN.metadata.json`, so Spark, Trino, and PyIceberg can read them
+as well; `ALTER TABLE ... SET TBLPROPERTIES` from any SQL client is visible here too.
+
+The engine enforces the same contract on every connector that writes through it: Python and SQL writes
+reject vectors whose length does not match the declared dimension, and changing or removing the declared
+model/dim on a non-empty table is rejected at the commit point (including Iceberg REST `set-properties`
+from Spark/Trino). The engine derives `dim` from a known model id (BGE, E5, Nomic, OpenAI, ...) or from
+a `FixedSizeList` column when you do not set it, so only custom models and MRL truncation need an
+explicit `dim`. Model identity itself is not recoverable from a vector, so a client that rewrites vectors
+outside the table is out of scope. Fixed-size vector columns are checked from the schema on every
+write; set `BSDB_VALIDATE_EMBEDDINGS=strict` to also scan list/stringified vectors row by row. Recreate
+or re-ingest the table when the model changes so query and document vectors never mix spaces.
+`provider: "none"` disables embedding generation entirely and avoids all model work.
+
+**Images:** `ingest_file` accepts PNG/JPEG/WebP/GIF/SVG and stores a base64 data URI for vision
+LLMs. Local text models do not embed images; use `provider: "http"` with a multimodal endpoint if
+you want image vectors. Do not mix CLIP/image vectors with `bge-small` text vectors in the same
+column.
 
 ---
 
-## Complete MCP Tool Reference (11 Tools)
+## Complete MCP Tool Reference (12 Tools)
 
 ### 1. `execute_sql`
 Executes an arbitrary SQL query against the database engine.
@@ -278,7 +444,7 @@ Stores persistent semantic memory for the AI agent with automated or custom embe
   - `key` (*string*, required): Unique memory key or identifier.
   - `content` (*string*, required): The text memory or concept to remember.
   - `tags` (*array of strings*, optional): Filtering tags (e.g. `["user_pref", "ui"]`).
-  - `embedding` (*array of numbers*, optional): Pre-computed vector. If omitted and `BSDB_EMBEDDING_URL` is configured, an embedding is generated automatically.
+  - `embedding` (*array of numbers*, optional): Pre-computed vector. If omitted, the configured provider embeds `content` automatically (local BGE-small by default).
 
 ### 9. `recall_memory`
 Retrieves memories matching a query text or vector, sorted by semantic similarity score, with optional tag filtering.
@@ -301,7 +467,28 @@ Universal file ingestion tool supporting documents, spreadsheets, multimodal ima
   - `file_path` (*string*, required): Absolute path to the file.
   - `table_name` (*string*, optional): Destination table in the `scratch` schema. Defaults to the sanitized file stem (e.g. `report_2024.pdf` becomes `scratch.report_2024`).
   - `chunk_size` (*integer*, optional, default `500`): Character chunk size for text/code/PDF line chunking.
-  - `embed_chunks` (*boolean*, optional, default `false`): Whether to compute embeddings for extracted chunks or images.
+  - `embed_chunks` (*boolean*, optional, default `false`): Compute embeddings for extracted text/code/PDF/Office chunks. Images are only embedded when an HTTP multimodal endpoint is configured; the local text model skips them.
+
+### 12. `list_embedding_models`
+Reports the active embedding provider, resolved model, dimension, cache directory, load state, query/document prefixes, and HTTP endpoint (if any), then enumerates every Hugging Face model available for local, no-LLM inference. Use the returned `huggingface_id` or `fastembed_name` as `embedding.model`.
+- **Arguments**: None.
+- **Example response**:
+  ```json
+  {
+    "provider": "local",
+    "model": "BAAI/bge-small-en-v1.5",
+    "resolved_model": "BGESmallENV15Q",
+    "dim": 384,
+    "quantized": true,
+    "cache_dir": "/home/me/.benostreamdb/models",
+    "loaded": false,
+    "providers": ["local", "http", "none"],
+    "local_models": [
+      { "huggingface_id": "BAAI/bge-small-en-v1.5", "fastembed_name": "BGESmallENV15", "dim": 384 },
+      { "huggingface_id": "BAAI/bge-small-en-v1.5", "fastembed_name": "BGESmallENV15Q", "dim": 384 }
+    ]
+  }
+  ```
 
 ---
 
@@ -311,7 +498,7 @@ Universal file ingestion tool supporting documents, spreadsheets, multimodal ima
 |:---|:---|:---|:---|
 | **PDF Documents** | `.pdf` | `pdf-extract` (pure Rust) | `path`, `chunk_index`, `start_line`, `end_line`, `content`, `format`, `embedding` (optional) |
 | **Excel & Spreadsheets** | `.xlsx`, `.xls`, `.xlsb`, `.ods` | `calamine` (pure Rust) | `sheet`, `row_index`, `<col_headers...>`, `embedding` (optional) |
-| **Multimodal Images** | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg` | Base64 Data URI engine | `path`, `format`, `content` (`data:image/...;base64`), `size_bytes`, `embedding` (optional) |
+| **Multimodal Images** | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg` | Base64 Data URI engine | `path`, `format`, `content` (`data:image/...;base64`), `size_bytes`, `embedding` (optional; HTTP multimodal only) |
 | **Source Code & Text** | `.rs`, `.py`, `.js`, `.ts`, `.md`, `.txt`, `.csv`, `.sql`, `.log` | Built-in line-based chunker | `path`, `chunk_index`, `start_line`, `end_line`, `content`, `embedding` (optional) |
 | **JSON & NDJSON** | `.json`, `.jsonl`, `.ndjson` | `serde_json` | Direct structured table rows matching JSON schema |
 
@@ -344,7 +531,7 @@ Run the full MCP test suite:
 cargo test -p benostreamdb-mcp
 ```
 
-All 28 unit tests cover:
+All 45 unit tests cover:
 - Protocol initialization & tools listing
 - JSON configuration & dynamic MCP `initializationOptions` updates
 - Storage lockdown: rejection of remote URIs (`s3://`, `minio://`, `rustfs://`, `gcs://`) and location clauses
@@ -364,6 +551,9 @@ All 28 unit tests cover:
   - XML and ZIP archive ingestion
   - CSV, TSV, and PSV delimiter-separated parsing
   - JSON and NDJSON structured dataset loading
+- Local Hugging Face embedding configuration, model/dimension resolution, and private cache
+- OpenAI-compatible and Ollama embedding endpoints, query/document prefixes, and bearer auth
+- Embedding model/dimension provenance, mismatch refusal, and legacy-table behavior
 
 ---
 

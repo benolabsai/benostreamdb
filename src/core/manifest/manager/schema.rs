@@ -114,7 +114,10 @@ impl ManifestManager {
     /// MVCC: same optimistic-concurrency contract as `update_schema` — the
     /// `PutMode::Create` write of `v{N+1}.json` is the linearization point, and
     /// the retry loop rebases onto the latest snapshot on conflict.
-    pub async fn update_properties(&self, properties: HashMap<String, String>) -> Result<Manifest> {
+    pub async fn update_properties(
+        &self,
+        mut properties: HashMap<String, String>,
+    ) -> Result<Manifest> {
         let max_retries = 10;
         let mut attempt = 0;
 
@@ -125,6 +128,18 @@ impl ManifestManager {
                 self.load_latest_direct().await?
             };
             let new_ver = current_ver + 1;
+
+            // Fill in the dimension from a known model id, then enforce the
+            // embedding-space contract at the commit point. This covers SQL,
+            // Python, MCP, and catalog-driven `set-properties` calls.
+            crate::core::table::properties::normalize_embedding_properties(&mut properties);
+            let has_data = !current_manifest.entries.is_empty()
+                || current_manifest.manifest_list_path.is_some();
+            crate::core::table::properties::validate_embedding_property_transition(
+                &current_manifest.properties,
+                &properties,
+                has_data,
+            )?;
 
             let mut new_manifest = current_manifest.clone();
             new_manifest.version = new_ver;
@@ -156,6 +171,22 @@ impl ManifestManager {
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
                         .await;
+
+                    // Mirror the properties into `TableMetadata`, which is the
+                    // only view external readers (Spark/Trino/PyIceberg/Iceberg
+                    // REST) get. The manifest commit above is authoritative and
+                    // already durable, so a mirror failure is reported but does
+                    // not fail the logical update; the next data commit repairs
+                    // it from the manifest.
+                    if let Err(e) = self.sync_metadata_properties(&new_manifest).await {
+                        metrics::counter!("bsdb_metadata_property_sync_failures_total")
+                            .increment(1);
+                        tracing::warn!(
+                            error = %e,
+                            version = new_ver,
+                            "Committed table properties to the manifest but failed to mirror them into Iceberg metadata"
+                        );
+                    }
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Teardown helper: undo a published BenoStreamDB release, version by version.
 
-Given an engine version (e.g. ``0.12.0`` or ``v0.12.0``) this walks *every*
+Given an engine version (e.g. ``0.13.0`` or ``v0.13.0``) this walks *every*
 distribution the repository publishes and undoes it:
 
 * **PyPI**     -> *delete* the release via ``pypi-cleanup``. PyPI has no yank
@@ -65,15 +65,15 @@ Nothing is needed for a dry run.
 Usage
 -----
     # plan only (no credentials needed)
-    python scripts/release_teardown.py --version 0.12.0
+    python scripts/release_teardown.py --version 0.13.0
 
-    # do it (0.12.0 engine releases only)
+    # do it (0.13.0 engine releases only)
     PYPI_API_TOKEN=pypi-xxxx CARGO_REGISTRY_TOKEN=yyyy \\
-        python scripts/release_teardown.py --version v0.12.0 --no-independent --apply
+        python scripts/release_teardown.py --version v0.13.0 --no-independent --apply
 
     # one registry only
-    python scripts/release_teardown.py -v 0.12.0 --pypi-only  --apply
-    python scripts/release_teardown.py -v 0.12.0 --crates-only --apply
+    python scripts/release_teardown.py -v 0.13.0 --pypi-only  --apply
+    python scripts/release_teardown.py -v 0.13.0 --crates-only --apply
 """
 from __future__ import annotations
 
@@ -356,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         epilog=__doc__,
     )
     parser.add_argument("--version", "-v", required=True,
-                        help="engine version to tear down, e.g. 0.12.0 or v0.12.0")
+                        help="engine version to tear down, e.g. 0.13.0 or v0.13.0")
     parser.add_argument("--apply", action="store_true",
                         help="actually perform the deletes/yanks (default: plan only)")
     parser.add_argument("--pypi-only", action="store_true", help="skip crates.io")

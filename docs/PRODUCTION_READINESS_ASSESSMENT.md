@@ -1,12 +1,12 @@
 # BenoStreamDB — Release Readiness Assessment
-Date: 2026-10-03 (Updated for v0.12.0 Developer Preview)
+Date: 2026-10-03 (Updated for v0.13.0 Developer Preview)
 Scope: Architectural audit of core storage invariants, differential oracles, crash recovery, and security against the **Developer Preview Release Bar**.
-Current Version: 0.12.0
+Current Version: 0.13.0
 
 Status: **Developer Preview Ready** (All core integrity gates passed; enterprise HA/clustering deferred).
 
 > **Release Scope Notice:**  
-> For release v0.12.0, BenoStreamDB is evaluated against a **Developer Preview release standard** rather than an enterprise production service standard. The evaluation verifies that developers can install, query, and evaluate the engine without risk of silent data corruption or unhandled write loss. Enterprise operational controls (multi-node automatic failover, distributed cluster consensus, high-availability SLAs) are explicitly deferred to post-v1.0.
+> For release v0.13.0, BenoStreamDB is evaluated against a **Developer Preview release standard** rather than an enterprise production service standard. The evaluation verifies that developers can install, query, and evaluate the engine without risk of silent data corruption or unhandled write loss. Enterprise operational controls (multi-node automatic failover, distributed cluster consensus, high-availability SLAs) are explicitly deferred to post-v1.0.
 
 This assessment summarizes the verification of core invariants (WS1-WS5) and the end-to-end benchmark suite.
 

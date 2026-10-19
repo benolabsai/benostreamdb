@@ -22,10 +22,10 @@ print("\n--- BENOSTREAMDB RAG DEMO ---")
 # 3. Define Inference Functions
 def get_embeddings(texts):
     """Generate embeddings using a hosted model"""
-    # Using 'all-MiniLM-L6-v2' (fast, versatile)
+    # Retrieval-tuned 384-d default.
     return client.feature_extraction(
         texts,
-        model="sentence-transformers/all-MiniLM-L6-v2"
+        model="BAAI/bge-small-en-v1.5"
     )
 
 def get_answer(question, contexts):

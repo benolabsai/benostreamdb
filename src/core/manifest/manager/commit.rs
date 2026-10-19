@@ -76,6 +76,7 @@ impl ManifestManager {
 
             // 1. Calculate new state
             let all_entries = self.load_all_entries(&current_manifest).await?;
+            let has_data = !all_entries.is_empty() || !add_entries.is_empty();
             let mut active_map: HashMap<String, ManifestEntry> = all_entries
                 .into_iter()
                 .map(|e| (e.file_path.clone(), e))
@@ -452,6 +453,21 @@ impl ManifestManager {
                 }
             }
 
+            // Fill in the dimension from a known model id, then enforce the
+            // embedding-space contract on the exact map being committed. This
+            // is the path used by the Iceberg REST catalog (Spark/Trino) and by
+            // every property update that is not a plain `Table` call.
+            crate::core::table::properties::normalize_embedding_properties(
+                &mut new_manifest.properties,
+            );
+            if metadata.updated_properties.is_some() || metadata.removed_properties.is_some() {
+                crate::core::table::properties::validate_embedding_property_transition(
+                    &current_manifest.properties,
+                    &new_manifest.properties,
+                    has_data,
+                )?;
+            }
+
             new_manifest.partition_specs = if let Some(specs) = &metadata.updated_partition_specs {
                 specs.clone()
             } else {
@@ -494,6 +510,26 @@ impl ManifestManager {
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
                         .await;
+
+                    // Metadata-only `set-properties` commits (e.g. the Iceberg
+                    // REST catalog) do not go through `write.rs`, so mirror
+                    // their properties into `TableMetadata` here. Data commits
+                    // are synced by the writer together with their snapshot.
+                    let metadata_only = add_entries.is_empty() && remove_paths.is_empty();
+                    if metadata_only
+                        && (metadata.updated_properties.is_some()
+                            || metadata.removed_properties.is_some())
+                    {
+                        if let Err(e) = self.sync_metadata_properties(&new_manifest).await {
+                            metrics::counter!("bsdb_metadata_property_sync_failures_total")
+                                .increment(1);
+                            tracing::warn!(
+                                error = %e,
+                                version = new_ver,
+                                "Committed table properties to the manifest but failed to mirror them into Iceberg metadata"
+                            );
+                        }
+                    }
 
                     return Ok(new_manifest);
                 }

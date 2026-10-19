@@ -46,6 +46,8 @@ Configure the server via environment variables:
 |:---|:---|:---|
 | `BSDB_FLIGHT_BIND` | Bind address for gRPC listener | `127.0.0.1` |
 | `BSDB_FLIGHT_PORT` | Port for Flight SQL listener | `50051` |
+| `BSDB_FLIGHT_MAX_ROWS` | Row cap applied to Arrow Flight result sets | `100000` |
+| `BSDB_FLIGHT_READ_ONLY` | Refuse DDL, DML, and ingest. Set to `1`/`true` | Unset (writes enabled) |
 | `BSDB_WAREHOUSE` | Default storage warehouse for created tables | `./data` |
 | `BSDB_CONFIG` | Path to catalog configuration TOML | Unset |
 | `BSDB_API_KEY` | Shared secret API key for client auth | Unset |

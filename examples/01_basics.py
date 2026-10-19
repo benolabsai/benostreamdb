@@ -40,8 +40,8 @@ def run_demo():
     df["category"] = df["label"].map(label_map)
 
     # 3. Embedding
-    print(f"Embedding {len(df)} articles using all-MiniLM-L6-v2...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    print(f"Embedding {len(df)} articles using BAAI/bge-small-en-v1.5...")
+    model = SentenceTransformer("BAAI/bge-small-en-v1.5")
     embeddings = model.encode(df["text"].tolist())
     df["embedding"] = [list(e) for e in embeddings]
 

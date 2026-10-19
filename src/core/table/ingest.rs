@@ -586,6 +586,19 @@ impl Table {
             RecordBatch::try_new(table_schema.clone(), cols).unwrap_or_else(|_| batch.clone())
         };
 
+        // Bulk ingest is another connector entry point: apply the same
+        // dimension guard as the regular write path. Non-vector units skip the
+        // property read entirely.
+        let unit = std::slice::from_ref(&batch);
+        if crate::core::table::properties::batches_have_vector_columns(unit) {
+            let embedding_properties = self.properties_async().await?;
+            crate::core::table::properties::validate_embedding_batches(
+                &self.uri,
+                &embedding_properties,
+                unit,
+            )?;
+        }
+
         let segment_id = format!("seg_{}", uuid::Uuid::new_v4());
         let config = SegmentConfig::new(base_path, &segment_id)
             .with_index_all(index_all)

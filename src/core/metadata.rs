@@ -172,9 +172,23 @@ impl TableMetadata {
 
         storage.put(&path, json.into()).await?;
 
-        // Also update version-hint.text
+        // Advance `version-hint.text` monotonically. Data commits and
+        // properties-only commits both write metadata, and a writer that read an
+        // older head can finish last; regressing the hint would hide the newer
+        // metadata (and its table properties) from external readers.
         let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-        storage.put(&hint_path, version.to_string().into()).await?;
+        let current_version = match storage.get(&hint_path).await {
+            Ok(res) => res
+                .bytes()
+                .await
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+                .and_then(|value| value.trim().parse::<i32>().ok()),
+            Err(_) => None,
+        };
+        if current_version.is_none_or(|current| version >= current) {
+            storage.put(&hint_path, version.to_string().into()).await?;
+        }
 
         Ok(path.to_string())
     }

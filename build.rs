@@ -49,10 +49,10 @@ fn get_git_version() -> String {
     {
         if output.status.success() {
             let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            return format!("0.12.0-{}", hash);
+            return format!("{}-{}", env!("CARGO_PKG_VERSION"), hash);
         }
     }
 
     // Final fallback to Cargo.toml version
-    "0.12.0".to_string()
+    env!("CARGO_PKG_VERSION").to_string()
 }

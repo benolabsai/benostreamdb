@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use super::*;
-use arrow::array::{Int32Array, StringArray};
+use arrow::array::{FixedSizeListArray, Float32Array, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -356,6 +356,193 @@ async fn v3_row_lineage_assigns_monotonic_row_ids() -> Result<()> {
         Some(5),
         "next_row_id must advance to 5 after the second commit"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn table_properties_are_mirrored_into_iceberg_metadata() -> Result<()> {
+    // External readers (Spark, Trino, PyIceberg, Iceberg REST) only read
+    // `metadata/vN.metadata.json`. The manifest is this engine's source of
+    // truth, so a properties-only update must be mirrored there or
+    // `SET TBLPROPERTIES` (and MCP embedding provenance) stays invisible.
+    let dir = tempdir()?;
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+    let table = Table::new_async(uri.clone()).await?;
+
+    let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )?;
+    table.write_async(vec![batch]).await?;
+    table.commit_async().await?;
+
+    // Only the model is provided; the engine derives the dimension (384) from
+    // the known model catalogue.
+    table
+        .set_property_async("benostream.embedding.model", "BAAI/bge-small-en-v1.5")
+        .await?;
+
+    let store = crate::core::storage::create_object_store(&uri)?;
+    let meta = crate::core::metadata::TableMetadata::load_latest(store.as_ref()).await?;
+    assert_eq!(
+        meta.properties
+            .get("benostream.embedding.model")
+            .map(String::as_str),
+        Some("BAAI/bge-small-en-v1.5")
+    );
+    assert_eq!(
+        meta.properties
+            .get("benostream.embedding.dim")
+            .map(String::as_str),
+        Some("384")
+    );
+    assert_eq!(meta.snapshots.len(), 1, "property updates add no snapshot");
+
+    // A later data commit must preserve the properties in metadata.
+    let batch2 = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+        vec![Arc::new(Int32Array::from(vec![4, 5]))],
+    )?;
+    table.write_async(vec![batch2]).await?;
+    table.commit_async().await?;
+
+    let meta = crate::core::metadata::TableMetadata::load_latest(store.as_ref()).await?;
+    assert_eq!(
+        meta.properties
+            .get("benostream.embedding.model")
+            .map(String::as_str),
+        Some("BAAI/bge-small-en-v1.5")
+    );
+    assert_eq!(meta.snapshots.len(), 2, "data commit still adds a snapshot");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn metadata_only_property_commit_is_mirrored() -> Result<()> {
+    // The Iceberg REST catalog applies `set-properties` through
+    // `ManifestManager::commit` rather than `Table::set_property_async`, so the
+    // metadata-only branch must mirror properties too.
+    let dir = tempdir()?;
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+    let table = Table::new_async(uri.clone()).await?;
+
+    let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )?;
+    table.write_async(vec![batch]).await?;
+    table.commit_async().await?;
+
+    let store = crate::core::storage::create_object_store(&uri)?;
+    let manager = crate::core::manifest::ManifestManager::new(store.clone(), "", &uri);
+    manager
+        .commit(
+            &[],
+            &[],
+            crate::core::manifest::CommitMetadata {
+                updated_properties: Some(std::collections::HashMap::from([(
+                    "benostream.embedding.model".to_string(),
+                    "custom-embed-v1".to_string(),
+                )])),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let meta = crate::core::metadata::TableMetadata::load_latest(store.as_ref()).await?;
+    assert_eq!(
+        meta.properties
+            .get("benostream.embedding.model")
+            .map(String::as_str),
+        Some("custom-embed-v1")
+    );
+    assert_eq!(meta.snapshots.len(), 1, "property commit adds no snapshot");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_rejects_embedding_dimension_mismatch() -> Result<()> {
+    // The default schema-level guard lives in the engine write path, so a
+    // Python or SQL write cannot slip a differently-sized fixed vector past the
+    // MCP checks. String/list vectors are only row-scanned in strict mode.
+    let dir = tempdir()?;
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+    let table = Table::new_async(uri).await?;
+
+    table.set_property_async(EMBEDDING_DIM_PROP, "3").await?;
+
+    let item = Arc::new(Field::new("item", DataType::Float32, false));
+    let good = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "embedding",
+            DataType::FixedSizeList(item.clone(), 3),
+            false,
+        )])),
+        vec![Arc::new(FixedSizeListArray::new(
+            item.clone(),
+            3,
+            Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0])),
+            None,
+        ))],
+    )?;
+    table.write_async(vec![good]).await?;
+    table.commit_async().await?;
+
+    let bad = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "embedding",
+            DataType::FixedSizeList(item.clone(), 2),
+            false,
+        )])),
+        vec![Arc::new(FixedSizeListArray::new(
+            item,
+            2,
+            Arc::new(Float32Array::from(vec![1.0, 2.0])),
+            None,
+        ))],
+    )?;
+    let err = table
+        .write_async(vec![bad])
+        .await
+        .expect_err("mismatched vector must be rejected");
+    assert!(err.to_string().contains("dimension mismatch"), "{err}");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn embedding_properties_are_immutable_once_data_exists() -> Result<()> {
+    let dir = tempdir()?;
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+    let table = Table::new_async(uri).await?;
+
+    let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(Int32Array::from(vec![1]))])?;
+    table.write_async(vec![batch]).await?;
+    table.commit_async().await?;
+
+    // Adopting provenance on a legacy table is the documented repair path and
+    // must remain allowed even though data already exists.
+    table
+        .set_property_async(EMBEDDING_MODEL_PROP, "model-a")
+        .await?;
+    table.set_property_async(EMBEDDING_DIM_PROP, "3").await?;
+
+    let err = table
+        .set_property_async(EMBEDDING_MODEL_PROP, "model-b")
+        .await
+        .expect_err("model change on a non-empty table must be rejected");
+    assert!(err.to_string().contains(EMBEDDING_MODEL_PROP), "{err}");
+
+    // Writing the same value is a no-op and stays allowed.
+    table
+        .set_property_async(EMBEDDING_MODEL_PROP, "model-a")
+        .await?;
 
     Ok(())
 }

@@ -42,7 +42,7 @@ from concurrent.futures import ThreadPoolExecutor
 # ---------------------------------------------------------------------------
 
 DEFAULT_DUMP_DATE = "2026-09-01"
-DEFAULT_EMBED_MODEL = "all-MiniLM-L6-v2"
+DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_EMBED_DIMS = 384
 DEFAULT_UA = "BenoStreamDB/1.0 (https://github.com/benostreamdb) Python-urllib/3.0"
 

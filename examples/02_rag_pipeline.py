@@ -35,9 +35,9 @@ def run_rag_demo():
     print("Using stable CPU compute context")
 
     # 1. Setup Models
-    # Using all-MiniLM-L6-v2 for 100% stability.
-    print("Loading embedding model (sentence-transformers/all-MiniLM-L6-v2)...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    # Retrieval-tuned 384-d default; documents plain, queries with the BGE prefix.
+    print("Loading embedding model (BAAI/bge-small-en-v1.5)...")
+    model = SentenceTransformer("BAAI/bge-small-en-v1.5")
     model.max_seq_length = 512
 
     # 2. Ingest Knowledge Base (SQuAD)

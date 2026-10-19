@@ -26,6 +26,12 @@ arrow-json = "57.2.0"
 tempfile = "3.10"
 sqlparser = { version = "0.55.0", features = ["visitor"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Local, no-LLM embeddings (ONNX Runtime). Rustls keeps the dependency tree
+# consistent with reqwest; image models are intentionally disabled.
+fastembed = { version = "7.1.2", default-features = false, features = [
+    "ort-download-binaries-rustls-tls",
+    "hf-hub-rustls-tls",
+] }
 pdf-extract = "0.7"
 calamine = "0.26"
 base64 = "0.22"

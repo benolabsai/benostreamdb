@@ -30,6 +30,17 @@ async fn main() -> Result<()> {
                 --ephemeral                     Use ephemeral temporary directory for this session\n    \
                 --config <JSON_STRING>          Full JSON configuration string\n    \
                 --config-file <PATH>            Path to JSON configuration file\n    \
+                --embedding-model <HF_ID>       Local Hugging Face model (default: BAAI/bge-small-en-v1.5)\n    \
+                --embedding-provider <P>        local | http | none (default: local unless a URL is set)\n    \
+                --embedding-cache-dir <PATH>    Private model cache (default: <data-dir>/models)\n    \
+                --embedding-url <URL>           Ollama / OpenAI-compatible / TEI endpoint\n    \
+                --embedding-api-key <KEY>       Bearer token for the embedding endpoint\n    \
+                --embedding-model-path <PATH>   Local ONNX directory for arbitrary HF models\n    \
+                --embedding-batch-size <N>      ONNX inference batch size (default: 32)\n    \
+                --embedding-max-length <N>      Tokenizer truncation length (default: 512)\n    \
+                --embedding-dim <N>             Override/declare vector dimension\n    \
+                --embedding-device <D>          cpu | auto | cuda (local build is CPU-only)\n    \
+                --no-embeddings                 Disable embedding generation entirely\n    \
                 -h, --help                      Print this help message\n\n\
             ENVIRONMENT VARIABLES:\n    \
                 BSDB_WAREHOUSE                  Local warehouse path\n    \
@@ -37,7 +48,17 @@ async fn main() -> Result<()> {
                 BSDB_READONLY_SCHEMAS           Comma-separated list of read-only schemas\n    \
                 BSDB_DEFAULT_WRITE_SCHEMA       Default schema for writes\n    \
                 BSDB_EPHEMERAL                  Set to 1 or true for ephemeral mode\n    \
-                BSDB_MCP_CONFIG                 JSON string with full server configuration\n"
+                BSDB_MCP_CONFIG                 JSON string with full server configuration\n    \
+                BSDB_EMBEDDING_PROVIDER         local | http | none\n    \
+                BSDB_EMBEDDING_MODEL            Hugging Face model id (default: BAAI/bge-small-en-v1.5)\n    \
+                BSDB_EMBEDDING_CACHE_DIR        Private model cache directory\n    \
+                BSDB_EMBEDDING_URL              HTTP embedding endpoint\n    \
+                BSDB_EMBEDDING_API_KEY          Bearer token for the HTTP endpoint\n    \
+                BSDB_EMBEDDING_MODEL_PATH       Local ONNX directory for arbitrary HF models\n    \
+                BSDB_EMBEDDING_BATCH_SIZE       ONNX batch size\n    \
+                BSDB_EMBEDDING_MAX_LENGTH       Tokenizer truncation length\n    \
+                BSDB_EMBEDDING_QUERY_PREFIX     Override the query instruction prefix\n    \
+                BSDB_EMBEDDING_DOCUMENT_PREFIX  Override the document instruction prefix\n"
         );
         return Ok(());
     }

@@ -5,7 +5,7 @@
 # BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
-> ⚠️ **Developer Preview (v0.12.0)**  
+> ⚠️ **Developer Preview (v0.13.0)**
 > BenoStreamDB is an early-stage database engine intended for evaluation, benchmarking, and community feedback. 
 > - **API & Storage Mutability:** APIs, configuration schemas, and secondary index sidecar on-disk layouts may evolve between preview releases.
 > - **Workload Suitability:** Not yet recommended for irreplaceable production data or mission-critical workloads requiring enterprise high-availability SLAs. Always back up authoritative data and pin versions.
@@ -108,6 +108,7 @@ BenoStreamDB sits between two categories of system that do not overlap. Vector/g
 | **SQL analytics** | ❌ | ✅ | ✅ DataFusion |
 | **pgvector syntax** | ❌ | ❌ | ✅ |
 | **Indexes on existing Iceberg tables** | ❌ | ❌ | ✅ Layered Indexing |
+| **Embedding provenance & dimension guard** | ❌ | ❌ | ✅ Core-enforced table properties |
 | **Deployment** | Managed cluster | Cluster | Embedded library / scale-to-zero |
 
 > **Supported platforms, cargo feature gates, the trusted/untrusted boundary, and
@@ -320,6 +321,37 @@ df = table.sql("""
     LIMIT 10
 """)
 ```
+
+#### Step 6: Declare Embedding Provenance (Core Guard)
+
+Tables can declare which model produced their vectors. BenoStreamDB stores this as Iceberg table
+properties and enforces it in the engine — not only in the MCP server:
+
+```python
+# Declare the model. The engine derives the dimension from its known-model
+# catalogue, and a FixedSizeList vector column also carries it in the schema.
+table.set_properties({
+    "benostream.embedding.model": "BAAI/bge-small-en-v1.5",
+})
+
+# Mirrored into metadata/vN.metadata.json, so Spark, Trino, and PyIceberg see it too.
+print(table.properties()["benostream.embedding.model"])
+```
+
+- Writes through Python, SQL/Flight SQL, MCP, and bulk ingest reject vectors whose length differs from
+  the declared dimension. The dimension comes from `benostream.embedding.dim` when present, otherwise
+  from the engine's known-model catalogue (BGE, E5, Nomic, OpenAI, ...) or a `FixedSizeList` column.
+- Set `benostream.embedding.dim` explicitly only for a custom/unknown model, or for MRL truncation
+  (e.g. `BAAI/bge-large-en-v1.5` truncated to 512).
+- Changing or removing the declared model (or a declared dimension) on a non-empty table is rejected at
+  the commit point, including the Iceberg REST `set-properties` action used by Spark/Trino. Re-ingest
+  into a new table to change models.
+- Legacy tables without provenance may adopt it once; after that the declared space is immutable.
+- `FixedSizeList` columns are validated from the schema on every write. Set
+  `BSDB_VALIDATE_EMBEDDINGS=strict` to also scan `List`/stringified vectors row by row.
+
+Model identity cannot be inferred from a vector: the property is the contract. Writes that bypass both
+the engine and the catalog (direct Parquet/object-store mutation) remain outside the guard.
 
 
 ## 🌐 REST APIs (OpenSearch & Qdrant)
@@ -899,9 +931,12 @@ results = search.hybrid_search(
 
 Official **Model Context Protocol (MCP)** server (`contrib/benostreamdb-mcp`,
 crate `benostreamdb-mcp`) that exposes BenoStreamDB to LLM agents (Claude
-Desktop, Cursor, VS Code, Antigravity IDE) as JSON-RPC tools. It ships 11 tools —
+Desktop, Cursor, VS Code, Antigravity IDE) as JSON-RPC tools. It ships 12 tools —
 including `execute_sql`, `hybrid_search`, `graph_rag_search`, `ingest_records`,
-and persistent agent memory (`store_memory` / `recall_memory`).
+`list_embedding_models`, and persistent agent memory (`store_memory` /
+`recall_memory`). It also runs local, no-LLM embeddings by default
+(`BAAI/bge-small-en-v1.5`, 384-d), so ingestion and memory do not require an
+external embedding API.
 
 ```bash
 # Run instantly without local compilation
@@ -1071,6 +1106,7 @@ section.) See
 - [x] **Core Storage & Concurrency**: Hybrid segment format (Parquet + indexes), Iceberg V2/V3 manifests, atomic `PendingWrite` WAL buffer, `maintenance_lock` barriers, OCC commits.
 - [x] **Vector Search Overlays**: Zero-copy Arrow IPC HNSW & IVF-PQ, TurboQuant™ (TQ4/TQ8), SIMD intrinsics, GPU acceleration (`benostream-gpu-ann`: CUDA, Metal, Vulkan).
 - [x] **Text & Scalar Overlays**: Inverted BM25 Okapi indexes, Roaring Bitmap scalar indexes, Composite multi-column filters, Statistics pruning.
+- [x] **Embedding Provenance & Vector-Space Guard**: `benostream.embedding.*` Iceberg table properties, mirrored into `metadata/vN.metadata.json`; dimension checks in the engine write path and model/dimension immutability at the commit point across Python, SQL/Flight SQL, MCP, Spark, and Trino.
 - [x] **Core Graph Engine**: Zero-copy Memory-Mapped CSR Graph Index (`MmapCsrGraph`), Core Graph Traversal operator (`Table::graph_neighborhood`), Graph SQL UDFs.
 - [x] **Connectors & Gateways**: Apache Spark (`spark-benostreamdb`), Trino (`trino-benostreamdb`), dbt (`dbt-benostreamdb`), Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`), Contrib MCP server (`contrib/benostreamdb-mcp`).
 
