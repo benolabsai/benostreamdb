@@ -498,8 +498,8 @@ impl GpuBackend for CudaBackend {
             .ok_or_else(|| anyhow::anyhow!("CUDA kernel {mod_name}::{kernel_name} not found"))?;
 
         const TILE: u32 = 16;
-        let grid_x = (n_vectors as u32 + TILE - 1) / TILE;
-        let grid_y = (n_queries as u32 + TILE - 1) / TILE;
+        let grid_x = (n_vectors as u32).div_ceil(TILE);
+        let grid_y = (n_queries as u32).div_ceil(TILE);
         let config = LaunchConfig {
             grid_dim: (grid_x, grid_y, 1),
             block_dim: (TILE, TILE, 1),
