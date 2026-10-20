@@ -338,6 +338,34 @@ table.set_properties({
 print(table.properties()["benostream.embedding.model"])
 ```
 
+When vectors come from an HTTP service, record the provider and endpoint too. Credentials are
+deliberately not stored in table metadata; the MCP server reads the key from
+`BSDB_EMBEDDING_API_KEY`:
+
+```python
+table.set_properties({
+    "benostream.embedding.model": "text-embedding-3-small",
+    "benostream.embedding.dim": "1536",
+    "benostream.embedding.provider": "http",
+    "benostream.embedding.endpoint": "https://api.openai.com/v1/embeddings",
+    "benostream.embedding.query_prefix": "",
+})
+```
+
+The contract is per table: one model, one dimension, one vector space. Different tables can use
+different providers without conflict. Within a table, `provider` and `endpoint` may change while the
+model and dimension stay the same; the engine treats model + dimension as the vector space, so
+endpoint failover is allowed but a model change is not. If you need multiple models, use one table
+per embedding space (or carry a `model_id` column for application-level provenance and query the
+tables separately). Vectors from different models should not share an index even when their
+dimensions match. A single MCP process has one active embedding configuration; run separate MCP
+instances for simultaneous providers, or compute vectors in the application and pass them in.
+
+Credentials are supplied by the runtime, never by the table: `benostream.embedding.*` stores only the
+contract. Run one MCP process per provider with its own `BSDB_EMBEDDING_API_KEY`, or put a
+credential-multiplexing gateway in front and give MCP a single endpoint/key. Prefer the environment
+variable over a literal `embedding.api_key` in JSON.
+
 - Writes through Python, SQL/Flight SQL, MCP, and bulk ingest reject vectors whose length differs from
   the declared dimension. The dimension comes from `benostream.embedding.dim` when present, otherwise
   from the engine's known-model catalogue (BGE, E5, Nomic, OpenAI, ...) or a `FixedSizeList` column.

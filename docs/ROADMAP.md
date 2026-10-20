@@ -111,6 +111,13 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
 
 ## 📋 Active Roadmap Themes
 
+> **Tracking.** Actionable open items are tracked as GitHub issues labeled
+> [`roadmap`](https://github.com/benolabsai/benostreamdb/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap).
+> The themes below retain the design rationale and priority; the issue list is the
+> source of truth for status. `status: committed` marks current-cycle work,
+> `status: exploratory` marks ideas awaiting user or benchmark validation, and
+> `status: deferred` marks work that is intentionally unscheduled.
+
 > **Release line.** v0.13.0 shipped embedding provenance (core
 > `benostream.embedding.*` table properties, the write/commit vector-space guard,
 > and local BGE-small embeddings in the MCP server). **v0.14.0 is the next
@@ -302,6 +309,16 @@ Themes are ordered by priority.
   - **Deploy / docs:** a `deploy/` compose entry (Kafka/NATS alongside the
     RustFS/Nessie stack) and `docs/integrations/INGEST.md` + its
     `docs/source/guides/` copy, consistent with SEARCH_GATEWAY and MCP.
+- [ ] **Named embedding profiles and per-provider credentials** — 🟠 **Medium**:
+  - Add `embedding.profiles` (name → provider/model/URL/dimension, with
+    `api_key_env` references) and an optional `benostream.embedding.profile`
+    table property.
+  - Resolve secrets at runtime from the environment or a secret manager; never
+    store API keys in table metadata. This lets one MCP process serve multiple
+    HTTP providers without a raw key dictionary, while preserving the
+    table-scoped model/dimension contract.
+  - Keep the current single-config behavior as the default profile for backward
+    compatibility.
 - [ ] **Per-session MCP scratch namespace + TTL** — derive the agent scratch
   schema from the authenticated subject (JWT `sub` / API-key id, sanitized to
   `scratch_<subject>`) and give ephemeral tables a TTL + background GC, so two

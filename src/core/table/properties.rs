@@ -43,13 +43,15 @@ pub fn known_embedding_dim(model: &str) -> Option<usize> {
         "baai/bge-base-en-v1.5" | "bge-base-en-v1.5" => Some(768),
         "baai/bge-large-en-v1.5" | "bge-large-en-v1.5" => Some(1024),
         "baai/bge-m3" | "bge-m3" => Some(1024),
-        "all-minilm-l6-v2" => Some(384),
+        "all-minilm" | "all-minilm-l6-v2" => Some(384),
         "intfloat/multilingual-e5-small" | "multilingual-e5-small" => Some(384),
         "intfloat/multilingual-e5-base" | "multilingual-e5-base" => Some(768),
         "intfloat/multilingual-e5-large" | "multilingual-e5-large" => Some(1024),
         "nomic-ai/nomic-embed-text-v1.5" | "nomic-embed-text-v1.5" => Some(768),
         "nomic-embed-text" => Some(768),
-        "mixedbread-ai/mxbai-embed-large-v1" | "mxbai-embed-large-v1" => Some(1024),
+        "mixedbread-ai/mxbai-embed-large-v1" | "mxbai-embed-large" | "mxbai-embed-large-v1" => {
+            Some(1024)
+        }
         "jinaai/jina-embeddings-v2-base-code" | "jina-embeddings-v2-base-code" => Some(768),
         "text-embedding-3-small" => Some(1536),
         "text-embedding-3-large" => Some(3072),
@@ -400,6 +402,8 @@ mod tests {
             Some(384)
         );
         assert_eq!(known_embedding_dim("BAAI/bge-large-en-v1.5"), Some(1024));
+        assert_eq!(known_embedding_dim("all-minilm"), Some(384));
+        assert_eq!(known_embedding_dim("mxbai-embed-large"), Some(1024));
         assert_eq!(known_embedding_dim("text-embedding-3-small"), Some(1536));
         assert_eq!(known_embedding_dim("vendor/custom-embed"), None);
     }
