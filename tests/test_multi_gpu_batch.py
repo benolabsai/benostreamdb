@@ -9,13 +9,22 @@ except ImportError:
 
 import benostreamdb as bsdb
 
-def has_dual_cuda():
+def _cuda_device_usable(device):
+    """Return True only if `device` can actually execute a kernel.
+
+    `bsdb.Device(...)` is constructed lazily, so it does not raise when CUDA is
+    unavailable; the failure surfaces later at compute time. Exercise a tiny
+    cdist to distinguish a real device from a deferred backend error.
+    """
     try:
-        d0 = bsdb.Device("cuda:0")
-        d1 = bsdb.Device("cuda:1")
+        probe = np.zeros((16, 32), dtype=np.float32)
+        bsdb.cdist(probe, probe, metric="l2", device=device)
         return True
     except Exception:
         return False
+
+def has_dual_cuda():
+    return _cuda_device_usable("cuda:0") and _cuda_device_usable("cuda:1")
 
 def test_multi_gpu_concurrent_cdist():
     if not has_dual_cuda():

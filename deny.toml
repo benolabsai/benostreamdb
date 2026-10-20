@@ -39,6 +39,18 @@ ignore = [
     # rustls 0.21.
     "RUSTSEC-2026-0346",
     "RUSTSEC-2026-0349",
+    # RUSTSEC-2026-0381 / -0382 (distrusted emSign intermediates). The fixed
+    # releases are applied everywhere the resolver allows: rustls-webpki
+    # 0.103.16 and webpki-roots 1.0.10. The remaining affected copies are
+    # pinned by upstream parents that cannot move within our dependency graph:
+    # rustls-webpki 0.101.7 only through the AWS SDK's legacy `hyper-rustls
+    # 0.24` client (rustls 0.21 is EOL and has no backport), and webpki-roots
+    # 0.26.11 only through `sqlx-core 0.8.6` (the fix is 1.0.10+; the 0.26
+    # line has no patched release). Our own TLS paths use the fixed versions.
+    # Tracked in docs/DEPENDENCY_RISK.md; drop these ignores when the AWS SDK
+    # and sqlx leave the affected major lines.
+    "RUSTSEC-2026-0381",
+    "RUSTSEC-2026-0382",
 ]
 
 [bans]

@@ -32,4 +32,10 @@ ignore = [
     "RUSTSEC-2026-0235",
     "RUSTSEC-2024-0436",
     "RUSTSEC-2025-0141",
+    # RUSTSEC-2026-0381 / -0382: fixed copies (rustls-webpki 0.103.16,
+    # webpki-roots 1.0.10) are applied; the remaining affected copies are
+    # pinned by the AWS SDK's rustls-0.21 client and sqlx-core 0.8.6.
+    # Mirrors `deny.toml`; see docs/DEPENDENCY_RISK.md.
+    "RUSTSEC-2026-0381",
+    "RUSTSEC-2026-0382",
 ]
