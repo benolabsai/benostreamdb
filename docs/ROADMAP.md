@@ -302,6 +302,16 @@ Themes are ordered by priority.
   - **Deploy / docs:** a `deploy/` compose entry (Kafka/NATS alongside the
     RustFS/Nessie stack) and `docs/integrations/INGEST.md` + its
     `docs/source/guides/` copy, consistent with SEARCH_GATEWAY and MCP.
+- [ ] **Named embedding profiles and per-provider credentials** — 🟠 **Medium**:
+  - Add `embedding.profiles` (name → provider/model/URL/dimension, with
+    `api_key_env` references) and an optional `benostream.embedding.profile`
+    table property.
+  - Resolve secrets at runtime from the environment or a secret manager; never
+    store API keys in table metadata. This lets one MCP process serve multiple
+    HTTP providers without a raw key dictionary, while preserving the
+    table-scoped model/dimension contract.
+  - Keep the current single-config behavior as the default profile for backward
+    compatibility.
 - [ ] **Per-session MCP scratch namespace + TTL** — derive the agent scratch
   schema from the authenticated subject (JWT `sub` / API-key id, sanitized to
   `scratch_<subject>`) and give ephemeral tables a TTL + background GC, so two

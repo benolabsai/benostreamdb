@@ -111,6 +111,45 @@ MCP clients that support `initializationOptions` during protocol negotiation can
 }
 ```
 
+#### 4. Multiple embedding providers and credentials
+
+Each MCP server process has one active embedding configuration and one API key. To use several
+providers at once, register one server per provider. The agent can then choose the server whose
+vector space matches the table:
+
+```json
+{
+  "mcpServers": {
+    "benostream-local": {
+      "command": "uvx",
+      "args": ["benostreamdb-mcp", "--warehouse", "/data/warehouse"],
+      "env": {
+        "BSDB_EMBEDDING_PROVIDER": "local",
+        "BSDB_EMBEDDING_MODEL": "BAAI/bge-small-en-v1.5"
+      }
+    },
+    "benostream-openai": {
+      "command": "uvx",
+      "args": ["benostreamdb-mcp", "--warehouse", "/data/warehouse"],
+      "env": {
+        "BSDB_EMBEDDING_PROVIDER": "http",
+        "BSDB_EMBEDDING_URL": "https://api.openai.com/v1/embeddings",
+        "BSDB_EMBEDDING_MODEL": "text-embedding-3-small",
+        "BSDB_EMBEDDING_DIM": "1536",
+        "BSDB_EMBEDDING_API_KEY": "${env:OPENAI_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+If the client does not expand `${env:...}`, launch through a wrapper script that reads the key from
+your OS keychain or environment. The same pattern works in JupyterLab MCP clients: register one
+server per provider, or compute vectors in the notebook and call `set_properties` yourself. Keys
+belong in the process environment or a secret manager, never in table metadata or committed JSON.
+The table contract still prevents cross-model writes: a table stamped by the OpenAI server is
+rejected by the local server if the model or dimension differs.
+
 ---
 
 ## Storage Lockdown & The Dual-Lock Security Model
@@ -256,6 +295,17 @@ ALTER TABLE doc_chunks SET TBLPROPERTIES (
 
 Set the dimension explicitly for unknown or custom OpenAI-compatible model ids. API keys are never
 written to table properties; use `BSDB_EMBEDDING_API_KEY` or `embedding.api_key`.
+
+The contract is table-scoped. Different tables can use different providers, and within a table
+`provider` and `endpoint` can change while the model and dimension stay the same. One MCP process
+has one active embedding configuration, so use separate MCP instances (or an external embedding
+pipeline) when you need multiple providers at the same time. For different models, use one table per
+embedding space; properties are not column-scoped.
+
+Credentials are per process, not per table. Table properties never contain API keys. Give each MCP
+instance its own `BSDB_EMBEDDING_API_KEY`/`embedding.api_key`, or front multiple providers with a
+credential-multiplexing gateway and point MCP at that gateway. Prefer the env var over a literal key
+in JSON config.
 
 **How embeddings are used**
 
