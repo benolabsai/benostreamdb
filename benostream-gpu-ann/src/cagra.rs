@@ -222,13 +222,26 @@ impl CagraIndex {
             vec![Vec::with_capacity(intermediate_degree * 2); n];
 
         if n <= 1024 {
-            for i in 0..n {
-                let vec_i = &vectors[i * dim..(i + 1) * dim];
-                for j in (i + 1)..n {
-                    let vec_j = &vectors[j * dim..(j + 1) * dim];
-                    let d = compute_single_distance(vec_i, vec_j, metric);
-                    candidates[i].push((j, d));
-                    candidates[j].push((i, d));
+            let mut gpu_done = false;
+            if let Ok(dists) = ctx.compute_batch_distance(vectors, vectors, dim, metric) {
+                for i in 0..n {
+                    for j in (i + 1)..n {
+                        let d = dists[i * n + j];
+                        candidates[i].push((j, d));
+                        candidates[j].push((i, d));
+                    }
+                }
+                gpu_done = true;
+            }
+            if !gpu_done {
+                for i in 0..n {
+                    let vec_i = &vectors[i * dim..(i + 1) * dim];
+                    for j in (i + 1)..n {
+                        let vec_j = &vectors[j * dim..(j + 1) * dim];
+                        let d = compute_single_distance(vec_i, vec_j, metric);
+                        candidates[i].push((j, d));
+                        candidates[j].push((i, d));
+                    }
                 }
             }
         } else {
@@ -252,8 +265,28 @@ impl CagraIndex {
 
             // Connect intra-cluster neighbors using pairwise evaluations
             for members in &cluster_members {
-                if members.len() <= 1 {
+                let m = members.len();
+                if m <= 1 {
                     continue;
+                }
+                if m >= 32 {
+                    let mut cluster_vecs = Vec::with_capacity(m * dim);
+                    for &node_idx in members {
+                        cluster_vecs
+                            .extend_from_slice(&vectors[node_idx * dim..(node_idx + 1) * dim]);
+                    }
+                    if let Ok(dists) =
+                        ctx.compute_batch_distance(&cluster_vecs, &cluster_vecs, dim, metric)
+                    {
+                        for (m_i, &node_a) in members.iter().enumerate() {
+                            for (m_j, &node_b) in members.iter().enumerate().skip(m_i + 1) {
+                                let d = dists[m_i * m + m_j];
+                                candidates[node_a].push((node_b, d));
+                                candidates[node_b].push((node_a, d));
+                            }
+                        }
+                        continue;
+                    }
                 }
                 for (m_i, &node_a) in members.iter().enumerate() {
                     let vec_a = &vectors[node_a * dim..(node_a + 1) * dim];

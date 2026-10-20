@@ -718,7 +718,7 @@ impl HnswIvfIndex {
         // the GPU helper implements L2 assignment only.
         let centroids_flat: Vec<f32> = centroids.iter().flatten().copied().collect();
         let use_gpu_assign = matches!(metric, VectorMetric::L2);
-        const ASSIGN_BATCH: usize = 8192;
+        const ASSIGN_BATCH: usize = 65536;
         let mut ids: Vec<u32> = Vec::with_capacity(ASSIGN_BATCH);
         let mut vecs: Vec<f32> = Vec::with_capacity(ASSIGN_BATCH * dim);
         let mut progress = 0usize;

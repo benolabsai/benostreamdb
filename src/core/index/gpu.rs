@@ -68,6 +68,63 @@ pub trait GpuBackend: Send + Sync + std::fmt::Debug {
         dim: usize,
     ) -> Result<Vec<u32>>;
 
+    /// Batched distance computation between M query vectors and N database vectors.
+    /// Returns M * N distances: distances[q * n_vectors + v] = dist(queries[q], vectors[v]).
+    fn compute_batch_distance(
+        &self,
+        queries: &[f32],
+        vectors: &[f32],
+        dim: usize,
+        metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        let n_queries = queries.len().checked_div(dim).unwrap_or(0);
+        let n_vectors = vectors.len().checked_div(dim).unwrap_or(0);
+        let mut all_distances = Vec::with_capacity(n_queries * n_vectors);
+        for q_idx in 0..n_queries {
+            let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+            let dists = self.compute_distance(q, vectors, dim, metric)?;
+            all_distances.extend_from_slice(&dists);
+        }
+        Ok(all_distances)
+    }
+
+    /// Run k-means clustering directly on the hardware accelerator.
+    /// Vectors are uploaded once to VRAM and kept resident across all iterations.
+    fn compute_kmeans(
+        &self,
+        vectors: &[f32],
+        initial_centroids: &[f32],
+        dim: usize,
+        k: usize,
+        max_iters: usize,
+    ) -> Result<(Vec<f32>, Vec<u32>)> {
+        let n_vectors = vectors.len().checked_div(dim).unwrap_or(0);
+        let mut centroids = initial_centroids.to_vec();
+        let mut labels = vec![0u32; n_vectors];
+
+        for _ in 0..max_iters {
+            labels = self.compute_kmeans_assignment(vectors, &centroids, dim)?;
+            let mut sums = vec![0.0f32; k * dim];
+            let mut counts = vec![0usize; k];
+            for (i, &c) in labels.iter().enumerate() {
+                let cid = (c as usize).min(k - 1);
+                counts[cid] += 1;
+                for d in 0..dim {
+                    sums[cid * dim + d] += vectors[i * dim + d];
+                }
+            }
+            for cid in 0..k {
+                if counts[cid] > 0 {
+                    let inv = 1.0f32 / counts[cid] as f32;
+                    for d in 0..dim {
+                        centroids[cid * dim + d] = sums[cid * dim + d] * inv;
+                    }
+                }
+            }
+        }
+        Ok((centroids, labels))
+    }
+
     /// Batched packed-binary distance: one packed query vs N packed vectors.
     ///
     /// `query` is `dim_bytes` long; `vectors` is `n * dim_bytes`. Returns one
@@ -180,6 +237,12 @@ static CUDA_SRC_HAMMING_PACKED: &str = include_str!("cuda/hamming_packed.cu");
     feature = "cuda"
 ))]
 static CUDA_SRC_JACCARD_PACKED: &str = include_str!("cuda/jaccard_packed.cu");
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
+static CUDA_SRC_BATCH_DISTANCE: &str = include_str!("cuda/batch_distance.cu");
 
 // Backend Implementations
 // ============================================================================
@@ -260,6 +323,21 @@ impl CudaBackend {
             "jaccard_packed_kernel"
         );
         compile_and_load!(device, CUDA_SRC_KMEANS, "kmeans", "kmeans_assignment");
+        {
+            let ptx_src = crate::core::index::nvrtc::compile_ptx(CUDA_SRC_BATCH_DISTANCE)
+                .map_err(|e| anyhow::anyhow!("nvrtc compile failed for batch_distance: {:?}", e))?;
+            let ptx = cudarc::nvrtc::Ptx::from_src(ptx_src);
+            device.load_ptx(
+                ptx,
+                "batch_distance",
+                &[
+                    "batch_l2_distance_kernel",
+                    "batch_cosine_distance_kernel",
+                    "batch_inner_product_kernel",
+                    "batch_l1_distance_kernel",
+                ],
+            )?;
+        }
 
         Ok(Self { device })
     }
@@ -300,13 +378,19 @@ impl GpuBackend for CudaBackend {
         // The kernels use one block per row with a shared-memory reduction, so
         // the grid must be `n_vectors` blocks (not `for_num_elems`, which packs
         // rows into 1024-thread blocks) and the shared memory must be sized for
-        // the block — 2x for Jaccard's interleaved intersection/union slots.
+        // the block: 3x for Cosine (dot, norm_q, norm_v), 2x for Jaccard (interleaved
+        // intersection/union slots), 1x for other metrics.
         // Getting this wrong is an illegal memory access, not a wrong answer.
         const BLOCK: u32 = 256;
+        let slots = match metric {
+            VectorMetric::Cosine => 3,
+            VectorMetric::Jaccard => 2,
+            _ => 1,
+        };
         let config = LaunchConfig {
             grid_dim: (n_vectors as u32, 1, 1),
             block_dim: (BLOCK, 1, 1),
-            shared_mem_bytes: BLOCK * std::mem::size_of::<f32>() as u32 * 2,
+            shared_mem_bytes: BLOCK * std::mem::size_of::<f32>() as u32 * slots,
         };
         unsafe {
             func.launch(config, (&d_q, &d_v, &mut d_d, dim as u32, n_vectors as u32))?;
@@ -372,6 +456,129 @@ impl GpuBackend for CudaBackend {
             )?;
         }
         Ok(self.device.dtoh_sync_copy(&d_d)?)
+    }
+
+    fn compute_batch_distance(
+        &self,
+        queries: &[f32],
+        vectors: &[f32],
+        dim: usize,
+        metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        let (mod_name, kernel_name) = match metric {
+            VectorMetric::L2 => ("batch_distance", "batch_l2_distance_kernel"),
+            VectorMetric::Cosine => ("batch_distance", "batch_cosine_distance_kernel"),
+            VectorMetric::InnerProduct => ("batch_distance", "batch_inner_product_kernel"),
+            VectorMetric::L1 => ("batch_distance", "batch_l1_distance_kernel"),
+            _ => {
+                let n_queries = queries.len().checked_div(dim).unwrap_or(0);
+                let n_vectors = vectors.len().checked_div(dim).unwrap_or(0);
+                let mut all_distances = Vec::with_capacity(n_queries * n_vectors);
+                for q_idx in 0..n_queries {
+                    let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+                    let dists = self.compute_distance(q, vectors, dim, metric)?;
+                    all_distances.extend_from_slice(&dists);
+                }
+                return Ok(all_distances);
+            }
+        };
+
+        let n_queries = queries.len().checked_div(dim).unwrap_or(0);
+        let n_vectors = vectors.len().checked_div(dim).unwrap_or(0);
+        if n_queries == 0 || n_vectors == 0 {
+            return Ok(Vec::new());
+        }
+
+        let d_q = self.device.htod_copy(queries.to_vec())?;
+        let d_v = self.device.htod_copy(vectors.to_vec())?;
+        let mut d_d = self.device.alloc_zeros::<f32>(n_queries * n_vectors)?;
+        let func = self
+            .device
+            .get_func(mod_name, kernel_name)
+            .ok_or_else(|| anyhow::anyhow!("CUDA kernel {mod_name}::{kernel_name} not found"))?;
+
+        const TILE: u32 = 16;
+        let grid_x = (n_vectors as u32 + TILE - 1) / TILE;
+        let grid_y = (n_queries as u32 + TILE - 1) / TILE;
+        let config = LaunchConfig {
+            grid_dim: (grid_x, grid_y, 1),
+            block_dim: (TILE, TILE, 1),
+            shared_mem_bytes: 0,
+        };
+        unsafe {
+            func.launch(
+                config,
+                (
+                    &d_q,
+                    &d_v,
+                    &mut d_d,
+                    dim as i32,
+                    n_queries as i32,
+                    n_vectors as i32,
+                ),
+            )?;
+        }
+        Ok(self.device.dtoh_sync_copy(&d_d)?)
+    }
+
+    fn compute_kmeans(
+        &self,
+        vectors: &[f32],
+        initial_centroids: &[f32],
+        dim: usize,
+        k: usize,
+        max_iters: usize,
+    ) -> Result<(Vec<f32>, Vec<u32>)> {
+        let n_vectors = vectors.len().checked_div(dim).unwrap_or(0);
+        if n_vectors == 0 || k == 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        // Upload training vectors to VRAM ONCE.
+        let d_v = self.device.htod_copy(vectors.to_vec())?;
+        let mut d_c = self.device.htod_copy(initial_centroids.to_vec())?;
+        let mut d_l = self.device.alloc_zeros::<u32>(n_vectors)?;
+
+        let func = self
+            .device
+            .get_func("kmeans", "kmeans_assignment")
+            .ok_or_else(|| anyhow::anyhow!("CUDA kernel kmeans::kmeans_assignment not found"))?;
+        let config = LaunchConfig::for_num_elems(n_vectors as u32);
+
+        let mut current_centroids = initial_centroids.to_vec();
+        let mut labels = vec![0u32; n_vectors];
+
+        for _ in 0..max_iters {
+            unsafe {
+                func.clone().launch(
+                    config,
+                    (&d_v, &d_c, &mut d_l, n_vectors as u32, k as u32, dim as u32),
+                )?;
+            }
+            labels = self.device.dtoh_sync_copy(&d_l)?;
+
+            // Recompute centroids on CPU
+            let mut sums = vec![0.0f32; k * dim];
+            let mut counts = vec![0usize; k];
+            for (i, &cid_u32) in labels.iter().enumerate() {
+                let cid = (cid_u32 as usize).min(k - 1);
+                counts[cid] += 1;
+                for d in 0..dim {
+                    sums[cid * dim + d] += vectors[i * dim + d];
+                }
+            }
+            for cid in 0..k {
+                if counts[cid] > 0 {
+                    let inv = 1.0f32 / counts[cid] as f32;
+                    for d in 0..dim {
+                        current_centroids[cid * dim + d] = sums[cid * dim + d] * inv;
+                    }
+                }
+            }
+            d_c = self.device.htod_copy(current_centroids.clone())?;
+        }
+
+        Ok((current_centroids, labels))
     }
 }
 
@@ -985,6 +1192,28 @@ impl GpuBackend for NoDropBackend {
         self.0.compute_kmeans_assignment(vectors, centroids, dim)
     }
 
+    fn compute_batch_distance(
+        &self,
+        queries: &[f32],
+        vectors: &[f32],
+        dim: usize,
+        metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        self.0.compute_batch_distance(queries, vectors, dim, metric)
+    }
+
+    fn compute_kmeans(
+        &self,
+        vectors: &[f32],
+        initial_centroids: &[f32],
+        dim: usize,
+        k: usize,
+        max_iters: usize,
+    ) -> Result<(Vec<f32>, Vec<u32>)> {
+        self.0
+            .compute_kmeans(vectors, initial_centroids, dim, k, max_iters)
+    }
+
     fn compute_binary_distance(
         &self,
         query: &[u8],
@@ -1389,6 +1618,66 @@ pub fn compute_kmeans_assignment(
         return imp.compute_kmeans_assignment(vectors, centroids, dim);
     }
     super::ivf::simple_kmeans_assignment(vectors, centroids, dim)
+}
+
+/// Compute distance matrix between M query vectors and N database vectors.
+/// Returns M * N distances where distances[q * n_vectors + v] = dist(queries[q], vectors[v]).
+pub fn compute_batch_distance(
+    queries: &[f32],
+    vectors: &[f32],
+    dim: usize,
+    metric: VectorMetric,
+) -> Result<Vec<f32>> {
+    let context = get_thread_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
+    if let Some(imp) = &context.implementation {
+        return imp.compute_batch_distance(queries, vectors, dim, metric);
+    }
+    compute_batch_cpu(queries, vectors, dim, metric)
+}
+
+/// Run k-means clustering directly on the hardware accelerator.
+/// Keeps vector data resident in GPU VRAM across iterations.
+pub fn compute_kmeans(
+    vectors: &[f32],
+    initial_centroids: &[f32],
+    dim: usize,
+    k: usize,
+    max_iters: usize,
+) -> Result<(Vec<f32>, Vec<u32>)> {
+    let context = get_thread_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
+    if let Some(imp) = &context.implementation {
+        return imp.compute_kmeans(vectors, initial_centroids, dim, k, max_iters);
+    }
+    CpuBackend.compute_kmeans(vectors, initial_centroids, dim, k, max_iters)
+}
+
+fn compute_batch_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f32>> {
+    let n_q = q.len().checked_div(d).unwrap_or(0);
+    let n_v = v.len().checked_div(d).unwrap_or(0);
+    let mut dists = Vec::with_capacity(n_q * n_v);
+    for i in 0..n_q {
+        let q_span = &q[i * d..(i + 1) * d];
+        for j in 0..n_v {
+            let v_span = &v[j * d..(j + 1) * d];
+            dists.push(match m {
+                VectorMetric::L2 => crate::core::index::distance::l2_distance(q_span, v_span),
+                VectorMetric::Cosine => {
+                    crate::core::index::distance::cosine_distance(q_span, v_span)
+                }
+                VectorMetric::InnerProduct => {
+                    -crate::core::index::distance::dot_product(q_span, v_span)
+                }
+                VectorMetric::L1 => crate::core::index::distance::l1_distance(q_span, v_span),
+                VectorMetric::Hamming => {
+                    crate::core::index::distance::hamming_distance(q_span, v_span)
+                }
+                VectorMetric::Jaccard => {
+                    crate::core::index::distance::jaccard_distance(q_span, v_span)
+                }
+            });
+        }
+    }
+    Ok(dists)
 }
 
 fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f32>> {
@@ -1843,6 +2132,63 @@ mod tests {
             VectorMetric::Jaccard,
         ] {
             assert_backend_matches_cpu(metric, 128, 1_000);
+        }
+    }
+
+    fn assert_batch_backend_matches_cpu(
+        metric: VectorMetric,
+        dim: usize,
+        n_queries: usize,
+        n_vectors: usize,
+    ) {
+        let backends = available_backends();
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x1337);
+        let queries: Vec<f32> = (0..n_queries * dim)
+            .map(|_| rng.gen_range(-1.0f32..1.0f32))
+            .collect();
+        let vectors: Vec<f32> = (0..n_vectors * dim)
+            .map(|_| rng.gen_range(-1.0f32..1.0f32))
+            .collect();
+
+        let mut gold = Vec::with_capacity(n_queries * n_vectors);
+        for q_idx in 0..n_queries {
+            let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+            let dists = compute_cpu(q, &vectors, dim, metric).expect("cpu gold");
+            gold.extend_from_slice(&dists);
+        }
+
+        for (name, backend) in &backends {
+            if *name == "cpu" {
+                continue;
+            }
+            let got = backend
+                .compute_batch_distance(&queries, &vectors, dim, metric)
+                .unwrap_or_else(|e| panic!("{name} batch {metric:?} failed: {e}"));
+            assert_eq!(
+                got.len(),
+                gold.len(),
+                "{name} batch {metric:?}: length mismatch"
+            );
+            for (i, (g, c)) in gold.iter().zip(got.iter()).enumerate() {
+                let tol = 1e-3 * g.abs().max(1.0);
+                assert!(
+                    (g - c).abs() <= tol,
+                    "{name} batch {metric:?} dim={dim} n_q={n_queries} n_v={n_vectors} idx={i}: cpu={g} gpu={c}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cross_backend_batch_distance_matches_cpu() {
+        for metric in [
+            VectorMetric::L2,
+            VectorMetric::Cosine,
+            VectorMetric::InnerProduct,
+            VectorMetric::L1,
+        ] {
+            assert_batch_backend_matches_cpu(metric, 128, 35, 150);
         }
     }
 

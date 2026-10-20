@@ -300,12 +300,29 @@ pub fn simple_kmeans(
     }
 
     // Step 2: Training iterations on sub-sample
-    // Assignment is the hot loop here (iters x sample x k x dim), so dispatch it
-    // to the GPU backend when one is actually usable and keep the parallel CPU
-    // scan as the fallback.
+    // Run directly on GPU (vectors kept resident in VRAM across iterations) when usable.
     let gpu_ctx = crate::core::index::gpu::get_thread_gpu_context()
         .unwrap_or_else(crate::core::index::gpu::ComputeContext::auto_detect);
     let use_gpu = gpu_ctx.is_gpu() && gpu_ctx.is_available();
+    if use_gpu {
+        let initial_cents_flat: Vec<f32> = centroids.iter().flatten().copied().collect();
+        if let Ok((trained_centroids, trained_labels)) = crate::core::index::gpu::compute_kmeans(
+            &flat_training_set,
+            &initial_cents_flat,
+            dim,
+            k,
+            max_iters,
+        ) {
+            if trained_centroids.len() == k * dim && trained_labels.len() == sample_size {
+                let final_cents: Vec<Vec<f32>> =
+                    trained_centroids.chunks(dim).map(|c| c.to_vec()).collect();
+                let final_labels: Vec<usize> =
+                    trained_labels.into_iter().map(|x| x as usize).collect();
+                return Ok((final_cents, final_labels));
+            }
+        }
+    }
+
     let mut centroids_flat: Vec<f32> = Vec::with_capacity(k * dim);
     let cpu_assign = |flat: &[f32], cents: &[Vec<f32>]| -> Vec<usize> {
         flat.par_chunks(dim)

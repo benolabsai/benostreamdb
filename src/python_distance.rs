@@ -4,8 +4,8 @@ use crate::core::index::gpu::{compute_distance, ComputeBackend};
 use crate::core::index::{distance, VectorMetric};
 use crate::python_gpu_context::PyDevice;
 use numpy::{
-    AllowTypeChange, PyArray1, PyArrayLike1, PyReadonlyArray1, PyReadonlyArray2,
-    PyUntypedArrayMethods,
+    AllowTypeChange, PyArray1, PyArray2, PyArrayLike1, PyArrayMethods, PyReadonlyArray1,
+    PyReadonlyArray2, PyUntypedArrayMethods,
 };
 /// Python bindings for vector distance functions
 ///
@@ -1573,4 +1573,102 @@ pub fn py_jaccard_auto(
 
     let jaccard_similarity = intersection as f32 / union as f32;
     Ok(1.0 - jaccard_similarity)
+}
+
+/// Compute pairwise distance matrix between M queries and N database vectors (cdist).
+///
+/// Args:
+///     queries: M query vectors (2D NumPy array, shape: [M, dim])
+///     vectors: N database vectors (2D NumPy array, shape: [N, dim])
+///     metric: Distance metric string ("l2", "cosine", "inner_product", "l1", "hamming", "jaccard")
+///     device: Optional ComputeContext for GPU acceleration
+///
+/// Returns:
+///     2D NumPy array of shape [M, N] containing pairwise distances.
+#[pyfunction]
+#[pyo3(name = "cdist", signature = (queries, vectors, metric="l2", device=None))]
+pub fn py_cdist<'py>(
+    py: Python<'py>,
+    queries: PyReadonlyArray2<f32>,
+    vectors: PyReadonlyArray2<f32>,
+    metric: &str,
+    device: Option<&Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let resolved_device: Option<PyDevice> = if let Some(d) = device {
+        if let Ok(s) = d.extract::<&str>() {
+            Some(PyDevice::new(s, None)?)
+        } else if let Ok(py_dev) = d.extract::<PyRef<PyDevice>>() {
+            Some(PyDevice {
+                context: py_dev.context.clone(),
+                stats: py_dev.stats.clone(),
+            })
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "device must be a str (e.g. 'cuda:0', 'cpu') or a Device instance",
+            ));
+        }
+    } else {
+        None
+    };
+    let dev_ref = resolved_device.as_ref();
+
+    let q_array = queries.as_array();
+    let v_array = vectors.as_array();
+    let q_shape = q_array.shape();
+    let v_shape = v_array.shape();
+
+    if q_shape[1] != v_shape[1] {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Dimension mismatch: queries have dim {}, vectors have dim {}",
+            q_shape[1], v_shape[1]
+        )));
+    }
+    let dim = q_shape[1];
+    let n_queries = q_shape[0];
+    let n_vectors = v_shape[0];
+
+    let q_slice = queries.as_slice()?;
+    let v_slice = vectors.as_slice()?;
+
+    let vec_metric = match metric.to_lowercase().as_str() {
+        "l2" | "euclidean" => VectorMetric::L2,
+        "cosine" => VectorMetric::Cosine,
+        "inner_product" | "dot" | "ip" => VectorMetric::InnerProduct,
+        "l1" | "manhattan" => VectorMetric::L1,
+        "hamming" => VectorMetric::Hamming,
+        "jaccard" => VectorMetric::Jaccard,
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown metric: {}",
+                other
+            )))
+        }
+    };
+
+    let start = std::time::Instant::now();
+    let distances = if let Some(dev) = dev_ref {
+        let res = dev
+            .get_context()
+            .implementation
+            .as_ref()
+            .map(|imp| imp.compute_batch_distance(q_slice, v_slice, dim, vec_metric))
+            .unwrap_or_else(|| {
+                crate::core::index::gpu::compute_batch_distance(q_slice, v_slice, dim, vec_metric)
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let duration = start.elapsed();
+        let tracker = dev.get_stats_tracker();
+        let mut stats = tracker.lock().unwrap_or_else(|e| e.into_inner());
+        stats.total_kernel_launches += 1;
+        stats.total_gpu_time_ms += duration.as_secs_f64() * 1000.0;
+        stats.total_vectors_processed += (n_queries * n_vectors) as u64;
+        res
+    } else {
+        crate::core::index::gpu::compute_batch_distance(q_slice, v_slice, dim, vec_metric)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
+    };
+
+    let array_1d = PyArray1::from_vec(py, distances);
+    array_1d.reshape([n_queries, n_vectors])
 }

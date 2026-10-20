@@ -26,7 +26,7 @@ impl PyDevice {
     /// Create a new Device instance.
     #[new]
     #[pyo3(signature = (device, index=None))]
-    fn new(device: &str, index: Option<i32>) -> PyResult<Self> {
+    pub fn new(device: &str, index: Option<i32>) -> PyResult<Self> {
         let (backend_str, device_id) = if device.contains(':') {
             let parts: Vec<&str> = device.split(':').collect();
             if parts.len() != 2 {

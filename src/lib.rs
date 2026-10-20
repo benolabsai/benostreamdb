@@ -212,6 +212,7 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_distance::py_l1_batch, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_hamming_batch, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_cdist, m)?)?;
 
     // Sparse Vector API
     m.add_class::<python_distance::PySparseVector>()?;

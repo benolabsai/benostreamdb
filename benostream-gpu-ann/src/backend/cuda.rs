@@ -86,6 +86,12 @@ const CUDA_SRC_JACCARD_PACKED: &str = include_str!("../kernels/cuda/jaccard_pack
     feature = "cuda"
 ))]
 const CUDA_SRC_KMEANS: &str = include_str!("../kernels/cuda/kmeans_assignment.cu");
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
+const CUDA_SRC_BATCH_DISTANCE: &str = include_str!("../kernels/cuda/batch_distance.cu");
 
 #[cfg(all(
     not(target_os = "macos"),
@@ -160,6 +166,21 @@ impl CudaBackend {
             "jaccard_packed_kernel"
         );
         compile_and_load!(device, CUDA_SRC_KMEANS, "kmeans", "kmeans_assignment");
+        {
+            let ptx_src = crate::backend::nvrtc::compile_ptx(CUDA_SRC_BATCH_DISTANCE)
+                .map_err(|e| anyhow::anyhow!("nvrtc compile failed for batch_distance: {:?}", e))?;
+            let ptx = cudarc::nvrtc::Ptx::from_src(ptx_src);
+            device.load_ptx(
+                ptx,
+                "batch_distance",
+                &[
+                    "batch_l2_distance_kernel",
+                    "batch_cosine_distance_kernel",
+                    "batch_inner_product_kernel",
+                    "batch_l1_distance_kernel",
+                ],
+            )?;
+        }
 
         Ok(Self { device })
     }
@@ -200,10 +221,15 @@ impl GpuBackend for CudaBackend {
             .ok_or_else(|| anyhow::anyhow!("CUDA kernel {mod_name}::{kernel_name} not found"))?;
 
         const BLOCK: u32 = 256;
+        let slots = match metric {
+            Metric::Cosine => 3,
+            Metric::Jaccard => 2,
+            _ => 1,
+        };
         let config = LaunchConfig {
             grid_dim: (n_vectors as u32, 1, 1),
             block_dim: (BLOCK, 1, 1),
-            shared_mem_bytes: BLOCK * std::mem::size_of::<f32>() as u32 * 2,
+            shared_mem_bytes: BLOCK * std::mem::size_of::<f32>() as u32 * slots,
         };
         unsafe {
             func.launch(config, (&d_q, &d_v, &mut d_d, dim as u32, n_vectors as u32))?;
@@ -235,11 +261,74 @@ impl GpuBackend for CudaBackend {
                     &d_c,
                     &mut d_out,
                     n_vectors as u32,
-                    dim as u32,
                     n_clusters as u32,
+                    dim as u32,
                 ),
             )?;
         }
         Ok(self.device.dtoh_sync_copy(&d_out)?)
+    }
+
+    fn compute_batch_distance(
+        &self,
+        queries: &[f32],
+        vectors: &[f32],
+        dim: usize,
+        metric: Metric,
+    ) -> Result<Vec<f32>> {
+        let (mod_name, kernel_name) = match metric {
+            Metric::L2 => ("batch_distance", "batch_l2_distance_kernel"),
+            Metric::Cosine => ("batch_distance", "batch_cosine_distance_kernel"),
+            Metric::InnerProduct => ("batch_distance", "batch_inner_product_kernel"),
+            Metric::L1 => ("batch_distance", "batch_l1_distance_kernel"),
+            _ => {
+                let n_queries = queries.len().checked_div(dim).unwrap_or(0);
+                let n_vectors = vectors.len().checked_div(dim).unwrap_or(0);
+                let mut all_distances = Vec::with_capacity(n_queries * n_vectors);
+                for q_idx in 0..n_queries {
+                    let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+                    let dists = self.compute_distance(q, vectors, dim, metric)?;
+                    all_distances.extend_from_slice(&dists);
+                }
+                return Ok(all_distances);
+            }
+        };
+
+        let n_queries = queries.len().checked_div(dim).unwrap_or(0);
+        let n_vectors = vectors.len().checked_div(dim).unwrap_or(0);
+        if n_queries == 0 || n_vectors == 0 {
+            return Ok(Vec::new());
+        }
+
+        let d_q = self.device.htod_copy(queries.to_vec())?;
+        let d_v = self.device.htod_copy(vectors.to_vec())?;
+        let mut d_d = self.device.alloc_zeros::<f32>(n_queries * n_vectors)?;
+        let func = self
+            .device
+            .get_func(mod_name, kernel_name)
+            .ok_or_else(|| anyhow::anyhow!("CUDA kernel {mod_name}::{kernel_name} not found"))?;
+
+        const TILE: u32 = 16;
+        let grid_x = (n_vectors as u32 + TILE - 1) / TILE;
+        let grid_y = (n_queries as u32 + TILE - 1) / TILE;
+        let config = LaunchConfig {
+            grid_dim: (grid_x, grid_y, 1),
+            block_dim: (TILE, TILE, 1),
+            shared_mem_bytes: 0,
+        };
+        unsafe {
+            func.launch(
+                config,
+                (
+                    &d_q,
+                    &d_v,
+                    &mut d_d,
+                    dim as i32,
+                    n_queries as i32,
+                    n_vectors as i32,
+                ),
+            )?;
+        }
+        Ok(self.device.dtoh_sync_copy(&d_d)?)
     }
 }

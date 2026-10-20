@@ -44,6 +44,26 @@ pub trait GpuBackend: Send + Sync {
         centroids: &[f32],
         dim: usize,
     ) -> Result<Vec<u32>>;
+
+    /// Batched distance computation between M query vectors and N database vectors.
+    /// Returns M * N distances: distances[q * n_vectors + v] = dist(queries[q], vectors[v]).
+    fn compute_batch_distance(
+        &self,
+        queries: &[f32],
+        vectors: &[f32],
+        dim: usize,
+        metric: Metric,
+    ) -> Result<Vec<f32>> {
+        let n_queries = queries.len().checked_div(dim).unwrap_or(0);
+        let n_vectors = vectors.len().checked_div(dim).unwrap_or(0);
+        let mut all_distances = Vec::with_capacity(n_queries * n_vectors);
+        for q_idx in 0..n_queries {
+            let q = &queries[q_idx * dim..(q_idx + 1) * dim];
+            let dists = self.compute_distance(q, vectors, dim, metric)?;
+            all_distances.extend_from_slice(&dists);
+        }
+        Ok(all_distances)
+    }
 }
 
 /// ComputeContext encapsulates the selected hardware accelerator and provides
@@ -174,6 +194,18 @@ impl ComputeContext {
     ) -> Result<Vec<u32>> {
         self.backend
             .compute_kmeans_assignment(vectors, centroids, dim)
+    }
+
+    /// Compute batched distance matrix between M query vectors and N database vectors.
+    pub fn compute_batch_distance(
+        &self,
+        queries: &[f32],
+        vectors: &[f32],
+        dim: usize,
+        metric: Metric,
+    ) -> Result<Vec<f32>> {
+        self.backend
+            .compute_batch_distance(queries, vectors, dim, metric)
     }
 }
 
