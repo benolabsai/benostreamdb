@@ -241,6 +241,22 @@ session.set_schema_access("finance_raw", true)?;
 }
 ```
 
+**HTTP endpoint provenance.** The server stamps `benostream.embedding.*` automatically when it
+creates or ingests into a table. To declare the same contract from another connector:
+
+```sql
+ALTER TABLE doc_chunks SET TBLPROPERTIES (
+    'benostream.embedding.model'        = 'text-embedding-3-small',
+    'benostream.embedding.dim'          = '1536',
+    'benostream.embedding.provider'     = 'http',
+    'benostream.embedding.endpoint'     = 'https://api.openai.com/v1/embeddings',
+    'benostream.embedding.query_prefix' = ''
+);
+```
+
+Set the dimension explicitly for unknown or custom OpenAI-compatible model ids. API keys are never
+written to table properties; use `BSDB_EMBEDDING_API_KEY` or `embedding.api_key`.
+
 **How embeddings are used**
 
 Embedding generation is automatic once a provider is configured (local is the default):

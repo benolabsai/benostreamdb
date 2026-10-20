@@ -338,6 +338,20 @@ table.set_properties({
 print(table.properties()["benostream.embedding.model"])
 ```
 
+When vectors come from an HTTP service, record the provider and endpoint too. Credentials are
+deliberately not stored in table metadata; the MCP server reads the key from
+`BSDB_EMBEDDING_API_KEY`:
+
+```python
+table.set_properties({
+    "benostream.embedding.model": "text-embedding-3-small",
+    "benostream.embedding.dim": "1536",
+    "benostream.embedding.provider": "http",
+    "benostream.embedding.endpoint": "https://api.openai.com/v1/embeddings",
+    "benostream.embedding.query_prefix": "",
+})
+```
+
 - Writes through Python, SQL/Flight SQL, MCP, and bulk ingest reject vectors whose length differs from
   the declared dimension. The dimension comes from `benostream.embedding.dim` when present, otherwise
   from the engine's known-model catalogue (BGE, E5, Nomic, OpenAI, ...) or a `FixedSizeList` column.
