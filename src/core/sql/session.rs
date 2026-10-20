@@ -58,6 +58,25 @@ impl BenoStreamSession {
         self.ctx.clone()
     }
 
+    /// Resolve a registered BenoStreamDB table by its (possibly qualified) name.
+    ///
+    /// This is the supported way for connectors/MCP servers to inspect table
+    /// metadata (for example embedding-model provenance) without reaching into
+    /// DataFusion's provider internals.
+    pub async fn resolve_table(&self, name: &str) -> Result<Arc<Table>> {
+        let reference = datafusion::sql::TableReference::from(name.trim());
+        let provider = self
+            .get_ctx()
+            .table_provider(reference)
+            .await
+            .map_err(|e| anyhow::anyhow!("table '{}' is not registered: {e}", name))?;
+        let provider = provider
+            .as_any()
+            .downcast_ref::<BenoStreamTableProvider>()
+            .ok_or_else(|| anyhow::anyhow!("table '{}' is not a BenoStreamDB table", name))?;
+        Ok(provider.table.clone())
+    }
+
     pub fn new(memory_limit_bytes: Option<usize>) -> Self {
         let mut config = SessionConfig::new();
         config = config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");

@@ -47,7 +47,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DB = os.environ.get("BSDB_DEMO_DB", os.path.join(REPO, "data", "wiki_graph_db"))
 EDGES_URI = f"file://{os.path.join(DB, 'edges')}"
 NODES_URI = f"file://{os.path.join(DB, 'nodes')}"
-EMBED_MODEL = os.environ.get("BSDB_DEMO_EMBED_MODEL", "all-MiniLM-L6-v2")
+EMBED_MODEL = os.environ.get("BSDB_DEMO_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 
 st.set_page_config(page_title="BenoStreamDB — Wikipedia Graph RAG", layout="wide")
 st.title("BenoStreamDB — Wikipedia Graph RAG")
@@ -686,9 +686,9 @@ with TAB_SEMANTIC:
         def work(r):
             r.log(f"query={q!r}  k={k}")
             t0 = time.time()
-            r.log("▶ embed query (all-MiniLM-L6-v2)")
+            r.log("▶ embed query (BAAI/bge-small-en-v1.5)")
             vec = embed_text(q, model)
-            r.stage("embed query (all-MiniLM-L6-v2)", (time.time() - t0) * 1000)
+            r.stage("embed query (BAAI/bge-small-en-v1.5)", (time.time() - t0) * 1000)
             r.result["vec"] = vec
             if vec is not None:
                 t1 = time.time()

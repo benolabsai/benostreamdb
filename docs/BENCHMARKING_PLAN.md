@@ -253,7 +253,7 @@ Every run emits a machine-readable record:
 ```json
 {
   "engine": "benostreamdb",
-  "engine_version": "0.12.0",
+  "engine_version": "0.13.0",
   "dataset": "sift-128-euclidean",
   "workload": "vector_ann",
   "index": { "type": "hnsw_tq8", "m": 32, "ef_construction": 200, "ef_search": 200, "metric": "l2" },
@@ -424,7 +424,7 @@ for HNSW/IVF/PQ/TurboQuant.
   every candidate with `dot > 1` to distance 0. Raising `M`/`ef_construction`/
   `ef_search` does not help. Fixing this needs an inner-product-aware graph
   construction (or normalizing the vectors and using cosine). Tracked for
-  v0.13.0.
+  v0.14.0.
 - The full unfiltered scan (`read_async(None,None,None)`) is ~16 ms for the 20k
   table; verify against release builds and decide whether Parquet decode is the
   floor.

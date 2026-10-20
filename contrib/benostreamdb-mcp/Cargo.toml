@@ -26,6 +26,13 @@ arrow-json = "57.2.0"
 tempfile = "3.10"
 sqlparser = { version = "0.55.0", features = ["visitor"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Local embeddings use Candle (pure Rust) instead of ONNX Runtime. This keeps
+# the wheel small enough for PyPI and avoids a native inference library.
+candle-core = { version = "0.11.0", default-features = false }
+candle-nn = { version = "0.11.0", default-features = false }
+candle-transformers = { version = "0.11.0", default-features = false }
+hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"] }
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
 pdf-extract = "0.7"
 calamine = "0.26"
 base64 = "0.22"

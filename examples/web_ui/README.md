@@ -47,10 +47,10 @@ are skipped. Stages:
    `curid`s and drops redirect pages → `data/wiki_nodes.parquet`,
    `data/wiki_edges.parquet`.
 4. **embed** — sentence-transformers over each article's lead
-   (`--lead-chars 256` by default; `all-MiniLM-L6-v2` — the two-level design
-   only needs a cheap 384-d **seed index**, and reranking is bitmap-filtered
-   to the retrieved neighborhood; `--embed-model BAAI/bge-large-en-v1.5` costs
-   ~20× more: measured 279 vs ~6,700 sent/s) on GPU if present. Writes
+   (`--lead-chars 256` by default; `BAAI/bge-small-en-v1.5` — retrieval-tuned
+   384-d **seed index**, and reranking is bitmap-filtered to the retrieved
+   neighborhood; `--embed-model BAAI/bge-large-en-v1.5` costs ~4× more) on GPU
+   if present. Writes
    `data/embeddings/part-NNN.parquet` shards of 5M rows
    (`BSDB_EMBED_SHARD_ROWS`; 51.8M pages → 11 shards ≈ 36 GB). The skip check is
    all-or-nothing: if an interrupted run left shards behind, delete
@@ -139,7 +139,7 @@ Alternatively, put the same keys under `[llm]` in the repo-root
 | Variable | Default | Purpose |
 |---|---|---|
 | `BSDB_DEMO_DB` | `data/wiki_graph_db` | location of the prepared tables |
-| `BSDB_DEMO_EMBED_MODEL` | `all-MiniLM-L6-v2` | must match the model used in the embed stage |
+| `BSDB_DEMO_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | must match the model used in the embed stage |
 | `BSDB_DEMO_LLM` | `1` | `0` disables LLM features by default |
 | `OPENAI_BASE_URL` | `http://127.0.0.1:18020/v1` | any OpenAI-compatible endpoint (e.g. `https://openrouter.ai/api/v1`) |
 | `OPENAI_API_KEY` | `empty` | provider key (OpenRouter: `sk-or-v1-…`) |

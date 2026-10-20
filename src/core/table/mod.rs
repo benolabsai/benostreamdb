@@ -40,7 +40,12 @@ pub mod maintenance;
 pub mod merge;
 pub use merge::MergeMode;
 pub mod preload;
+pub mod properties;
 pub use preload::{PreloadOptions, PreloadStats};
+pub use properties::{
+    EMBEDDING_DIM_PROP, EMBEDDING_ENDPOINT_PROP, EMBEDDING_MODEL_PROP, EMBEDDING_PROVIDER_PROP,
+    EMBEDDING_QUERY_PREFIX_PROP,
+};
 pub mod primary_key;
 pub mod read;
 pub mod schema;
@@ -405,10 +410,11 @@ impl Table {
         let store = create_object_store(&uri)?;
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
 
-        let (_, version) = manifest_manager.load_latest().await?;
+        let (_, version) = manifest_manager.load_latest_direct().await?;
         if version > 0 {
             return Err(anyhow::anyhow!("Table already exists at {}", uri));
         }
+        manifest_manager.invalidate_caches().await;
 
         let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
         let max_id = manifest_schema
@@ -454,10 +460,11 @@ impl Table {
         let store = create_object_store(&uri)?;
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
 
-        let (_, version) = manifest_manager.load_latest().await?;
+        let (_, version) = manifest_manager.load_latest_direct().await?;
         if version > 0 {
             return Err(anyhow::anyhow!("Table already exists at {}", uri));
         }
+        manifest_manager.invalidate_caches().await;
 
         let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
         let max_id = manifest_schema
@@ -496,10 +503,11 @@ impl Table {
         let store = create_object_store(&uri)?;
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
 
-        let (_, version) = manifest_manager.load_latest().await?;
+        let (_, version) = manifest_manager.load_latest_direct().await?;
         if version > 0 {
             return Err(anyhow::anyhow!("Table already exists at {}", uri));
         }
+        manifest_manager.invalidate_caches().await;
 
         let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
 

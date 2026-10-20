@@ -15,10 +15,11 @@ Stages:
                  edges (source,target int64 + CSR graph index)
                  nodes (id,title,summary,embedding + HNSW-TQ vector index + BM25)
 
-bge-large-en-v1.5 (1024-d) is the production-realistic default. Whole-site f32
-vectors are ~212 GB, so load deletes each embedding shard after ingesting it to
-keep peak disk bounded. Use --embed-dims 512/256 (bge-large supports MRL
-truncation) to halve/quarter that if disk is tight.
+bge-small-en-v1.5 (384-d) is the default: retrieval-tuned, small, and fast
+enough for CPU demo builds. Whole-site f32 vectors are ~80 GB; load deletes each
+embedding shard after ingesting it to keep peak disk bounded. Use
+--embed-model BAAI/bge-large-en-v1.5 --embed-dims 512/256 for a larger,
+MRL-truncated model when quality matters more than build time.
 
 Usage:
   python scripts/prepare_demo.py                 # everything
@@ -592,9 +593,9 @@ def main():
                          "embedding shards (default: $HOME/data/benostreamdb). "
                          "Tables are always written to <repo>/data/wiki_graph_db.")
     ap.add_argument("--workers", type=int, default=3, help="download parallelism")
-    ap.add_argument("--embed-model", default="all-MiniLM-L6-v2",
-                    help="384-d centroid embedder (fast+small). bge-small-en-v1.5 (384d) or "
-                         "BAAI/bge-large-en-v1.5 (1024d, ~4x slower/bigger) are options")
+    ap.add_argument("--embed-model", default="BAAI/bge-small-en-v1.5",
+                    help="384-d centroid embedder (retrieval-tuned default). "
+                         "BAAI/bge-large-en-v1.5 (1024d, ~4x slower/bigger) is the quality option")
     ap.add_argument("--embed-dims", type=int, default=0, help="0=native; 512/256 = MRL truncate (bge-large/small support this)")
     ap.add_argument("--embed-batch", type=int, default=512)
     ap.add_argument("--lead-chars", type=int, default=256, help="embed only the article lead (chars) for the centroid")

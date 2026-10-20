@@ -93,3 +93,17 @@ SOFTWARE.
 ```
 
 
+
+## Candle / Hugging Face Hub / tokenizers
+
+The optional local-embedding provider in the MCP server (`contrib/benostreamdb-mcp`) uses these
+projects. They are not linked into the core engine.
+
+- **Candle** (`candle-core`, `candle-nn`, `candle-transformers`) — MIT OR Apache License 2.0. [https://github.com/huggingface/candle](https://github.com/huggingface/candle). Copyright Hugging Face, Inc.
+- **tokenizers** — Apache License 2.0. [https://github.com/huggingface/tokenizers](https://github.com/huggingface/tokenizers). Copyright Hugging Face, Inc.
+- **hf-hub** — Apache License 2.0. [https://github.com/huggingface/hf-hub](https://github.com/huggingface/hf-hub). Copyright Hugging Face, Inc.
+
+Model weights downloaded at runtime (for example `BAAI/bge-small-en-v1.5`) are not part of the
+MCP wheel and remain subject to the license published on their Hugging Face model card.
+
+The Apache-2.0 and MIT license texts are reproduced below in this file.

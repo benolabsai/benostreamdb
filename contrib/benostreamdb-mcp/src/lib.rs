@@ -6,6 +6,7 @@
 //! supporting extensible tool registries, custom table schemas, and pluggable
 //! file extractors for domain verticals (Finance, Healthcare, Legal, etc.).
 
+pub mod embedding;
 pub mod ingest_formats;
 pub mod protocol;
 pub mod server;

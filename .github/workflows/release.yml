@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      rollback_on_failure:
+        description: "Delete/yank a partially published release if a publish job fails"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -64,16 +69,16 @@ jobs:
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
             export VERSION=${GITHUB_REF#refs/tags/v}
-            export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            export CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.post[0-9]+$//' | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-search/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' server/flight_sql/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-mcp/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
@@ -116,25 +121,32 @@ jobs:
           sccache: "true"
           manylinux: auto
       - name: Upload core wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-core-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+          # Replace any artifact left by a previous attempt of this run, so a
+          # "re-run failed jobs" can never publish stale (e.g. wrong-version)
+          # wheels alongside fresh ones.
+          overwrite: true
       - name: Upload search gateway wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-search-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
+          overwrite: true
       - name: Upload flight server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
+          overwrite: true
       - name: Upload MCP server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
+          overwrite: true
 
   macos:
     needs: [ci]
@@ -156,16 +168,16 @@ jobs:
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
             export VERSION=${GITHUB_REF#refs/tags/v}
-            export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            export CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.post[0-9]+$//' | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-search/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' server/flight_sql/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-mcp/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
@@ -203,25 +215,29 @@ jobs:
           args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
           sccache: "true"
       - name: Upload core wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-core-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+          overwrite: true
       - name: Upload search gateway wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-search-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
+          overwrite: true
       - name: Upload flight server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
+          overwrite: true
       - name: Upload MCP server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
+          overwrite: true
 
   windows:
     needs: [ci]
@@ -246,26 +262,28 @@ jobs:
           cuda: "13.0.2"
           method: "network"
           sub-packages: '["nvcc", "cudart"]'
-      - name: Test CUDA discovery on Windows
-        if: matrix.target == 'x86_64'
-        env:
-          SKIP_GPU_TESTS: "1"
-        run: cargo test -p benostream-gpu-ann --features cuda --release -- --nocapture
+      # REMOVED: "Test CUDA discovery on Windows" ran a full
+      # `cargo test -p benostream-gpu-ann --features cuda --release`, i.e. it
+      # compiled the entire engine dependency tree in release mode purely to
+      # run one test. That was a large slice of this job's ~3h48m and it
+      # duplicates coverage that already lives in ci.yml. Testing belongs in
+      # CI; the release path should only build and publish. The CUDA toolkit
+      # install above is kept because the wheel links against it.
       - name: Update version from tag
         shell: bash
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
             export VERSION=${GITHUB_REF#refs/tags/v}
-            export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            export CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.post[0-9]+$//' | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-search/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' server/flight_sql/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-mcp/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
@@ -307,25 +325,29 @@ jobs:
           args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
           sccache: "true"
       - name: Upload core wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-core-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+          overwrite: true
       - name: Upload search gateway wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-search-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-search/dist
+          overwrite: true
       - name: Upload flight server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-flight-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: server/flight_sql/dist
+          overwrite: true
       - name: Upload MCP server wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-mcp-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: contrib/benostreamdb-mcp/dist
+          overwrite: true
 
 
   sdist:
@@ -338,11 +360,11 @@ jobs:
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
             export VERSION=${GITHUB_REF#refs/tags/v}
-            export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            export CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.post[0-9]+$//' | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' pyproject.toml
           fi
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -350,10 +372,11 @@ jobs:
           command: sdist
           args: --out dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-core-sdist
           path: dist
+          overwrite: true
 
   # Reproducibility: build the core wheel twice under the pinned
   # SOURCE_DATE_EPOCH and require byte-identical archives, turning the
@@ -448,22 +471,93 @@ jobs:
           cat soak-report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload soak report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-report
           path: soak-report.md
+          overwrite: true
 
-  release:
-    name: Final Release
+  # The Java connectors (Spark / Trino) only produce GitHub Release assets.
+  # They previously ran INSIDE the release job, after every registry publish
+  # and before the GitHub Release, where a `cargo build --release` with no Rust
+  # cache recompiled the whole engine and blocked the pipeline for ~2h. They
+  # now run in parallel with the wheel matrix and are consumed only at the end.
+  connectors:
+    name: Java Connectors (Spark / Trino)
+    needs: [ci]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Reuse the linux job's cached registry / target so the engine does
+          # not have to be recompiled from scratch here.
+          shared-key: "linux-x86_64-3.10"
+          cache-targets: true
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Cache Maven and the portable JDK
+        uses: actions/cache@v6
+        with:
+          path: |
+            .maven
+            .java
+            ~/.m2/repository
+          key: connectors-${{ runner.os }}-mvn3.9.6-jdk21-${{ hashFiles('build-connectors.sh', '**/pom.xml') }}
+          restore-keys: |
+            connectors-${{ runner.os }}-mvn3.9.6-jdk21-
+      - name: Setup Java 17 (for Spark)
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Save Java 17 Home
+        run: echo "JAVA_17_HOME=$JAVA_HOME" >> $GITHUB_ENV
+      - name: Setup Java 23 (for Trino)
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '23'
+      - name: Save Java 23 Home
+        run: echo "JAVA_TRINO_HOME=$JAVA_HOME" >> $GITHUB_ENV
+      - name: Build Java Connectors (Spark, Trino)
+        shell: bash
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          chmod +x ./build-connectors.sh
+          ./build-connectors.sh
+      - name: Upload connector artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: connector-artifacts
+          path: connector-artifacts
+          overwrite: true
+
+  # crates.io publishing moved into its own job so it runs in PARALLEL with the
+  # PyPI uploads and the connector build. `cargo publish` compiles the crate to
+  # verify it, so on a brand-new version this is the most expensive part of the
+  # publish stage — and because crates.io versions are immutable it must never
+  # share a job with anything that could fail after it.
+  publish-crates:
+    name: Publish to crates.io
     runs-on: ubuntu-latest
     if: "startsWith(github.ref, 'refs/tags/')"
-    # `reproducibility` is a hard gate: a non-reproducible wheel (or a failure
-    # to even verify it) must block publishing, otherwise the check is
-    # decorative. Keep it out of any `if:` that could skip it on tags.
-    needs: [linux, macos, windows, sdist, soak-gate, reproducibility]
+    timeout-minutes: 120
+    needs: [soak-gate, reproducibility]
     environment: release_pypi
     steps:
       - uses: actions/checkout@v5
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "linux-x86_64-3.10"
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -473,93 +567,59 @@ jobs:
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
             export VERSION=${GITHUB_REF#refs/tags/v}
-            export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            export CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.post[0-9]+$//' | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
-            # Only replace the FIRST occurrence in each file
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
-            # The search gateway ships in lockstep with the engine: bump its
-            # PyPI distribution version and keep its core dependency pin in step.
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-search/pyproject.toml
-            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
-            
-            # The flight server ships in lockstep with the engine.
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' server/flight_sql/pyproject.toml
-            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
-            
-            # The MCP server ships in lockstep with the engine.
-            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-mcp/pyproject.toml
-            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
+            perl -i -pe '$done or s/^version = ".*"/version = "$ENV{CARGO_VERSION}"/ and $done = 1' Cargo.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )"[^"]*"/${1}"$ENV{CARGO_VERSION}"/' contrib/benostreamdb-search/Cargo.toml
           fi
       - name: Publish to crates.io
         run: |
-          # 1. Publish standalone accelerator crate first
-          echo "Publishing benostream-gpu-ann to crates.io..."
-          if ! cargo publish -p benostream-gpu-ann --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty 2> ann_err.log; then
-            cat ann_err.log
-            if grep -qi "already exists on crates.io" ann_err.log; then
-              echo "benostream-gpu-ann already exists on crates.io, continuing."
-            else
-              echo "Warning: benostream-gpu-ann publish returned an error:"
+          # Publish in dependency order (accelerator -> core -> dependent), and
+          # fail LOUDLY on any error that is not "already exists", because
+          # crates.io has no undo: a silently skipped crate is unrecoverable.
+          publish_crate() {
+            crate="$1"
+            echo "Publishing $crate to crates.io..."
+            if ! cargo publish -p "$crate" --token "${CARGO_REGISTRY_TOKEN}" --allow-dirty 2>"${crate}.err"; then
+              cat "${crate}.err"
+              if grep -qi "already exists on crates.io" "${crate}.err"; then
+                echo "$crate already exists on crates.io, continuing."
+              else
+                echo "::error::cargo publish failed for $crate"
+                exit 1
+              fi
             fi
-          fi
-
-          # Brief pause for crates.io index update
-          sleep 10
-
-          # 2. Publish main database crate
-          echo "Publishing benostreamdb to crates.io..."
-          if ! cargo publish -p benostreamdb --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty 2> publish_err.log; then
-            cat publish_err.log
-            if grep -qi "already exists on crates.io" publish_err.log; then
-              echo "Version already exists on crates.io, safely continuing."
-            else
-              echo "Error: Cargo publish failed for an unexpected reason."
-              exit 1
-            fi
-          fi
-
-          # 3. Publish the search gateway crate (depends on core).
-          sleep 10
-          echo "Publishing benostreamdb-search to crates.io..."
-          if ! cargo publish -p benostreamdb-search --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty 2> search_err.log; then
-            cat search_err.log
-            if grep -qi "already exists on crates.io" search_err.log; then
-              echo "benostreamdb-search already exists on crates.io, safely continuing."
-            else
-              echo "Error: Cargo publish failed for benostreamdb-search."
-              exit 1
-            fi
-          fi
+            # let the crates.io index settle before any dependent publishes
+            sleep 10
+          }
+          publish_crate benostream-gpu-ann
+          publish_crate benostreamdb
+          publish_crate benostreamdb-search
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # PyPI publishing is split from crates.io and from the GitHub-Release job so
+  # all of them run in PARALLEL, and so a failure in one registry cannot block
+  # the others. Both jobs publish artifacts the build matrix already produced.
+  publish-pypi-core:
+    name: Publish core to PyPI
+    runs-on: ubuntu-latest
+    if: "startsWith(github.ref, 'refs/tags/')"
+    timeout-minutes: 30
+    needs: [linux, macos, windows, sdist]
+    environment: release_pypi
+    steps:
+      - uses: actions/checkout@v5
       - name: Download core wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-core-*
           merge-multiple: true
           path: dist
-      - name: Download search gateway wheels
-        uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-search-*
-          merge-multiple: true
-          path: contrib/benostreamdb-search/dist
-      - name: Download flight server wheels
-        uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-flight-*
-          merge-multiple: true
-          path: server/flight_sql/dist
-      - name: Download MCP server wheels
-        uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-mcp-*
-          merge-multiple: true
-          path: contrib/benostreamdb-mcp/dist
       - name: Repair Wheels (Remove Trailing Data for PyPI)
+        shell: bash
         run: |
-          for f in dist/*.whl contrib/benostreamdb-search/dist/*.whl server/flight_sql/dist/*.whl contrib/benostreamdb-mcp/dist/*.whl; do
+          for f in dist/*.whl; do
             [ -f "$f" ] || continue
             echo "Repairing $f"
             zip -q -F "$f" --out "${f}.fixed" || continue
@@ -570,61 +630,194 @@ jobs:
         with:
           skip-existing: true
           verbose: true
-      # The dbt adapter ships as its own PyPI distribution (`dbt-benostreamdb`),
-      # released alongside the core. Its version follows the dbt convention
-      # (`<dbt-core-major>.<minor>.<patch>`, e.g. 1.8.0) and is maintained
-      # independently in dbt-benostreamdb/dbt/adapters/benostreamdb/__version__.py
-      # — it is NOT derived from the engine tag.
+
+  publish-pypi-addons:
+    name: Publish add-ons to PyPI
+    runs-on: ubuntu-latest
+    if: "startsWith(github.ref, 'refs/tags/')"
+    timeout-minutes: 30
+    needs: [linux, macos, windows]
+    environment: release_pypi
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Download search gateway wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-search-*
+          merge-multiple: true
+          path: contrib/benostreamdb-search/dist
+      - name: Download flight server wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-flight-*
+          merge-multiple: true
+          path: server/flight_sql/dist
+      - name: Download MCP server wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-mcp-*
+          merge-multiple: true
+          path: contrib/benostreamdb-mcp/dist
+      - name: Repair add-on wheels
+        shell: bash
+        run: |
+          for f in contrib/benostreamdb-search/dist/*.whl server/flight_sql/dist/*.whl contrib/benostreamdb-mcp/dist/*.whl; do
+            [ -f "$f" ] || continue
+            echo "Repairing $f"
+            zip -q -F "$f" --out "${f}.fixed" || continue
+            mv "${f}.fixed" "$f"
+          done
+      # The dbt adapter ships as its own PyPI distribution (`dbt-benostreamdb`).
+      # dbt >= 1.8 decoupled adapters from dbt-core, so it carries the SAME engine
+      # version, single-sourced from Cargo.toml (see its __version__.py). The
+      # supported dbt-core range is declared via require-dbt-version.
       - name: Build dbt adapter (sdist + wheel)
         run: |
+          # Carry the release version (including a .postN repack) into the build.
+          export BSDB_RELEASE_VERSION="${GITHUB_REF_NAME#v}"
           python -m pip install --upgrade build
           python -m build --outdir dbt-benostreamdb/dist dbt-benostreamdb
+      # NO `continue-on-error` by design: a missing distribution must fail the
+      # release (that is how benostreamdb-flight / -mcp silently went missing).
+      # Each target needs an EXISTING PyPI project. OIDC trusted publishing
+      # cannot create a new project, and PyPI only allows ONE pending publisher
+      # at a time — so bootstrap new names with a one-off token upload:
+      #   twine upload --username __token__ --password "$PYPI_API_TOKEN" <dist>/*
+      # then add a trusted publisher on the project's PyPI settings page.
       - name: Publish dbt adapter to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        continue-on-error: true
         with:
           packages-dir: dbt-benostreamdb/dist
           skip-existing: true
           verbose: true
       - name: Publish search gateway to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        continue-on-error: true
         with:
           packages-dir: contrib/benostreamdb-search/dist
           skip-existing: true
           verbose: true
       - name: Publish flight server to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        continue-on-error: true
         with:
           packages-dir: server/flight_sql/dist
           skip-existing: true
           verbose: true
       - name: Publish MCP server to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        continue-on-error: true
         with:
           packages-dir: contrib/benostreamdb-mcp/dist
           skip-existing: true
           verbose: true
-      - name: Setup Java 17 (for Spark)
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - name: Save Java 17 Home
-        run: echo "JAVA_17_HOME=$JAVA_HOME" >> $GITHUB_ENV
-      - name: Setup Java 23 (for Trino)
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '23'
-      - name: Save Java 23 Home
-        run: echo "JAVA_TRINO_HOME=$JAVA_HOME" >> $GITHUB_ENV
-      - name: Build Java Connectors (Spark, Trino)
+
+  release:
+    name: Verify & Cut GitHub Release
+    runs-on: ubuntu-latest
+    if: "startsWith(github.ref, 'refs/tags/')"
+    # `reproducibility` is a hard gate: a non-reproducible wheel (or a failure
+    # to even verify it) must block publishing, otherwise the check is
+    # decorative. Keep it out of any `if:` that could skip it on tags.
+    # Waits for every registry publish so the verification step below is a real
+    # post-condition, and so a partial publish blocks the GitHub Release.
+    # NOTE: `release` (the verification step) is deliberately NOT in the
+    # `rollback` job's needs, so a verification failure cannot trigger a
+    # destructive rollback of otherwise-good artifacts.
+    needs: [publish-pypi-core, publish-pypi-addons, publish-crates, connectors]
+    environment: release_pypi
+    timeout-minutes: 30
+    steps:
+      # This job no longer builds anything or talks to a registry directly — it
+      # collects artifacts, verifies the result, and cuts the GitHub Release — so
+      # it needs no Rust toolchain, cache or sccache.
+      - uses: actions/checkout@v5
+      - name: Update version from tag
+        shell: bash
         run: |
-          chmod +x ./build-connectors.sh
-          ./build-connectors.sh
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            export VERSION=${GITHUB_REF#refs/tags/v}
+            export CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.post[0-9]+$//' | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
+            # Only replace the FIRST occurrence in each file
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' pyproject.toml
+            # The search gateway ships in lockstep with the engine: bump its
+            # PyPI distribution version and keep its core dependency pin in step.
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
+            
+            # The flight server ships in lockstep with the engine.
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
+            
+            # The MCP server ships in lockstep with the engine.
+            perl -i -pe 's/^dynamic = \["version"\]/version = \"$ENV{VERSION}\"/' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
+          fi
+      # crates.io publishing now happens in the parallel `publish-crates` job
+      # above, so this job stays fast (downloads + uploads only) and never holds
+      # an immutable crate version hostage behind a later step.
+      # Publishing happened in the parallel PyPI/crates jobs above; this job only
+      # gathers every built distribution so it can be attached to the release.
+      - name: Download core wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-core-*
+          merge-multiple: true
+          path: dist
+      - name: Download search gateway wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-search-*
+          merge-multiple: true
+          path: contrib/benostreamdb-search/dist
+      - name: Download flight server wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-flight-*
+          merge-multiple: true
+          path: server/flight_sql/dist
+      - name: Download MCP server wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-mcp-*
+          merge-multiple: true
+          path: contrib/benostreamdb-mcp/dist
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build dbt adapter (for the release assets)
+        run: |
+          export BSDB_RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          python -m pip install --upgrade build
+          python -m build --outdir dbt-benostreamdb/dist dbt-benostreamdb
+      # The Java connector build moved to the parallel `connectors` job above;
+      # here we only collect its artifacts for the GitHub Release.
+      - name: Download connector artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: connector-artifacts
+          path: connector-artifacts
+      # Loud post-condition: every published distribution must actually exist
+      # on PyPI before we declare the release done. This is what would have
+      # caught the missing flight / MCP packages.
+      - name: Verify every distribution landed on PyPI
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          failed=0
+          for p in benostreamdb benostreamdb-search benostreamdb-flight benostreamdb-mcp; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/$p/$VERSION/json")
+            if [ "$code" != "200" ]; then
+              echo "::error::$p $VERSION is missing from PyPI (HTTP $code)"
+              failed=1
+            else
+              echo "ok: $p $VERSION"
+            fi
+          done
+          exit "$failed"
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
@@ -637,3 +830,94 @@ jobs:
             server/flight_sql/dist/*
             connector-artifacts/*
           generate_release_notes: true
+
+  # ---------------------------------------------------------------------------
+  # Rollback — the compensating half of "all or nothing".
+  #
+  # Registries have no transactions, so instead of pretending otherwise we undo
+  # what we already published when a SIBLING PUBLISH JOB FAILS:
+  #
+  #   * PyPI        -> `pypi-cleanup` DELETES the version. PyPI has no yank
+  #                    API or CLI, so delete is the only scriptable option.
+  #                    NOTE: PyPI forbids re-using a deleted filename, so a
+  #                    re-publish must use a NEW version (e.g. <base>.post1).
+  #   * crates.io   -> `cargo yank`. A crates.io version can never be deleted,
+  #                    so a yank is the strongest possible undo there.
+  #
+  # SAFETY VALVES (both deliberate):
+  #   1. `needs` deliberately EXCLUDES the `release` job, so a failure of the
+  #      post-publish *verification* step does NOT trigger a destructive
+  #      rollback of otherwise-good artifacts.
+  #   2. Each destructive step no-ops with a warning unless its credential is
+  #      present. PyPI deletes need a REAL account password — pypi-cleanup logs
+  #      into the website, which rejects API tokens — so set PYPI_USERNAME,
+  #      PYPI_PASSWORD and (if 2FA is on) PYPI_TOTP_SECRET. crates yanks need
+  #      CARGO_REGISTRY_TOKEN.
+  #
+  # NOTE: this is intentionally destructive for PyPI. Because the project has no
+  # users yet, deleting is safe; once 0.12.x is announced, prefer bumping the
+  # version over rolling back.
+  # ---------------------------------------------------------------------------
+  rollback:
+    name: Rollback a partial release
+    runs-on: ubuntu-latest
+    if: ${{ always() && failure() && startsWith(github.ref, 'refs/tags/') }}
+    needs: [publish-crates, publish-pypi-core, publish-pypi-addons]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Resolve the version being released
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Yank the crates published by this run
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -uo pipefail
+          V="${{ steps.v.outputs.version }}"
+          # crates.io has no post-releases: a PyPI repack (<base>.postN) still
+          # maps to the plain base version on crates.io.
+          BASE="${V%%.post*}"
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::warning::CARGO_REGISTRY_TOKEN is not set — skipping crates.io yank"
+            exit 0
+          fi
+          # Reverse dependency order: dependents first, core last.
+          for crate in benostreamdb-search benostreamdb benostream-gpu-ann; do
+            echo "Yanking $crate $BASE ..."
+            cargo yank --version "$BASE" --registry crates-io --token "$CARGO_REGISTRY_TOKEN" "$crate" \
+              || echo "::warning::could not yank $crate $BASE (already yanked, or version differs — e.g. benostream-gpu-ann tracks its own version)"
+          done
+      - name: Delete the PyPI releases published by this run
+        env:
+          PYPI_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+          PYPI_TOTP_SECRET: ${{ secrets.PYPI_TOTP_SECRET }}
+        run: |
+          set -uo pipefail
+          V="${{ steps.v.outputs.version }}"
+          if [ -z "${PYPI_PASSWORD:-}" ]; then
+            echo "::warning::PYPI_PASSWORD is not set — skipping PyPI rollback (nothing was deleted)."
+            echo "::warning::pypi-cleanup logs into the PyPI website, which rejects API tokens; set PYPI_PASSWORD + PYPI_USERNAME (+ PYPI_TOTP_SECRET if 2FA is on)."
+            exit 0
+          fi
+          # Delegate to the tested teardown tool: it logs in with the real
+          # account password (+ optional TOTP) and deletes exactly this version.
+          python -m pip install --upgrade pypi-cleanup
+          python scripts/release_teardown.py --version "$V" --dbt-version "$V" --pypi-only --apply
+      - name: Rollback summary
+        if: always()
+        run: |
+          {
+            echo "## Rollback attempted for \`${{ steps.v.outputs.version }}\`"
+            echo
+            echo "| Target | Action |"
+            echo "|---|---|"
+            echo "| crates.io | \`cargo yank\` at the base version (a version can never be deleted there) |"
+            echo "| PyPI | \`pypi-cleanup\` delete of the exact (possibly \`.postN\`) version |"
+            echo
+            echo "Re-run the release once the failing target is fixed; the surviving"
+            echo "targets will no-op via \`skip-existing\` / the crates.io guard."
+          } >> "$GITHUB_STEP_SUMMARY"

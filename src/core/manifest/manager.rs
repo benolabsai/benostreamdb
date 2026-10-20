@@ -136,4 +136,63 @@ impl ManifestManager {
             Ok(false)
         }
     }
+
+    /// Mirror the manifest's table properties into the official Iceberg
+    /// metadata file (`metadata/v{N}.metadata.json`).
+    ///
+    /// The manifest (`_manifest/vN.json`) is this engine's source of truth, but
+    /// external readers (Spark, Trino, PyIceberg, and the Iceberg REST catalog)
+    /// only read `TableMetadata`. Without this mirror, `SET TBLPROPERTIES`
+    /// values — including the MCP's `benostream.embedding.*` provenance — stay
+    /// invisible outside the engine.
+    ///
+    /// Failures are returned so callers can log them, but they must not roll
+    /// back the already-durable manifest commit: the next data commit re-syncs
+    /// properties from the manifest in `write.rs`.
+    pub(crate) async fn sync_metadata_properties(&self, manifest: &Manifest) -> Result<()> {
+        use crate::core::metadata::TableMetadata;
+
+        let mut metadata = match TableMetadata::load_latest(self.store.as_ref()).await {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                // Metadata is normally created by the first data commit. For a
+                // properties-only table (e.g. `CREATE TABLE` + `SET
+                // TBLPROPERTIES`), synthesize a skeleton from the manifest so
+                // external readers can see the properties immediately.
+                let Some(schema) = manifest.schemas.last().cloned() else {
+                    tracing::debug!(
+                        error = %err,
+                        "no table schema available; skipping Iceberg metadata property sync"
+                    );
+                    return Ok(());
+                };
+                let mut metadata = TableMetadata::new(
+                    manifest.format_version,
+                    uuid::Uuid::new_v4().to_string(),
+                    self.root_uri.clone(),
+                    schema,
+                    manifest.partition_spec.clone(),
+                    manifest.sort_orders.first().cloned().unwrap_or_default(),
+                );
+                metadata.current_schema_id = manifest.current_schema_id;
+                metadata.default_spec_id = manifest.default_spec_id;
+                metadata.default_sort_order_id = manifest.default_sort_order_id;
+                metadata.last_column_id = manifest.last_column_id;
+                metadata.next_row_id = if manifest.format_version >= 3 {
+                    Some(0)
+                } else {
+                    None
+                };
+                metadata
+            }
+        };
+
+        metadata.properties = manifest.properties.clone();
+        metadata.format_version = manifest.format_version;
+        metadata.last_updated_ms = manifest.timestamp_ms;
+        metadata
+            .save_to_store(self.store.as_ref(), manifest.version as i32)
+            .await?;
+        Ok(())
+    }
 }

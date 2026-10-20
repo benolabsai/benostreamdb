@@ -5,8 +5,13 @@ import os
 import shutil
 import subprocess
 import sys
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _dist_version
 
-__version__ = "0.12.0"
+try:  # runtime: authoritative, from the installed distribution metadata
+    __version__ = _dist_version("benostreamdb-search")
+except _PackageNotFoundError:  # source tree / not installed
+    __version__ = "0.0.0"
 
 
 def find_binary() -> str:

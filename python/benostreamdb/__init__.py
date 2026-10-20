@@ -3300,17 +3300,27 @@ class Table:
             create_using=create_using
         )
 
-    def define_embedding(self, column: str, function: Union[str, EmbeddingFunction], vector_column: Optional[str] = None):
+    def define_embedding(
+        self,
+        column: str,
+        function: Optional[Union[str, EmbeddingFunction]] = None,
+        vector_column: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
         """
-        Link a source column to an embedding function for automatic vectorization.
+        Link a source column to an embedding function or model for automatic vectorization.
         
         Args:
             column: The source text column.
             function: Registered function name or EmbeddingFunction instance.
             vector_column: Target vector column name (defaults to {column}_vector).
+            model: Alias for function (e.g. model="BAAI/bge-large-en-v1.5").
         """
+        fn = function if function is not None else model
+        if fn is None:
+            raise ValueError("Must provide either 'function' or 'model' to define_embedding")
         self._embedding_configs[column] = {
-            "function": function,
+            "function": fn,
             "vector_column": vector_column or f"{column}_vector"
         }
 

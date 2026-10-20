@@ -13,7 +13,9 @@ stay aligned with the actual build. It also marks the boundary between the
 ## 1. Platforms and Python ABI
 
 Wheels are ABI3 (`abi3`, built against CPython 3.10) unless noted, produced by
-`PyO3/maturin-action`:
+`PyO3/maturin-action`. The stable ABI is forward-compatible, so the same wheels
+install on CPython **3.10 through 3.15**; 3.15 is supported but is not yet a CI
+smoke-test target (CI runs 3.10–3.12, with ABI3 wheels built on 3.10):
 
 | Platform | Architectures | Notes |
 |---|---|---|

@@ -70,6 +70,47 @@ jobs:
           cargo check --bins
 
   #########################
+  # Version single-source
+  #########################
+  version-check:
+    name: Version single-source check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      # The ONE authored version is Cargo.toml [workspace.package].version. Every
+      # connector pyproject inherits it (dynamic = ["version"]). The two places
+      # Cargo cannot inherit — the inter-crate dependency pins and the dbt
+      # engine pin — are asserted here so they can never silently drift.
+      - name: Derived version copies must match the workspace version
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(".")
+          v = re.search(r'(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"',
+                        (root / "Cargo.toml").read_text()).group(1)
+          print("workspace version:", v)
+          errs = []
+          for p in ["pyproject.toml", "contrib/benostreamdb-search/pyproject.toml",
+                    "server/flight_sql/pyproject.toml", "contrib/benostreamdb-mcp/pyproject.toml"]:
+              if 'dynamic = ["version"]' not in (root / p).read_text():
+                  errs.append(p + ': [project] must use dynamic = ["version"]')
+          for p in ["contrib/benostreamdb-search/Cargo.toml", "server/flight_sql/Cargo.toml"]:
+              m = re.search(r'benostreamdb = \{ version = "([^"]+)"', (root / p).read_text())
+              if not m or m.group(1) != v:
+                  errs.append(p + ": benostreamdb dep pin is not " + v)
+          m = re.search(r'benostreamdb>=([^",\s]+)', (root / "dbt-benostreamdb/pyproject.toml").read_text())
+          if not m or m.group(1) != v:
+              errs.append("dbt-benostreamdb/pyproject.toml: benostreamdb>= floor is not " + v)
+          if errs:
+              print("\n".join("  - " + e for e in errs))
+              sys.exit(1)
+          print("all derived version copies match")
+          PY
+
+  #########################
   # Rust unit/integration tests
   #########################
   test:

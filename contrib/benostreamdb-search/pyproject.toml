@@ -4,7 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "benostreamdb-search"
-version = "0.12.0"
+# Inherits the engine version from Cargo.toml [workspace.package].version.
+dynamic = ["version"]
 description = "BenoStreamDB Search - OpenSearch and Qdrant REST compatibility gateway for BenoStreamDB"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,10 +24,11 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Database",
 ]
 dependencies = [
-    "benostreamdb>=0.12.0",
+    "benostreamdb>=0.13.0",
 ]
 
 [tool.maturin]

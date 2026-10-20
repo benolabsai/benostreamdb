@@ -12,9 +12,11 @@ class EmbeddingFunction(abc.ABC):
 class HuggingFaceFunction(EmbeddingFunction):
     """
     Local embedding function using Sentence Transformers (supports all Hugging Face models).
-    Examples: 'all-MiniLM-L6-v2', 'BAAI/bge-large-en-v1.5', 'Qwen/Qwen-7B-Chat' (if supported by ST)
+    Defaults to the retrieval-tuned ``BAAI/bge-small-en-v1.5`` (384-d).
+    Examples: 'BAAI/bge-small-en-v1.5', 'BAAI/bge-large-en-v1.5',
+    'intfloat/multilingual-e5-small', 'Qwen/Qwen-7B-Chat' (if supported by ST)
     """
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", device: str = "cpu", **kwargs):
+    def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5", device: str = "cpu", **kwargs):
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError:

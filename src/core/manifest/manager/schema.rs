@@ -33,7 +33,11 @@ impl ManifestManager {
 
         loop {
             // Optimistic Concurrency Control Loop
-            let (current_manifest, current_ver) = self.load_latest().await?;
+            let (current_manifest, current_ver) = if attempt == 0 {
+                self.load_latest().await?
+            } else {
+                self.load_latest_direct().await?
+            };
             let new_ver = current_ver + 1;
 
             // Re-use entries from latest
@@ -66,17 +70,24 @@ impl ManifestManager {
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Schema Update)", new_ver);
-                    let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
+                    let dir_key = self.get_dir_cache_key();
                     crate::core::cache::LATEST_VERSION_CACHE
                         .invalidate(&dir_key)
                         .await;
-                    let file_key = format!("{}/{}", self.root_uri, path);
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .insert(dir_key, new_ver)
+                        .await;
+                    let file_key = self.get_cache_key(&path);
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
                         .await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     // Conflict, retry
                     if attempt >= max_retries {
                         break;
@@ -103,13 +114,32 @@ impl ManifestManager {
     /// MVCC: same optimistic-concurrency contract as `update_schema` — the
     /// `PutMode::Create` write of `v{N+1}.json` is the linearization point, and
     /// the retry loop rebases onto the latest snapshot on conflict.
-    pub async fn update_properties(&self, properties: HashMap<String, String>) -> Result<Manifest> {
+    pub async fn update_properties(
+        &self,
+        mut properties: HashMap<String, String>,
+    ) -> Result<Manifest> {
         let max_retries = 10;
         let mut attempt = 0;
 
         loop {
-            let (current_manifest, current_ver) = self.load_latest().await?;
+            let (current_manifest, current_ver) = if attempt == 0 {
+                self.load_latest().await?
+            } else {
+                self.load_latest_direct().await?
+            };
             let new_ver = current_ver + 1;
+
+            // Fill in the dimension from a known model id, then enforce the
+            // embedding-space contract at the commit point. This covers SQL,
+            // Python, MCP, and catalog-driven `set-properties` calls.
+            crate::core::table::properties::normalize_embedding_properties(&mut properties);
+            let has_data = !current_manifest.entries.is_empty()
+                || current_manifest.manifest_list_path.is_some();
+            crate::core::table::properties::validate_embedding_property_transition(
+                &current_manifest.properties,
+                &properties,
+                has_data,
+            )?;
 
             let mut new_manifest = current_manifest.clone();
             new_manifest.version = new_ver;
@@ -130,17 +160,40 @@ impl ManifestManager {
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Properties Update)", new_ver);
-                    let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
+                    let dir_key = self.get_dir_cache_key();
                     crate::core::cache::LATEST_VERSION_CACHE
                         .invalidate(&dir_key)
                         .await;
-                    let file_key = format!("{}/{}", self.root_uri, path);
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .insert(dir_key, new_ver)
+                        .await;
+                    let file_key = self.get_cache_key(&path);
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
                         .await;
+
+                    // Mirror the properties into `TableMetadata`, which is the
+                    // only view external readers (Spark/Trino/PyIceberg/Iceberg
+                    // REST) get. The manifest commit above is authoritative and
+                    // already durable, so a mirror failure is reported but does
+                    // not fail the logical update; the next data commit repairs
+                    // it from the manifest.
+                    if let Err(e) = self.sync_metadata_properties(&new_manifest).await {
+                        metrics::counter!("bsdb_metadata_property_sync_failures_total")
+                            .increment(1);
+                        tracing::warn!(
+                            error = %e,
+                            version = new_ver,
+                            "Committed table properties to the manifest but failed to mirror them into Iceberg metadata"
+                        );
+                    }
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     if attempt >= max_retries {
                         break;
                     }
@@ -206,7 +259,11 @@ impl ManifestManager {
         let max_retries = 10;
         let mut attempt = 0;
         loop {
-            let (current_manifest, current_ver) = self.load_latest().await?;
+            let (current_manifest, current_ver) = if attempt == 0 {
+                self.load_latest().await?
+            } else {
+                self.load_latest_direct().await?
+            };
             let current_schema = current_manifest
                 .schemas
                 .last()
@@ -217,8 +274,10 @@ impl ManifestManager {
 
             for field in &mut new_fields {
                 if let Some(new_indexes) = column_indexes.get(&field.name) {
-                    field.indexes = new_indexes.clone();
-                    changed = true;
+                    if field.indexes != *new_indexes {
+                        field.indexes = new_indexes.clone();
+                        changed = true;
+                    }
                 }
             }
 
@@ -267,6 +326,9 @@ impl ManifestManager {
                     crate::core::cache::LATEST_VERSION_CACHE
                         .invalidate(&dir_key)
                         .await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .insert(dir_key, new_ver)
+                        .await;
                     let file_key = self.get_cache_key(&path);
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
@@ -274,11 +336,17 @@ impl ManifestManager {
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     attempt += 1;
                     if attempt >= max_retries {
                         break;
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    let base_delay = 10 * (2u64.pow(attempt.min(5) as u32));
+                    let jitter = rand::random::<u64>() % base_delay;
+                    tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
                     continue;
                 }
                 Err(e) => return Err(e.into()),

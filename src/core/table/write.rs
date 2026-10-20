@@ -169,6 +169,20 @@ impl Table {
         batches: Vec<RecordBatch>,
         durability: crate::core::table::WalDurability,
     ) -> Result<()> {
+        // Reject vectors that do not match the table's declared dimension.
+        // This is the shared choke point for Python, SQL/Flight SQL, MCP, and
+        // any other connector that writes through the engine. The pre-check
+        // keeps non-vector ingestion on the previous fast path: no property
+        // read and no schema walk unless a vector-named column is present.
+        if crate::core::table::properties::batches_have_vector_columns(&batches) {
+            let embedding_properties = self.properties_async().await?;
+            crate::core::table::properties::validate_embedding_batches(
+                &self.uri,
+                &embedding_properties,
+                &batches,
+            )?;
+        }
+
         if let Some(max_gb) = self.max_ingest_ram_gb {
             let max_bytes = (max_gb * 1_000_000_000.0) as usize;
             // The caller may hold memory outside the engine (e.g. a Python
@@ -1547,6 +1561,11 @@ impl Table {
                 )
             }
         };
+
+        // Iceberg metadata is the only view external readers get, so keep its
+        // properties in lock-step with the manifest. This also repairs a
+        // metadata-only property commit whose mirror write failed.
+        table_meta.properties = new_manifest.properties.clone();
 
         // Add a new snapshot pointing to the latest manifest.
         //
