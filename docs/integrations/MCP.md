@@ -84,7 +84,7 @@ Add the server to your MCP client configuration (e.g., `claude_desktop_config.js
 | Variable | Description | Default |
 |:---|:---|:---|
 | `BSDB_WAREHOUSE` | Base directory or URI for tables | `./data` |
-| `BSDB_GPU_DEVICE` | Compute target (`auto`, `cpu`, `cuda`, `mps`) | `auto` |
+| `BSDB_GPU_DEVICE` | Compute target or pool (`auto`, `cpu`, `cuda[:N]`, `mps`, `cuda:0,cuda:1`) | `auto` |
 | `BSDB_CONFIG` | Catalog configuration file path | Unset |
 
 ---

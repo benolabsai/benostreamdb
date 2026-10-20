@@ -24,6 +24,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `tokenizers` handles truncation and batching. New `--embedding-*` flags and
   `BSDB_EMBEDDING_*` variables; `list_embedding_models` exposes the active
   provider, model, dimension, cache, and local catalogue.
+- **GPU device pools across Python, Flight SQL, and MCP** — `BSDB_GPU_DEVICE`
+  now accepts a comma-separated list (`cuda:0,cuda:1`) and installs a
+  round-robin device pool. Python exposes `set_gpu_device_pool()` /
+  `gpu_device_pool()`. Worker threads are assigned one device each; a single
+  HNSW search still runs on one device.
 - **Cross-connector configuration and API documentation** — `docs/CONFIGURATION.md`
   now covers every `BSDB_*` variable, including embeddings, catalog, GPU/HNSW,
   OTLP, Flight SQL, and MCP.

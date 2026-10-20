@@ -116,7 +116,7 @@ backward compatibility but ignored.
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `BSDB_GPU_DEVICE` | Device for vector index builds and distance kernels: `auto`, `cpu`, `cuda`, or `mps`. `BENOSTREAM_GPU_DEVICE` is accepted as a fallback. | unset (`auto`) |
+| `BSDB_GPU_DEVICE` | Device or comma-separated pool for vector index builds and distance kernels: `auto`, `cpu`, `cuda[:N]`, `mps`, or `cuda:0,cuda:1`. A pool assigns one device per worker thread round-robin; a single HNSW search still runs on one device. `BENOSTREAM_GPU_DEVICE` is accepted as a fallback. | unset (`auto`) |
 | `BSDB_HNSW_M` | HNSW per-node neighbour count. | `16` |
 | `BSDB_HNSW_EF_CONSTRUCTION` | HNSW build beam width. | `max(2 × M, 40)` |
 | `BSDB_HNSW_N_LISTS` | IVF list count. | Heuristic from vector count |

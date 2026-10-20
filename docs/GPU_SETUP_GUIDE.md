@@ -340,7 +340,9 @@ print(f"Success: Computed on {device.backend}")
 
 ## Multi-GPU Systems
 
-For systems with multiple GPUs, specify the device ID:
+For systems with multiple GPUs, you can pin one device or install a pool.
+
+Pin a specific device:
 
 ```python
 import benostreamdb as bsdb
@@ -356,6 +358,27 @@ ctx = bsdb.GPUContext("cuda", device_id=1)  # Second GPU
 # Check which device is being used
 print(f"Using device: {ctx.device_id}")
 ```
+
+Install a process-wide pool so worker threads spread across devices:
+
+```python
+# Each worker thread that first asks for a context gets cuda:0 or cuda:1
+bsdb.set_gpu_device_pool("cuda:0,cuda:1")
+print(bsdb.gpu_device_pool())   # ['cuda:0', 'cuda:1']
+
+# Clear the pool and fall back to the process-wide device
+bsdb.set_gpu_device_pool("")
+```
+
+For Flight SQL, MCP, and other server processes, use the same list:
+
+```bash
+BSDB_GPU_DEVICE="cuda:0,cuda:1" benostreamdb-flight
+```
+
+The pool is **concurrency scaling**, not single-query sharding: each worker thread is assigned one
+device, but one HNSW `search` call still runs on a single GPU. Use separate processes or threads
+pinned to different devices when you need both GPUs busy with independent searches.
 
 ## Troubleshooting
 

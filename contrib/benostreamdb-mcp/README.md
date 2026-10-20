@@ -241,7 +241,7 @@ session.set_schema_access("finance_raw", true)?;
 | `--ephemeral` | `BSDB_EPHEMERAL` | `"ephemeral"` | If true (`1`), uses an ephemeral temporary directory for the session. | `false` |
 | `--config <JSON>` | `BSDB_MCP_CONFIG` | N/A | Full JSON configuration string. | None |
 | `--config-file <PATH>` | N/A | N/A | Path to a `.json` configuration file. | None |
-| N/A | `BSDB_GPU_DEVICE` | N/A | Hardware acceleration target for vector indexes (`auto`, `cpu`, `cuda`, `mps`). | `auto` |
+| N/A | `BSDB_GPU_DEVICE` | N/A | Hardware acceleration target or pool for vector indexes (`auto`, `cpu`, `cuda[:N]`, `mps`, `cuda:0,cuda:1`). | `auto` |
 | `--embedding-model <HF_ID>` | `BSDB_EMBEDDING_MODEL` | `"embedding": {"model": "..."}` | Hugging Face BERT-family embedding model. | `BAAI/bge-small-en-v1.5` |
 | `--embedding-provider <P>` | `BSDB_EMBEDDING_PROVIDER` | `"embedding": {"provider": "..."}` | `local` (in-process Candle), `http`, or `none`. | `local` unless `url` is set |
 | `--embedding-cache-dir <PATH>` | `BSDB_EMBEDDING_CACHE_DIR` | `"embedding": {"cache_dir": "..."}` | Private model cache; reused after the first download. | `<data-dir>/models` |
