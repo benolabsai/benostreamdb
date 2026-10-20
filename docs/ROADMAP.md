@@ -114,7 +114,9 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
 > **Tracking.** Actionable open items are tracked as GitHub issues labeled
 > [`roadmap`](https://github.com/benolabsai/benostreamdb/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap).
 > The themes below retain the design rationale and priority; the issue list is the
-> source of truth for status.
+> source of truth for status. `status: committed` marks current-cycle work,
+> `status: exploratory` marks ideas awaiting user or benchmark validation, and
+> `status: deferred` marks work that is intentionally unscheduled.
 
 > **Release line.** v0.13.0 shipped embedding provenance (core
 > `benostream.embedding.*` table properties, the write/commit vector-space guard,
