@@ -46,7 +46,7 @@ pub trait GpuBackend: Send + Sync {
     ) -> Result<Vec<u32>>;
 
     /// Batched distance computation between M query vectors and N database vectors.
-    /// Returns M * N distances: distances[q * n_vectors + v] = dist(queries[q], vectors[v]).
+    /// Returns M * N distances: `distances[q * n_vectors + v] = dist(queries[q], vectors[v])`.
     fn compute_batch_distance(
         &self,
         queries: &[f32],
