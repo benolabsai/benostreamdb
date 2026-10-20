@@ -111,6 +111,11 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
 
 ## 📋 Active Roadmap Themes
 
+> **Tracking.** Actionable open items are tracked as GitHub issues labeled
+> [`roadmap`](https://github.com/benolabsai/benostreamdb/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap).
+> The themes below retain the design rationale and priority; the issue list is the
+> source of truth for status.
+
 > **Release line.** v0.13.0 shipped embedding provenance (core
 > `benostream.embedding.*` table properties, the write/commit vector-space guard,
 > and local BGE-small embeddings in the MCP server). **v0.14.0 is the next
