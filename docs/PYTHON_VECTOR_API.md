@@ -362,6 +362,20 @@ class GPUContext:
         """Clear all accumulated performance metrics."""
 ```
 
+#### GPU Device Pools
+
+Use a process-wide pool when you want worker threads to spread across multiple GPUs:
+
+```python
+set_gpu_device_pool(devices: str) -> list[str]
+gpu_device_pool() -> list[str]
+```
+
+- `set_gpu_device_pool("cuda:0,cuda:1")` assigns one device per worker thread, round-robin.
+- `set_gpu_device_pool("")` clears the pool.
+- The returned list omits blank entries.
+- A pool is concurrency scaling, not single-query sharding: one HNSW `search` call still runs on one GPU.
+
 #### Usage Examples
 
 ```python

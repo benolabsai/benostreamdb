@@ -27,3 +27,19 @@ def test_gpu_device_unknown_falls_back_to_auto():
     # Unknown input must not error; it falls back to auto-detection.
     resolved = benostreamdb.set_gpu_device("not-a-real-device")
     assert resolved in _BACKENDS
+
+
+def test_gpu_device_pool_roundtrip():
+    assert benostreamdb.set_gpu_device_pool(" cuda:0, ,cuda:1 ") == [
+        "cuda:0",
+        "cuda:1",
+    ]
+    assert benostreamdb.gpu_device_pool() == ["cuda:0", "cuda:1"]
+
+    # A single-device pin replaces the pool.
+    benostreamdb.set_gpu_device("cpu")
+    assert benostreamdb.gpu_device_pool() == []
+
+    # Empty input clears the pool.
+    benostreamdb.set_gpu_device_pool("")
+    assert benostreamdb.gpu_device_pool() == []

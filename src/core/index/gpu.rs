@@ -1475,6 +1475,7 @@ pub fn set_thread_gpu_context(ctx: Option<ComputeContext>) {
 /// while the driver is still loaded avoids both. Safe to call repeatedly.
 pub fn clear_gpu_context() {
     *GLOBAL_GPU_CONTEXT.write() = None;
+    *GPU_DEVICE_POOL.write() = Vec::new();
     THREAD_GPU_CONTEXT.with(|c| *c.borrow_mut() = None);
 }
 
@@ -1518,45 +1519,86 @@ pub fn apply_gpu_context_from_env() -> Option<String> {
         .or_else(|_| std::env::var("BENOSTREAM_GPU_DEVICE"))
         .ok()
         .filter(|s| !s.trim().is_empty())?;
-    set_thread_gpu_context(Some(context_from_device_str(&device)));
+
+    let parsed = parse_device_pool(&device);
+    if parsed.len() > 1 {
+        set_gpu_device_pool(parsed);
+    } else {
+        // A single device (or `auto`) keeps the process-wide behaviour; clear
+        // any previously installed pool so it cannot silently win.
+        set_gpu_device_pool(Vec::new());
+        set_thread_gpu_context(Some(context_from_device_str(&device)));
+    }
     Some(device)
+}
+
+/// Parse a comma-separated device list.
+///
+/// Blank entries are ignored. Never panics on arbitrary input.
+pub(crate) fn parse_device_pool(devices: &str) -> Vec<String> {
+    devices
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Install a pool of GPU devices for multi-GPU execution.
 ///
 /// Each engine worker thread that first asks for a context is assigned the next
-/// device in the pool (round-robin), so one query spreads its kernels across
-/// several GPUs. An empty list disables pooling.
+/// device in the pool (round-robin), so concurrent work spreads across several
+/// GPUs. An empty list disables pooling and falls back to the process-wide
+/// context.
 pub fn set_gpu_device_pool(devices: Vec<String>) {
+    let installing = !devices.is_empty();
     *GPU_DEVICE_POOL.write() = devices;
+    if installing {
+        // A pool supersedes a process-wide single-device pin; otherwise the
+        // explicit pin would always win.
+        *GLOBAL_GPU_CONTEXT.write() = None;
+    }
+    // Drop the calling thread's assigned context so the next lookup observes
+    // the new pool. Other threads re-check the pool on their next lookup.
+    THREAD_GPU_CONTEXT.with(|c| *c.borrow_mut() = None);
+}
+
+/// Return the currently installed device pool (empty when pooling is off).
+pub fn gpu_device_pool() -> Vec<String> {
+    GPU_DEVICE_POOL.read().clone()
 }
 
 /// Parse a comma-separated device list and install it as the pool.
 ///
-/// Blank entries are ignored. A list of 0 or 1 devices is a no-op (a single
-/// device keeps the existing process-wide behaviour); only a genuine list
-/// enables pooling. Never panics on arbitrary input.
-pub fn set_gpu_device_pool_from_str(devices: &str) {
-    let list: Vec<String> = devices
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+/// Blank entries are ignored. A list of 0 devices clears the pool; a single
+/// device is a no-op (use [`set_thread_gpu_context`] for a process-wide pin).
+/// Returns the parsed list. Never panics on arbitrary input.
+pub fn set_gpu_device_pool_from_str(devices: &str) -> Vec<String> {
+    let list = parse_device_pool(devices);
     if list.len() > 1 {
-        set_gpu_device_pool(list);
+        set_gpu_device_pool(list.clone());
+    } else if list.is_empty() {
+        set_gpu_device_pool(Vec::new());
     }
+    list
 }
 
 /// Retrieve the current GPU context.
 ///
-/// Resolution order: an explicit per-thread override, then a lazily-assigned
-/// device from `GPU_DEVICE_POOL` (multi-GPU), then the process-wide context.
+/// Resolution order: an explicit per-thread override, then an explicit
+/// process-wide single-device context, then a lazily-assigned device from
+/// `GPU_DEVICE_POOL` (multi-GPU), then auto-detection. Putting the explicit
+/// single-device context ahead of the pool means a per-query `device=` override
+/// is not silently ignored while a pool is installed.
 pub fn get_thread_gpu_context() -> Option<ComputeContext> {
     // 1. Explicit per-thread override.
     if let Some(ctx) = THREAD_GPU_CONTEXT.with(|c| c.borrow().clone()) {
         return Some(ctx);
     }
-    // 2. Multi-GPU pool: assign one device per worker thread, lazily.
+    // 2. Explicit process-wide single-device context.
+    if let Some(ctx) = GLOBAL_GPU_CONTEXT.read().clone() {
+        return Some(ctx);
+    }
+    // 3. Multi-GPU pool: assign one device per worker thread, lazily.
     if !GPU_DEVICE_POOL.read().is_empty() {
         let assigned = THREAD_GPU_CONTEXT.with(|c| {
             let mut slot = c.borrow_mut();
@@ -1574,8 +1616,8 @@ pub fn get_thread_gpu_context() -> Option<ComputeContext> {
         });
         return Some(assigned);
     }
-    // 3. Process-wide context.
-    GLOBAL_GPU_CONTEXT.read().clone()
+    // 4. Auto-detect.
+    None
 }
 
 /// Check if a hardware GPU context is currently active for this thread.
@@ -1595,6 +1637,16 @@ mod tests {
         let v = vec![1.0, 0.0, 0.0, 1.0];
         let d = compute_distance(&q, &v, 2, VectorMetric::L2).unwrap();
         assert_eq!(d[0], 0.0);
+    }
+
+    #[test]
+    fn parse_device_pool_trims_and_ignores_blanks() {
+        assert_eq!(
+            parse_device_pool(" cuda:0, ,cuda:1 , "),
+            vec!["cuda:0".to_string(), "cuda:1".to_string()]
+        );
+        assert_eq!(parse_device_pool("cuda:0"), vec!["cuda:0".to_string()]);
+        assert!(parse_device_pool("  ,  ").is_empty());
     }
 
     #[test]

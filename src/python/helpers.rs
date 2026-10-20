@@ -418,6 +418,8 @@ pub fn is_debug_build() -> bool {
 /// Returns the resolved backend name (e.g. `"cuda"`, `"cpu"`).
 #[pyfunction]
 pub fn set_gpu_device(device: &str) -> String {
+    // A single-device pin replaces any active pool.
+    crate::core::index::gpu::set_gpu_device_pool(Vec::new());
     let ctx = crate::core::index::gpu::context_from_device_str(device);
     let resolved = format!("{:?}", ctx.backend).to_lowercase();
     crate::core::index::gpu::set_thread_gpu_context(Some(ctx));
@@ -430,6 +432,22 @@ pub fn gpu_device() -> String {
     crate::core::index::gpu::get_thread_gpu_context()
         .map(|c| format!("{:?}", c.backend).to_lowercase())
         .unwrap_or_else(|| "cpu".to_string())
+}
+
+/// Install a round-robin GPU device pool for multi-GPU execution.
+///
+/// Accepts a comma-separated list such as `"cuda:0,cuda:1"`. Each worker thread
+/// that asks for a context is assigned the next device. An empty string clears
+/// the pool. Returns the parsed list (blank entries removed).
+#[pyfunction]
+pub fn set_gpu_device_pool(devices: &str) -> Vec<String> {
+    crate::core::index::gpu::set_gpu_device_pool_from_str(devices)
+}
+
+/// Return the currently installed GPU device pool (empty when pooling is off).
+#[pyfunction]
+pub fn gpu_device_pool() -> Vec<String> {
+    crate::core::index::gpu::gpu_device_pool()
 }
 
 /// Tear down the process cleanly at interpreter exit.

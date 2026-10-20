@@ -55,6 +55,7 @@ Configure the server via environment variables:
 | `BSDB_AUTH_REQUIRED` | Fail closed on unauthenticated requests | `false` |
 | `BSDB_METRICS_BIND` | HTTP metrics listener address | `127.0.0.1` |
 | `BSDB_METRICS_PORT` | HTTP Prometheus metrics port | `9090` |
+| `BSDB_GPU_DEVICE` | GPU device or comma-separated pool (`cuda:0,cuda:1`); pool assigns devices per worker thread | unset (`auto`) |
 
 ---
 
