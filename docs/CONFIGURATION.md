@@ -80,22 +80,20 @@ server and the Python helpers.
 | Variable | Description | Default |
 |:---|:---|:---|
 | `BSDB_VALIDATE_EMBEDDINGS` | `strict` (also `1`/`true`/`on`) scans every `List`/stringified vector row against the table's declared dimension. By default only `FixedSizeList` columns are checked, at schema level; model identity is never inferred from values. | off (schema checks only) |
-| `BSDB_EMBEDDING_PROVIDER` | `local` (in-process ONNX), `http`, or `none`. | `local` unless `BSDB_EMBEDDING_URL` is set |
-| `BSDB_EMBEDDING_MODEL` | Hugging Face model id. | `BAAI/bge-small-en-v1.5` |
-| `BSDB_EMBEDDING_MODEL_PATH` | Local ONNX directory for a model outside the built-in catalogue. | None |
+| `BSDB_EMBEDDING_PROVIDER` | `local` (in-process Candle), `http`, or `none`. | `local` unless `BSDB_EMBEDDING_URL` is set |
+| `BSDB_EMBEDDING_MODEL` | Hugging Face BERT-family model id that publishes `model.safetensors`. | `BAAI/bge-small-en-v1.5` |
 | `BSDB_EMBEDDING_CACHE_DIR` | Private model cache; reused after the first download. | `<data-dir>/models` |
 | `BSDB_EMBEDDING_URL` | Ollama / OpenAI-compatible / TEI embedding endpoint. | None |
 | `BSDB_EMBEDDING_API_KEY` | Bearer token for the HTTP endpoint. | None |
-| `BSDB_EMBEDDING_BATCH_SIZE` | ONNX inference batch size. | `32` |
+| `BSDB_EMBEDDING_BATCH_SIZE` | Candle inference batch size. | `16` |
 | `BSDB_EMBEDDING_MAX_LENGTH` | Tokenizer truncation length. | `512` |
-| `BSDB_EMBEDDING_DIM` | Override/declare the vector dimension. Required for custom models and MRL truncation; known models supply it automatically. | Model default |
-| `BSDB_EMBEDDING_DEVICE` | `cpu`, `auto`, or `cuda` (the local build is CPU-only). | `cpu` |
-| `BSDB_EMBEDDING_INTRA_THREADS` | ONNX Runtime intra-op thread count. | Auto |
-| `BSDB_EMBEDDING_QUANTIZED` | Prefer the quantized ONNX variant when available. | `true` |
-| `BSDB_EMBEDDING_POOLING` | Pooling for `model_path` models: `mean` or `cls`. | `cls` |
+| `BSDB_EMBEDDING_DIM` | Optional dimension override for MRL truncation. Known models supply it from the id map, and loaded models supply it from `config.json` (`hidden_size`). | Model default |
 | `BSDB_EMBEDDING_QUERY_PREFIX` | Override the query instruction prefix. Empty string disables it. | Model default |
 | `BSDB_EMBEDDING_DOCUMENT_PREFIX` | Override the document instruction prefix. Empty string disables it. | Model default |
-| `BSDB_EMBEDDING_SHOW_DOWNLOAD_PROGRESS` | Show Hugging Face download progress on first use. | `true` |
+
+The Candle loader runs on CPU in the published build. The legacy `model_path`, `device`,
+`quantized`, `intra_threads`, `pooling`, and `show_download_progress` JSON keys are accepted for
+backward compatibility but ignored.
 
 ### Write-Ahead Log (WAL) & Ingestion
 

@@ -17,9 +17,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   dimension, and refuses to change or remove a declared model/dimension on a
   non-empty table. Covers Python, SQL/Flight SQL, MCP, bulk ingest, and
   catalog-driven `set-properties` (Spark/Trino).
-- **Local, no-LLM embeddings in the MCP server** — `fastembed`/ONNX Runtime with
-  `BAAI/bge-small-en-v1.5` (384-d, quantized) as the default, plus Ollama,
-  OpenAI-compatible, and TEI HTTP endpoints. New `--embedding-*` flags and
+- **Local, no-LLM embeddings in the MCP server** — pure-Rust Candle BERT
+  inference with `BAAI/bge-small-en-v1.5` (384-d, F32 safetensors) as the
+  default, plus Ollama, OpenAI-compatible, and TEI HTTP endpoints. Models are
+  fetched with `hf-hub`, dimensions are inferred from the model config, and
+  `tokenizers` handles truncation and batching. New `--embedding-*` flags and
   `BSDB_EMBEDDING_*` variables; `list_embedding_models` exposes the active
   provider, model, dimension, cache, and local catalogue.
 - **Cross-connector configuration and API documentation** — `docs/CONFIGURATION.md`

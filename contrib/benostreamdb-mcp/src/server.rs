@@ -492,7 +492,7 @@ impl McpServerConfig {
                     i += 1;
                     if i < args.len() {
                         let provider = match args[i].trim().to_ascii_lowercase().as_str() {
-                            "local" | "fastembed" | "onnx" => Some(EmbeddingProvider::Local),
+                            "local" | "candle" => Some(EmbeddingProvider::Local),
                             "http" | "remote" | "ollama" | "openai" | "tei" => {
                                 Some(EmbeddingProvider::Http)
                             }
@@ -1148,7 +1148,7 @@ impl McpServer {
             if let Ok(mut current) = self.embedding_config.write() {
                 *current = embedding.clone();
             }
-            // Drop the loaded ONNX session so the next embedding call reloads
+            // Drop the loaded Candle model so the next embedding call reloads
             // with the new model/cache configuration.
             if let Ok(mut embedder) = self.local_embedder.lock() {
                 *embedder = None;
@@ -1525,7 +1525,7 @@ impl McpServer {
         }
     }
 
-    /// Run the in-process ONNX model. Loading is lazy and happens on the
+    /// Run the in-process Candle model. Loading is lazy and happens on the
     /// blocking pool; the model is cached for the life of the server.
     async fn embed_local(
         &self,
@@ -2179,7 +2179,7 @@ impl McpServer {
                     },
                     {
                         "name": "list_embedding_models",
-                        "description": "Reports the active embedding provider/model/dimension/cache and lists every Hugging Face model available for local, no-LLM inference. Use the returned huggingface_id or fastembed_name as the embedding.model value.",
+                        "description": "Reports the active embedding provider/model/dimension/cache and lists a curated shortlist of Hugging Face BERT models for local, no-LLM inference. Use the returned huggingface_id as the embedding.model value.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {}
@@ -3788,8 +3788,8 @@ mod tests {
         assert!(
             models
                 .iter()
-                .any(|m| m["fastembed_name"] == "BGESmallENV15Q"),
-            "quantized BGE-small variant missing"
+                .any(|m| m["huggingface_id"] == "BAAI/bge-small-en-v1.5" && m["dim"] == 384),
+            "BGE-small dimension missing from local catalogue"
         );
     }
 

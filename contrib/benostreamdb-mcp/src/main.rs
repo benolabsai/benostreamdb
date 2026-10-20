@@ -35,11 +35,9 @@ async fn main() -> Result<()> {
                 --embedding-cache-dir <PATH>    Private model cache (default: <data-dir>/models)\n    \
                 --embedding-url <URL>           Ollama / OpenAI-compatible / TEI endpoint\n    \
                 --embedding-api-key <KEY>       Bearer token for the embedding endpoint\n    \
-                --embedding-model-path <PATH>   Local ONNX directory for arbitrary HF models\n    \
-                --embedding-batch-size <N>      ONNX inference batch size (default: 32)\n    \
+                --embedding-batch-size <N>      Candle inference batch size (default: 16)\n    \
                 --embedding-max-length <N>      Tokenizer truncation length (default: 512)\n    \
-                --embedding-dim <N>             Override/declare vector dimension\n    \
-                --embedding-device <D>          cpu | auto | cuda (local build is CPU-only)\n    \
+                --embedding-dim <N>             Optional vector-dimension override (MRL)\n    \
                 --no-embeddings                 Disable embedding generation entirely\n    \
                 -h, --help                      Print this help message\n\n\
             ENVIRONMENT VARIABLES:\n    \
@@ -54,8 +52,7 @@ async fn main() -> Result<()> {
                 BSDB_EMBEDDING_CACHE_DIR        Private model cache directory\n    \
                 BSDB_EMBEDDING_URL              HTTP embedding endpoint\n    \
                 BSDB_EMBEDDING_API_KEY          Bearer token for the HTTP endpoint\n    \
-                BSDB_EMBEDDING_MODEL_PATH       Local ONNX directory for arbitrary HF models\n    \
-                BSDB_EMBEDDING_BATCH_SIZE       ONNX batch size\n    \
+                BSDB_EMBEDDING_BATCH_SIZE       Candle batch size\n    \
                 BSDB_EMBEDDING_MAX_LENGTH       Tokenizer truncation length\n    \
                 BSDB_EMBEDDING_QUERY_PREFIX     Override the query instruction prefix\n    \
                 BSDB_EMBEDDING_DOCUMENT_PREFIX  Override the document instruction prefix\n"

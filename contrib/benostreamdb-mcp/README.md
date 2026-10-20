@@ -203,29 +203,28 @@ session.set_schema_access("finance_raw", true)?;
 | `--config <JSON>` | `BSDB_MCP_CONFIG` | N/A | Full JSON configuration string. | None |
 | `--config-file <PATH>` | N/A | N/A | Path to a `.json` configuration file. | None |
 | N/A | `BSDB_GPU_DEVICE` | N/A | Hardware acceleration target for vector indexes (`auto`, `cpu`, `cuda`, `mps`). | `auto` |
-| `--embedding-model <HF_ID>` | `BSDB_EMBEDDING_MODEL` | `"embedding": {"model": "..."}` | Hugging Face embedding model. | `BAAI/bge-small-en-v1.5` |
-| `--embedding-provider <P>` | `BSDB_EMBEDDING_PROVIDER` | `"embedding": {"provider": "..."}` | `local` (in-process ONNX), `http`, or `none`. | `local` unless `url` is set |
+| `--embedding-model <HF_ID>` | `BSDB_EMBEDDING_MODEL` | `"embedding": {"model": "..."}` | Hugging Face BERT-family embedding model. | `BAAI/bge-small-en-v1.5` |
+| `--embedding-provider <P>` | `BSDB_EMBEDDING_PROVIDER` | `"embedding": {"provider": "..."}` | `local` (in-process Candle), `http`, or `none`. | `local` unless `url` is set |
 | `--embedding-cache-dir <PATH>` | `BSDB_EMBEDDING_CACHE_DIR` | `"embedding": {"cache_dir": "..."}` | Private model cache; reused after the first download. | `<data-dir>/models` |
 | `--embedding-url <URL>` | `BSDB_EMBEDDING_URL` | `"embedding": {"url": "..."}` | Ollama / OpenAI-compatible / TEI endpoint. | None |
 | `--embedding-api-key <KEY>` | `BSDB_EMBEDDING_API_KEY` | `"embedding": {"api_key": "..."}` | Bearer token for the HTTP endpoint. | None |
-| `--embedding-model-path <PATH>` | `BSDB_EMBEDDING_MODEL_PATH` | `"embedding": {"model_path": "..."}` | Local ONNX directory for arbitrary HF models. | None |
-| `--embedding-batch-size <N>` | `BSDB_EMBEDDING_BATCH_SIZE` | `"embedding": {"batch_size": N}` | ONNX inference batch size. | `32` |
+| `--embedding-batch-size <N>` | `BSDB_EMBEDDING_BATCH_SIZE` | `"embedding": {"batch_size": N}` | Candle inference batch size. | `16` |
 | `--embedding-max-length <N>` | `BSDB_EMBEDDING_MAX_LENGTH` | `"embedding": {"max_length": N}` | Tokenizer truncation length. | `512` |
-| `--embedding-dim <N>` | `BSDB_EMBEDDING_DIM` | `"embedding": {"dim": N}` | Override/declare vector dimension. | Model default |
-| `--embedding-device <D>` | `BSDB_EMBEDDING_DEVICE` | `"embedding": {"device": "..."}` | `cpu`, `auto`, or `cuda` (local build is CPU-only). | `cpu` |
-| N/A | `BSDB_EMBEDDING_INTRA_THREADS` | `"embedding": {"intra_threads": N}` | ONNX Runtime intra-op thread count. | Auto |
-| N/A | `BSDB_EMBEDDING_QUANTIZED` | `"embedding": {"quantized": bool}` | Prefer the quantized ONNX variant when available. | `true` |
+| `--embedding-dim <N>` | `BSDB_EMBEDDING_DIM` | `"embedding": {"dim": N}` | Optional dimension override (MRL truncation). Otherwise read from the model config. | Model default |
 | N/A | `BSDB_EMBEDDING_QUERY_PREFIX` | `"embedding": {"query_prefix": "..."}` | Override the query instruction prefix. Empty string disables it. | Model default |
 | N/A | `BSDB_EMBEDDING_DOCUMENT_PREFIX` | `"embedding": {"document_prefix": "..."}` | Override the document instruction prefix. Empty string disables it. | Model default |
-| N/A | `BSDB_EMBEDDING_POOLING` | `"embedding": {"pooling": "mean"}` | Pooling for `model_path` models: `mean` or `cls`. | `cls` |
-| N/A | `BSDB_EMBEDDING_SHOW_DOWNLOAD_PROGRESS` | `"embedding": {"show_download_progress": bool}` | Show Hugging Face download progress on first use. | `true` |
 | `--no-embeddings` | N/A | `"embedding": {"provider": "none"}` | Disable embedding generation entirely. | Off |
 
+> Legacy JSON keys `model_path`, `device`, `quantized`, `intra_threads`, `pooling`, and
+> `show_download_progress` are still accepted for backward compatibility but are ignored by the
+> Candle loader. Local inference runs on CPU in the published build.
+
 > [!TIP]
-> `local` is the default and needs no API key or daemon. The first embedding call downloads the
-> quantized ONNX model into the BenoStreamDB private cache (`~/.benostreamdb/models` by default)
-> and reuses it on every subsequent start. `BSDB_EMBEDDING_URL` switches to HTTP automatically
-> when `provider` is not set, preserving the previous Ollama/OpenAI-compatible workflow.
+> `local` is the default and needs no API key or daemon. The first embedding call downloads
+> `config.json`, `tokenizer.json`, and `model.safetensors` into the BenoStreamDB private cache
+> (`~/.benostreamdb/models` by default) and reuses it on every subsequent start.
+> `BSDB_EMBEDDING_URL` switches to HTTP automatically when `provider` is not set, preserving the
+> previous Ollama/OpenAI-compatible workflow.
 
 #### Embedding configuration
 
@@ -235,11 +234,9 @@ session.set_schema_access("finance_raw", true)?;
   "embedding": {
     "provider": "local",
     "model": "BAAI/bge-small-en-v1.5",
-    "quantized": true,
     "cache_dir": "/home/me/.benostreamdb/models",
-    "batch_size": 32,
-    "max_length": 512,
-    "device": "cpu"
+    "batch_size": 16,
+    "max_length": 512
   }
 }
 ```
@@ -259,33 +256,36 @@ Embedding generation is automatic once a provider is configured (local is the de
 
 **Local Hugging Face model (default)**
 
-- `BAAI/bge-small-en-v1.5` is retrieval-tuned, 384-d, and quantized by default.
-- Documents are embedded plain; queries get
+- `BAAI/bge-small-en-v1.5` is retrieval-tuned, 384-d, and runs as F32 safetensors through Candle.
+- Embeddings use CLS pooling followed by L2 normalization. Documents are embedded plain; queries get
   `Represent this sentence for searching relevant passages: `. The prefix is applied automatically.
   Override it with `query_prefix` / `BSDB_EMBEDDING_QUERY_PREFIX` only if the model expects
   something different.
+- The vector dimension is inferred from the model: the curated id map supplies it before load, and
+  `config.json` (`hidden_size`) is authoritative once the model is loaded. Set `dim` only to
+  truncate a Matryoshka (MRL) model.
 - The model is downloaded once into `~/.benostreamdb/models` (or `$XDG_DATA_HOME/benostreamdb/models`)
   and reused. Set `cache_dir` / `BSDB_EMBEDDING_CACHE_DIR` to move it.
 - Loading is lazy: the first embedding call pays the model load; `initialize` and SQL-only sessions
   do not.
+- Candle runs on CPU in the published build; CUDA/Metal backends are not enabled in the wheel.
 
 **Selecting a different local model**
 
-Any model in the `fastembed` catalogue can be selected by Hugging Face id:
+Any BERT-family Hugging Face model that publishes `model.safetensors`, `config.json`, and
+`tokenizer.json` can be selected by id:
 
 ```json
-{ "embedding": { "model": "BAAI/bge-base-en-v1.5", "quantized": true } }
+{ "embedding": { "model": "BAAI/bge-base-en-v1.5" } }
 ```
 
 Common choices: `BAAI/bge-base-en-v1.5` (768-d), `BAAI/bge-large-en-v1.5` (1024-d),
 `intfloat/multilingual-e5-small`, `nomic-ai/nomic-embed-text-v1.5`,
 `mixedbread-ai/mxbai-embed-large-v1`, `jinaai/jina-embeddings-v2-base-code`.
 
-For a model outside the catalogue, either:
-
-- point `model_path` at a directory containing `model.onnx`, `tokenizer.json`, `config.json`, and the
-  optional tokenizer config files (`pooling: "mean"` or `"cls"` as required), or
-- use an HTTP embedding endpoint (next section).
+Models that only ship `pytorch_model.bin` must be converted to safetensors, or served through an
+HTTP embedding endpoint (next section). Non-BERT architectures and multimodal models also require
+an HTTP endpoint.
 
 **Override with an OpenAI-compatible / LLM vendor endpoint**
 
@@ -470,22 +470,22 @@ Universal file ingestion tool supporting documents, spreadsheets, multimodal ima
   - `embed_chunks` (*boolean*, optional, default `false`): Compute embeddings for extracted text/code/PDF/Office chunks. Images are only embedded when an HTTP multimodal endpoint is configured; the local text model skips them.
 
 ### 12. `list_embedding_models`
-Reports the active embedding provider, resolved model, dimension, cache directory, load state, query/document prefixes, and HTTP endpoint (if any), then enumerates every Hugging Face model available for local, no-LLM inference. Use the returned `huggingface_id` or `fastembed_name` as `embedding.model`.
+Reports the active embedding provider, resolved model, dimension, cache directory, device, load state, query/document prefixes, and HTTP endpoint (if any), then enumerates a curated shortlist of Hugging Face models for local, no-LLM inference. Use the returned `huggingface_id` as `embedding.model`.
 - **Arguments**: None.
 - **Example response**:
   ```json
   {
     "provider": "local",
     "model": "BAAI/bge-small-en-v1.5",
-    "resolved_model": "BGESmallENV15Q",
+    "resolved_model": "BAAI/bge-small-en-v1.5",
     "dim": 384,
-    "quantized": true,
     "cache_dir": "/home/me/.benostreamdb/models",
+    "device": "cpu",
     "loaded": false,
     "providers": ["local", "http", "none"],
     "local_models": [
-      { "huggingface_id": "BAAI/bge-small-en-v1.5", "fastembed_name": "BGESmallENV15", "dim": 384 },
-      { "huggingface_id": "BAAI/bge-small-en-v1.5", "fastembed_name": "BGESmallENV15Q", "dim": 384 }
+      { "huggingface_id": "BAAI/bge-small-en-v1.5", "dim": 384 },
+      { "huggingface_id": "BAAI/bge-base-en-v1.5", "dim": 768 }
     ]
   }
   ```

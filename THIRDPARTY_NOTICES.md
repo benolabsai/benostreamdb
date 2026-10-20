@@ -94,17 +94,16 @@ SOFTWARE.
 
 
 
-## fastembed / ort / ONNX Runtime / Hugging Face tokenizers
+## Candle / Hugging Face Hub / tokenizers
 
 The optional local-embedding provider in the MCP server (`contrib/benostreamdb-mcp`) uses these
 projects. They are not linked into the core engine.
 
-- **fastembed** — Apache License 2.0. [https://github.com/Anush008/fastembed-rs](https://github.com/Anush008/fastembed-rs). Copyright the fastembed contributors.
-- **ort / ort-sys** — MIT OR Apache License 2.0. [https://github.com/pykeio/ort](https://github.com/pykeio/ort). Copyright the pykeio contributors.
-- **ONNX Runtime** — MIT License. The `ort-sys` build downloads ONNX Runtime binaries from [https://github.com/microsoft/onnxruntime](https://github.com/microsoft/onnxruntime). Copyright (c) Microsoft Corporation. The upstream binary distribution includes its own `ThirdPartyNotices.txt`.
+- **Candle** (`candle-core`, `candle-nn`, `candle-transformers`) — MIT OR Apache License 2.0. [https://github.com/huggingface/candle](https://github.com/huggingface/candle). Copyright Hugging Face, Inc.
 - **tokenizers** — Apache License 2.0. [https://github.com/huggingface/tokenizers](https://github.com/huggingface/tokenizers). Copyright Hugging Face, Inc.
 - **hf-hub** — Apache License 2.0. [https://github.com/huggingface/hf-hub](https://github.com/huggingface/hf-hub). Copyright Hugging Face, Inc.
 
-The Apache-2.0 and MIT license texts are reproduced below in this file. Users who redistribute the
-MCP wheel should also preserve the ONNX Runtime `ThirdPartyNotices.txt` from the binary release
-selected by `ort-sys`.
+Model weights downloaded at runtime (for example `BAAI/bge-small-en-v1.5`) are not part of the
+MCP wheel and remain subject to the license published on their Hugging Face model card.
+
+The Apache-2.0 and MIT license texts are reproduced below in this file.

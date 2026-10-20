@@ -62,9 +62,9 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
   - Dedicated MCP server exposing BenoStreamDB tables, schemas, SQL queries, and
     hybrid vector/graph retrieval as native tools for Claude Desktop, Cursor, and
     Antigravity. Windows `.msi` installer via `cargo-wix`.
-  - **0.13.0:** local, no-LLM embeddings (`fastembed`, BGE-small by default) with
-    Ollama/OpenAI/TEI HTTP providers, `list_embedding_models`, and embedding
-    provenance shared with the core engine.
+  - **0.13.0:** local, no-LLM embeddings (pure-Rust Candle BERT, BGE-small by
+    default) with Ollama/OpenAI/TEI HTTP providers, `list_embedding_models`, and
+    embedding provenance shared with the core engine.
 - **JSON-Path Inverted Index**:
   - `IndexAlgorithm::JsonPath { paths }` builds a `(path, value) -> row_ids`
     Parquet overlay in `src/core/index/json_path.rs`, packed into the segment's
