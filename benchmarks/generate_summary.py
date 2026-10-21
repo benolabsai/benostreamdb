@@ -557,6 +557,17 @@ def generate_summary():
         "these sizes, so the `cuda` rows are not faster; see §1b for the GPU kernel."
     )
     sections.append("")
+    sections.append(
+        "**Recall comparability.** BenoStreamDB recall was recomputed with "
+        "metric-correct ground truth (see §1). The competitor rows were measured "
+        "before that fix and still use L2 truth for the angular datasets "
+        "(`glove-*`, `nytimes-256`), so cross-engine recall on those datasets is "
+        "**not comparable** and is shown for reference only. QPS, latency, build "
+        "time, and index size are unaffected and remain comparable. "
+        "`benchmarks/competitors/run_competitor.py` now uses the same metric-correct "
+        "truth for future competitor runs."
+    )
+    sections.append("")
     records = []
     for f in sorted(glob.glob(os.path.join(BASE_DIR, "competitors", "results", "*.json"))):
         try:

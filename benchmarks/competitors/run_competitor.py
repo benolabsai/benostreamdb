@@ -764,6 +764,28 @@ def load_dataset(path: str):
     return train, test, neighbors
 
 
+def exact_ground_truth(train, test, q, k, metric):
+    """Exact top-k over a subsetted train set, using the dataset metric.
+
+    The HDF5 `neighbors` field is only valid for the full train set. An L2
+    brute force on an angular dataset produces a different neighbour set, so
+    recall from that truth is not comparable to engines that search cosine/IP.
+    """
+    truth = []
+    if metric == "cosine":
+        train_n = train / (np.linalg.norm(train, axis=1, keepdims=True) + 1e-12)
+        for i in range(q):
+            query = test[i] / (np.linalg.norm(test[i]) + 1e-12)
+            truth.append(np.argsort(1.0 - train_n @ query)[:k])
+    elif metric in ("inner_product", "ip", "dot"):
+        for i in range(q):
+            truth.append(np.argsort(-(train @ test[i]))[:k])
+    else:
+        for i in range(q):
+            truth.append(np.argsort(np.linalg.norm(train - test[i], axis=1))[:k])
+    return np.array(truth)
+
+
 def run_vector(adapter: VectorAdapter, args) -> dict:
     metric = args.metric or DATASET_METRIC.get(args.dataset, "l2")
     train, test, neighbors = load_dataset(download(args.dataset))
@@ -791,11 +813,7 @@ def run_vector(adapter: VectorAdapter, args) -> dict:
 
     if neighbors is None:
         q = min(args.queries, len(test))
-        truth = []
-        for i in range(q):
-            d = np.linalg.norm(train - test[i], axis=1)
-            truth.append(np.argsort(d)[: args.k])
-        neighbors = np.array(truth)
+        neighbors = exact_ground_truth(train, test, q, args.k, metric)
 
     q = min(args.queries, len(test))
     k = args.k

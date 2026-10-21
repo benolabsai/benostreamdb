@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-21 01:29:07 UTC
+- **Generated At**: 2026-10-21 01:30:42 UTC
 - **Platform**: Linux-7.0.0-38-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
 
@@ -511,6 +511,8 @@ from the per-engine JSON records). This page describes how to read it.
 ## 9. Docker Competitor Matrix (shared hardware envelope)
 
 BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`: `cpu` is the scalar CPU path and `cuda` is CUDA device 0. Competitor rows are CPU-only. Index build/search is CPU-bound at these sizes, so the `cuda` rows are not faster; see §1b for the GPU kernel.
+
+**Recall comparability.** BenoStreamDB recall was recomputed with metric-correct ground truth (see §1). The competitor rows were measured before that fix and still use L2 truth for the angular datasets (`glove-*`, `nytimes-256`), so cross-engine recall on those datasets is **not comparable** and is shown for reference only. QPS, latency, build time, and index size are unaffected and remain comparable. `benchmarks/competitors/run_competitor.py` now uses the same metric-correct truth for future competitor runs.
 
 ### Vector — `fashion-mnist-784-euclidean`
 
