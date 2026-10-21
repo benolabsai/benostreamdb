@@ -279,6 +279,11 @@ impl Compactor {
                 .commit(&all_new_entries, &all_old_paths, commit_meta)
                 .await?;
             metrics::counter!("bsdb_data_files_compacted").increment(all_old_paths.len() as u64);
+
+            for old_path in &all_old_paths {
+                crate::core::cache::invalidate_file_caches(&self.root_uri, old_path).await;
+            }
+            crate::core::memory::trim_heap();
         }
 
         Ok(())

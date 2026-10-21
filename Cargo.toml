@@ -246,7 +246,7 @@ debug = 0
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = false                  # Disabled to prevent memory explosion/OOM on DataFusion + Arrow
 codegen-units = 16          # Balance compile speed vs runtime perf (1 = fastest binary, 256 = fastest compile)
 debug = 0
 strip = "debuginfo"       # Keep symbol names for crash backtraces, strip DWARF from binary size

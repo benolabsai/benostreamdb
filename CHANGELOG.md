@@ -9,6 +9,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.13.0]
 
 ### Added
+- **GPU batch distance kernels and multi-GPU acceleration** — added 2D-tiled
+  batched distance kernels in CUDA NVRTC (`compute_distances_batch`), VRAM-resident
+  GPU k-means clustering for IVF segment indexing, and intra-cluster CAGRA
+  acceleration. Exposed `bsdb.cdist` in Python supporting device routing across
+  CPU and multiple CUDA devices (`cuda:0`, `cuda:1`).
+- **Dynamic heap discipline and proactive cache eviction** — added
+  `invalidate_file_caches()` across all global moka caches (`BLOCK_CACHE`,
+  `PARQUET_BYTES_CACHE`, `BYTE_CACHE`, `PARQUET_META_CACHE`, delete caches) on
+  vacuum, compaction, and row deletions, eliminating stale cache retention.
+  Wired `init_jemalloc()` to start 4 background worker threads
+  (`background_thread: true`) and implemented `trim_heap()` using jemalloc
+  `arena.4096.purge` and `arena.4096.decay` (`MALLCTL_ARENAS_ALL`) to return
+  freed pages to the OS.
 - **Embedding provenance and vector-space guard (core)** — tables can declare
   `benostream.embedding.model`, `.dim`, `.provider`, `.endpoint`, and
   `.query_prefix` as Iceberg table properties. The engine mirrors them into
@@ -43,6 +56,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `0` no longer blocks the ingest/update paths.
 
 ### Fixed
+- **Compiler memory exhaustion (OOM) during release builds** — disabled Thin
+  LTO (`lto = false`) in `[profile.release]` and configured `jobs = 4` in
+  `.cargo/config.toml`, eliminating 30+ GB memory spikes during compilation of
+  DataFusion and Arrow dependencies.
 - **Table properties reach external readers** — metadata-only property commits
   now write `TableMetadata.properties` alongside the manifest, so Spark, Trino,
   and PyIceberg see `SET TBLPROPERTIES` values (including embedding provenance).

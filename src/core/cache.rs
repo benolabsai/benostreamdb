@@ -464,6 +464,35 @@ pub static BLOCK_CACHE: Lazy<Cache<String, Arc<RecordBatch>>> = Lazy::new(|| {
         .build()
 });
 
+/// Invalidate all memory caches keyed by an object/file path or (root_uri + path).
+pub async fn invalidate_file_caches(root_uri: &str, path: &str) {
+    let key1 = path.to_string();
+    let key2 = format!("{}/{}", root_uri, path);
+    let key3 = if let Some(stripped) = path.strip_prefix('/') {
+        format!("{}/{}", root_uri, stripped)
+    } else {
+        path.to_string()
+    };
+    let clean_path = path.trim_start_matches('/');
+    let key4 = format!("{}/{}", root_uri.trim_end_matches('/'), clean_path);
+
+    for k in &[&key1, &key2, &key3, &key4] {
+        BLOCK_CACHE.invalidate(*k).await;
+        PARQUET_BYTES_CACHE.invalidate(*k).await;
+        PARQUET_META_CACHE.invalidate(*k).await;
+        BYTE_CACHE.invalidate(*k).await;
+        INDEX_CACHE.invalidate(*k).await;
+        BLOOM_FILTER_CACHE.invalidate(*k).await;
+        HNSW_CACHE.invalidate(*k).await;
+        HNSW_IVF_CACHE.invalidate(*k).await;
+        INVERTED_INDEX_CACHE.invalidate(*k).await;
+        ANALYZER_META_CACHE.invalidate(*k).await;
+        POSITION_DELETE_CACHE.invalidate(*k).await;
+        FULL_DELETE_FILE_CACHE.invalidate(*k).await;
+        EQUALITY_DELETE_CACHE.invalidate(*k).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
