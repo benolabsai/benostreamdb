@@ -1,7 +1,7 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-11 11:45:54 UTC
-- **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.43
+- **Generated At**: 2026-10-21 01:12:16 UTC
+- **Platform**: Linux-7.0.0-38-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
 
 ---
@@ -18,6 +18,19 @@ Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant `hnsw_t
 - **Con — lower recall.** Quantization is lossy: the stored codes no longer rank the exact neighbours, so recall@k drops (recovers only partially by raising `ef_search`, at a latency cost).
 - **Con — approximate distances for reranking.** Scores are approximate, so use the index for candidate discovery and rerank from the float payload where exactness matters.
 - **Default.** Full-precision `hnsw` is the default; `hnsw_tq8`/`hnsw_pq` are opt-in for workloads that will trade recall for size/latency. §9 reports the `benostreamdb` engine once per precision, with the **Index Precision** column (`f32`/`tq8`/`pq`) making the trade-off explicit; holding several precisions on one column and selecting per query is on the roadmap (Theme 6).
+
+### GPU distance kernel (`bsdb.cdist`)
+
+The vector tables below measure index build/search, which is CPU-bound at 20k vectors. The tiled CUDA kernels are reached through `bsdb.cdist` (and k-means). GPU: NVIDIA GeForce RTX 5070 Ti, NVIDIA GeForce RTX 5070 Ti; measured 2026-10-21T01:11:22Z, Python 3.14.4.
+
+| Shape | Metric | CPU (ms) | CPU Mdist/s | CUDA (ms) | CUDA Mdist/s | Speedup |
+|---|---|---|---|---|---|---|
+| 512x50000x128 | l2 | 511.35 | 50.1 | 15.14 | 1691.3 | 33.78x |
+| 2048x50000x128 | l2 | 2485.67 | 41.2 | 49.72 | 2059.4 | 49.99x |
+| 1024x200000x128 | l2 | 4956.71 | 41.3 | 109.18 | 1875.8 | 45.4x |
+| 512x50000x100 | cosine | 1099.03 | 23.3 | 14.87 | 1721.2 | 73.89x |
+
+Two-GPU split of 8192x20000x2048: 351.02 ms on one device vs 220.66 ms across two (1.59x). Both threads release the GIL around the kernel. Larger shapes are transfer-bound (the full MxN matrix is copied back), so the dual-GPU gain depends on the output size.
 
 ## 2. Graph Analytics Performance (BenoStreamDB vs NetworkX vs Neo4j + GDS)
 
@@ -464,6 +477,8 @@ from the per-engine JSON records). This page describes how to read it.
 
 ## 9. Docker Competitor Matrix (shared hardware envelope)
 
+BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`: `cpu` is the scalar CPU path and `cuda` is CUDA device 0. Competitor rows are CPU-only. Index build/search is CPU-bound at these sizes, so the `cuda` rows are not faster; see §1b for the GPU kernel.
+
 ### Vector — `fashion-mnist-784-euclidean`
 
 | Engine | Index Precision | Backend | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
@@ -471,15 +486,15 @@ from the per-engine JSON records). This page describes how to read it.
 | faiss | f32 | cpu | 1.0 | 4051.7 | 0.243 | 0.38 | 0.742 | 65.6 |
 | hnswlib | f32 | cpu | 1.0 | 3772.3 | 0.258 | 0.407 | 1.844 | 65.69 |
 | weaviate | f32 | cpu | 0.9998 | 1105.0 | 0.879 | 1.412 | 5.634 | 62.72 |
-| **benostreamdb** | tq8 | cpu | 0.9318 | 950.7 | 0.934 | 1.326 | 2.253 | 149.09 |
-| **benostreamdb** | tq8 | gpu | 0.9318 | 936.5 | 0.945 | 1.294 | 2.511 | 149.09 |
 | pgvector | f32 | cpu | 1.0 | 836.8 | 1.17 | 1.774 | 11.637 | 166.36 |
+| **benostreamdb** | tq8 | cuda | 0.9346 | 828.8 | 1.07 | 1.403 | 2.839 | 149.12 |
+| **benostreamdb** | tq8 | cpu | 0.9342 | 804.5 | 1.093 | 1.483 | 2.723 | 149.11 |
 | opensearch | f32 | cpu | 0.976 | 773.8 | 1.265 | 1.712 | 7.868 | 153.71 |
-| **benostreamdb** | f32 | cpu | 0.9886 | 675.6 | 1.167 | 1.513 | 2.279 | 191.34 |
-| **benostreamdb** | f32 | gpu | 0.9898 | 645.5 | 1.27 | 1.594 | 2.506 | 191.33 |
-| **benostreamdb** | pq | cpu | 0.8128 | 602.5 | 1.165 | 1.613 | 3.835 | 131.91 |
 | qdrant | f32 | cpu | 1.0 | 595.3 | 1.634 | 2.002 | 10.213 | 62.72 |
-| **benostreamdb** | pq | gpu | 0.8112 | 566.2 | 1.228 | 1.74 | 4.026 | 131.94 |
+| **benostreamdb** | f32 | cuda | 0.9848 | 546.5 | 1.473 | 1.871 | 3.027 | 191.35 |
+| **benostreamdb** | f32 | cpu | 0.9882 | 538.7 | 1.489 | 2.561 | 3.233 | 191.33 |
+| **benostreamdb** | pq | cuda | 0.8018 | 514.0 | 1.404 | 1.906 | 3.23 | 131.94 |
+| **benostreamdb** | pq | cpu | 0.8066 | 477.8 | 1.481 | 2.172 | 4.575 | 131.92 |
 | lancedb | f32 | cpu | 0.7572 | 435.5 | 2.173 | 2.793 | 5.893 | 64.59 |
 | lancedb_hnsw | f32 | cpu | 1.0 | 426.7 | 2.224 | 2.789 | 1.966 | 81.67 |
 | milvus | f32 | cpu | 0.9984 | 3.4 | 200.756 | 400.884 | 3.051 | 62.72 |
@@ -490,13 +505,13 @@ from the per-engine JSON records). This page describes how to read it.
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9916 | 2478.5 | 0.415 | 0.555 | 1.481 | 79.68 |
 | hnswlib | f32 | cpu | 0.99 | 2019.9 | 0.506 | 0.703 | 3.846 | 79.77 |
-| **benostreamdb** | tq8 | gpu | 0.825 | 839.0 | 1.067 | 1.539 | 2.883 | 177.15 |
-| **benostreamdb** | tq8 | cpu | 0.8212 | 822.5 | 1.064 | 1.499 | 2.623 | 177.17 |
 | weaviate | f32 | cpu | 0.9776 | 803.7 | 1.226 | 1.689 | 8.135 | 76.8 |
-| **benostreamdb** | f32 | cpu | 0.9402 | 512.5 | 1.638 | 2.152 | 2.713 | 233.44 |
-| **benostreamdb** | pq | gpu | 0.5484 | 510.6 | 1.317 | 1.937 | 5.097 | 161.49 |
-| **benostreamdb** | pq | cpu | 0.5554 | 492.9 | 1.397 | 1.956 | 4.889 | 161.49 |
-| **benostreamdb** | f32 | gpu | 0.9282 | 481.5 | 1.744 | 2.217 | 2.983 | 233.44 |
+| **benostreamdb** | tq8 | cpu | 0.8258 | 744.8 | 1.187 | 1.636 | 3.166 | 177.14 |
+| **benostreamdb** | tq8 | cuda | 0.8216 | 690.7 | 1.275 | 2.041 | 3.362 | 177.17 |
+| **benostreamdb** | pq | cuda | 0.5652 | 447.6 | 1.576 | 2.114 | 4.107 | 161.51 |
+| **benostreamdb** | pq | cpu | 0.5476 | 434.3 | 1.626 | 2.316 | 5.699 | 161.48 |
+| **benostreamdb** | f32 | cuda | 0.9338 | 410.3 | 2.009 | 2.615 | 3.61 | 233.45 |
+| **benostreamdb** | f32 | cpu | 0.934 | 402.4 | 2.068 | 2.678 | 3.477 | 233.41 |
 | lancedb | f32 | cpu | 0.472 | 400.7 | 2.404 | 2.935 | 6.597 | 79.07 |
 | lancedb_hnsw | f32 | cpu | 0.9636 | 391.4 | 2.394 | 2.963 | 2.581 | 99.15 |
 | pgvector | f32 | cpu | 0.999 | 344.7 | 2.986 | 3.62 | 26.095 | 247.3 |
@@ -509,12 +524,12 @@ from the per-engine JSON records). This page describes how to read it.
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 0.4624 | 8748.5 | 0.113 | 0.208 | 0.624 | 10.97 |
 | faiss | f32 | cpu | 0.9826 | 7162.6 | 0.136 | 0.259 | 0.419 | 10.88 |
-| **benostreamdb** | tq8 | gpu | 0.342 | 1556.2 | 0.557 | 0.753 | 0.97 | 20.68 |
-| **benostreamdb** | tq8 | cpu | 0.337 | 1555.7 | 0.552 | 0.767 | 0.748 | 20.67 |
+| **benostreamdb** | tq8 | cuda | 0.3436 | 1262.4 | 0.704 | 0.954 | 0.864 | 20.7 |
+| **benostreamdb** | tq8 | cpu | 0.3494 | 1260.9 | 0.699 | 0.974 | 0.865 | 20.69 |
 | weaviate | f32 | cpu | 0.4614 | 1179.0 | 0.827 | 1.397 | 4.341 | 8.0 |
-| **benostreamdb** | f32 | gpu | 0.4576 | 1046.1 | 0.856 | 1.305 | 1.038 | 27.91 |
-| **benostreamdb** | f32 | cpu | 0.4554 | 1036.4 | 0.858 | 1.29 | 0.881 | 27.95 |
 | qdrant | f32 | cpu | 0.461 | 967.8 | 0.993 | 1.404 | 1.737 | 8.0 |
+| **benostreamdb** | f32 | cuda | 0.455 | 865.7 | 1.027 | 1.613 | 1.056 | 27.94 |
+| **benostreamdb** | f32 | cpu | 0.4524 | 791.8 | 1.135 | 1.668 | 1.119 | 27.95 |
 | pgvector | f32 | cpu | 0.4618 | 790.9 | 1.266 | 1.685 | 6.111 | 24.85 |
 | opensearch | f32 | cpu | 0.4362 | 692.1 | 1.431 | 1.87 | 8.508 | 47.05 |
 | lancedb | f32 | cpu | 0.0216 | 520.5 | 1.817 | 2.323 | 0.406 | 8.2 |
@@ -527,14 +542,14 @@ from the per-engine JSON records). This page describes how to read it.
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9494 | 5272.1 | 0.186 | 0.38 | 0.585 | 18.88 |
 | hnswlib | f32 | cpu | 0.1756 | 5078.3 | 0.194 | 0.366 | 0.958 | 18.97 |
-| **benostreamdb** | tq8 | gpu | 0.1992 | 1392.2 | 0.579 | 0.933 | 1.181 | 38.95 |
-| **benostreamdb** | tq8 | cpu | 0.2056 | 1370.6 | 0.582 | 1.075 | 0.897 | 38.95 |
-| **benostreamdb** | pq | gpu | 0.4138 | 1165.1 | 0.659 | 0.92 | 1.942 | 35.01 |
-| **benostreamdb** | pq | cpu | 0.4294 | 1120.0 | 0.686 | 1.114 | 1.471 | 35.03 |
+| **benostreamdb** | tq8 | cpu | 0.202 | 1130.0 | 0.738 | 1.09 | 1.108 | 38.99 |
+| **benostreamdb** | tq8 | cuda | 0.2 | 1107.9 | 0.739 | 1.128 | 1.24 | 38.99 |
 | weaviate | f32 | cpu | 0.179 | 1007.2 | 0.957 | 1.694 | 5.026 | 16.0 |
-| **benostreamdb** | f32 | cpu | 0.1734 | 857.5 | 1.007 | 1.489 | 1.312 | 52.26 |
-| **benostreamdb** | f32 | gpu | 0.1738 | 841.4 | 1.021 | 1.613 | 1.566 | 52.26 |
+| **benostreamdb** | pq | cuda | 0.4162 | 974.5 | 0.802 | 1.132 | 1.523 | 35.06 |
+| **benostreamdb** | pq | cpu | 0.3996 | 969.0 | 0.807 | 1.146 | 1.667 | 35.07 |
 | qdrant | f32 | cpu | 0.1752 | 743.7 | 1.308 | 1.892 | 3.205 | 16.0 |
+| **benostreamdb** | f32 | cpu | 0.1706 | 683.8 | 1.265 | 1.917 | 1.841 | 52.3 |
+| **benostreamdb** | f32 | cuda | 0.173 | 669.2 | 1.308 | 1.737 | 1.744 | 52.24 |
 | pgvector | f32 | cpu | 0.176 | 629.9 | 1.584 | 2.137 | 8.056 | 42.27 |
 | lancedb | f32 | cpu | 0.097 | 473.9 | 2.009 | 2.525 | 2.332 | 16.78 |
 | lancedb_hnsw | f32 | cpu | 0.1772 | 446.5 | 2.125 | 2.634 | 1.042 | 23.26 |
@@ -547,10 +562,10 @@ from the per-engine JSON records). This page describes how to read it.
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 0.9914 | 20036.8 | 0.049 | 0.065 | 0.259 | 8.17 |
 | faiss | f32 | cpu | 0.9964 | 14752.2 | 0.065 | 0.106 | 0.212 | 8.08 |
-| **benostreamdb** | tq8 | cpu | 0.7616 | 2147.6 | 0.38 | 0.543 | 1.119 | 15.27 |
-| **benostreamdb** | tq8 | gpu | 0.753 | 2074.9 | 0.401 | 0.559 | 1.23 | 15.29 |
-| **benostreamdb** | f32 | gpu | 0.754 | 2040.1 | 0.407 | 0.561 | 1.629 | 17.6 |
-| **benostreamdb** | f32 | cpu | 0.7448 | 1976.6 | 0.419 | 0.629 | 1.403 | 17.63 |
+| **benostreamdb** | tq8 | cpu | 0.7292 | 1707.2 | 0.504 | 0.653 | 1.245 | 15.28 |
+| **benostreamdb** | tq8 | cuda | 0.7438 | 1670.1 | 0.506 | 0.785 | 1.277 | 15.27 |
+| **benostreamdb** | f32 | cpu | 0.7542 | 1551.9 | 0.541 | 0.729 | 1.762 | 17.62 |
+| **benostreamdb** | f32 | cuda | 0.7652 | 1478.9 | 0.557 | 0.831 | 1.613 | 17.65 |
 | weaviate | f32 | cpu | 0.9844 | 1447.6 | 0.661 | 1.38 | 3.858 | 5.2 |
 | pgvector | f32 | cpu | 0.996 | 1337.6 | 0.739 | 0.977 | 6.146 | 18.51 |
 | opensearch | f32 | cpu | 0.5954 | 1179.9 | 0.838 | 1.118 | 3.371 | 32.27 |
@@ -566,15 +581,15 @@ from the per-engine JSON records). This page describes how to read it.
 | faiss | f32 | cpu | 0.9998 | 3177.8 | 0.318 | 0.455 | 1.078 | 65.6 |
 | hnswlib | f32 | cpu | 1.0 | 3097.6 | 0.328 | 0.513 | 2.426 | 65.69 |
 | weaviate | f32 | cpu | 0.999 | 1006.4 | 0.964 | 1.613 | 6.145 | 62.72 |
-| **benostreamdb** | tq8 | cpu | 0.9628 | 932.5 | 0.95 | 1.301 | 2.257 | 149.38 |
-| **benostreamdb** | tq8 | gpu | 0.9604 | 863.2 | 1.042 | 1.398 | 2.472 | 149.39 |
+| **benostreamdb** | tq8 | cpu | 0.9594 | 767.3 | 1.119 | 1.628 | 2.707 | 149.39 |
+| **benostreamdb** | tq8 | cuda | 0.9614 | 764.9 | 1.183 | 1.524 | 2.812 | 149.39 |
 | pgvector | f32 | cpu | 1.0 | 744.0 | 1.336 | 2.065 | 13.313 | 166.35 |
 | opensearch | f32 | cpu | 0.9602 | 717.4 | 1.387 | 1.8 | 8.681 | 137.32 |
-| **benostreamdb** | f32 | cpu | 0.9858 | 627.8 | 1.324 | 1.641 | 2.263 | 191.61 |
-| **benostreamdb** | f32 | gpu | 0.9862 | 623.9 | 1.33 | 1.704 | 2.569 | 191.61 |
-| **benostreamdb** | pq | gpu | 0.8458 | 540.2 | 1.341 | 1.8 | 3.904 | 131.93 |
-| **benostreamdb** | pq | cpu | 0.844 | 538.4 | 1.363 | 1.723 | 3.541 | 131.94 |
 | qdrant | f32 | cpu | 1.0 | 523.1 | 1.891 | 2.519 | 10.177 | 62.72 |
+| **benostreamdb** | f32 | cuda | 0.9848 | 502.9 | 1.65 | 1.966 | 2.873 | 191.62 |
+| **benostreamdb** | f32 | cpu | 0.9856 | 501.2 | 1.644 | 2.078 | 2.751 | 191.61 |
+| **benostreamdb** | pq | cpu | 0.8504 | 479.0 | 1.558 | 2.065 | 4.162 | 131.93 |
+| **benostreamdb** | pq | cuda | 0.8498 | 476.9 | 1.558 | 2.028 | 3.287 | 131.93 |
 | lancedb_hnsw | f32 | cpu | 1.0 | 415.1 | 2.29 | 2.815 | 2.039 | 81.79 |
 | lancedb | f32 | cpu | 0.8318 | 387.8 | 2.475 | 3.259 | 5.555 | 64.59 |
 | milvus | f32 | cpu | 0.9914 | 3.4 | 200.761 | 401.067 | 2.833 | 62.72 |
@@ -585,14 +600,14 @@ from the per-engine JSON records). This page describes how to read it.
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 0.0908 | 4261.4 | 0.23 | 0.412 | 1.243 | 23.45 |
 | faiss | f32 | cpu | 0.0922 | 3924.1 | 0.249 | 0.426 | 0.704 | 23.36 |
-| **benostreamdb** | tq8 | gpu | 0.1992 | 1142.6 | 0.71 | 1.079 | 1.26 | 49.74 |
-| **benostreamdb** | tq8 | cpu | 0.1866 | 1116.7 | 0.721 | 1.213 | 1.12 | 49.8 |
 | weaviate | f32 | cpu | 0.0906 | 950.0 | 1.033 | 1.657 | 5.343 | 20.48 |
-| **benostreamdb** | pq | cpu | 0.425 | 906.1 | 0.813 | 1.213 | 1.677 | 46.39 |
-| **benostreamdb** | pq | gpu | 0.3138 | 850.2 | 0.886 | 1.159 | 1.91 | 46.38 |
-| **benostreamdb** | f32 | gpu | 0.086 | 722.5 | 1.189 | 1.778 | 1.421 | 66.26 |
-| **benostreamdb** | f32 | cpu | 0.085 | 704.1 | 1.228 | 1.732 | 1.256 | 66.26 |
+| **benostreamdb** | tq8 | cpu | 0.3488 | 949.6 | 0.868 | 1.279 | 1.194 | 49.69 |
+| **benostreamdb** | tq8 | cuda | 0.261 | 943.7 | 0.873 | 1.188 | 1.231 | 49.8 |
+| **benostreamdb** | pq | cpu | 0.3964 | 743.0 | 1.03 | 1.444 | 1.909 | 46.4 |
+| **benostreamdb** | pq | cuda | 0.2664 | 729.1 | 1.043 | 1.407 | 1.466 | 46.48 |
+| **benostreamdb** | f32 | cpu | 0.0862 | 663.7 | 1.28 | 1.799 | 1.33 | 66.33 |
 | qdrant | f32 | cpu | 0.0908 | 652.2 | 1.477 | 2.256 | 3.97 | 20.48 |
+| **benostreamdb** | f32 | cuda | 0.0848 | 628.9 | 1.361 | 1.713 | 1.343 | 66.27 |
 | pgvector | f32 | cpu | 0.0908 | 529.1 | 1.868 | 2.636 | 10.021 | 50.92 |
 | lancedb | f32 | cpu | 0.0828 | 494.1 | 1.897 | 2.464 | 1.704 | 21.14 |
 | lancedb_hnsw | f32 | cpu | 0.0906 | 434.7 | 2.194 | 2.659 | 1.117 | 28.85 |
@@ -605,15 +620,15 @@ from the per-engine JSON records). This page describes how to read it.
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 1.0 | 11430.4 | 0.086 | 0.177 | 0.414 | 13.21 |
 | faiss | f32 | cpu | 1.0 | 7368.4 | 0.105 | 0.188 | 0.299 | 13.12 |
-| **benostreamdb** | tq8 | gpu | 0.9552 | 1468.2 | 0.578 | 0.822 | 0.94 | 26.17 |
-| **benostreamdb** | tq8 | cpu | 0.9546 | 1443.1 | 0.574 | 0.946 | 0.724 | 26.16 |
-| **benostreamdb** | f32 | cpu | 0.9858 | 1324.7 | 0.628 | 0.979 | 0.771 | 33.86 |
-| **benostreamdb** | f32 | gpu | 0.977 | 1270.6 | 0.661 | 0.97 | 0.971 | 33.86 |
-| **benostreamdb** | pq | cpu | 0.5488 | 1250.3 | 0.643 | 0.993 | 1.037 | 24.17 |
-| **benostreamdb** | pq | gpu | 0.5322 | 1248.5 | 0.658 | 0.925 | 1.289 | 24.14 |
+| **benostreamdb** | tq8 | cpu | 0.9524 | 1216.7 | 0.709 | 1.001 | 0.905 | 26.19 |
 | weaviate | f32 | cpu | 0.999 | 1209.0 | 0.792 | 1.373 | 4.033 | 10.24 |
 | opensearch | f32 | cpu | 0.947 | 1152.5 | 0.851 | 1.186 | 3.772 | 1.18 |
 | pgvector | f32 | cpu | 1.0 | 1141.7 | 0.882 | 1.152 | 4.224 | 29.2 |
+| **benostreamdb** | tq8 | cuda | 0.9538 | 1092.6 | 0.799 | 1.167 | 0.906 | 26.17 |
+| **benostreamdb** | pq | cuda | 0.5448 | 1073.4 | 0.769 | 1.029 | 0.993 | 24.15 |
+| **benostreamdb** | pq | cpu | 0.5446 | 1027.4 | 0.8 | 1.111 | 1.219 | 24.16 |
+| **benostreamdb** | f32 | cpu | 0.9868 | 1004.2 | 0.832 | 1.469 | 0.926 | 33.86 |
+| **benostreamdb** | f32 | cuda | 0.9862 | 988.9 | 0.856 | 1.343 | 0.932 | 33.85 |
 | qdrant | f32 | cpu | 1.0 | 971.2 | 0.998 | 1.387 | 1.973 | 10.24 |
 | lancedb | f32 | cpu | 0.4908 | 506.4 | 1.793 | 2.266 | 0.919 | 10.61 |
 | lancedb_hnsw | f32 | cpu | 0.9884 | 443.2 | 2.136 | 2.573 | 0.687 | 16.19 |

@@ -165,7 +165,12 @@ impl PyDevice {
         *stats = GPUStats::default();
     }
 
-    pub(crate) fn activate(&self) {
+    /// Activate this device as the process-wide compute context.
+    ///
+    /// Benchmark and application harnesses use this to pin a run to an exact
+    /// backend (e.g. `Device("cpu").activate()` or `Device("auto").activate()`),
+    /// so the recorded `device` label reflects where the work actually ran.
+    pub fn activate(&self) {
         crate::core::index::gpu::set_thread_gpu_context(Some(self.context.clone()));
     }
 

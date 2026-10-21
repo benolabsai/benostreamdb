@@ -263,6 +263,51 @@ def generate_summary():
     )
     sections.append("")
 
+    # 1b. GPU batched-distance kernel
+    #
+    # The ANN tables above are index-bound (HNSW/IVF build and search are
+    # CPU-bound at these sizes). The 2D-tiled CUDA kernels are reached through
+    # `bsdb.cdist` and k-means, so report them from the dedicated benchmark.
+    cdist_path = os.path.join(RESULTS_DIR, "gpu_cdist.json")
+    if os.path.exists(cdist_path):
+        try:
+            with open(cdist_path, encoding="utf-8") as fh:
+                cdist = json.load(fh)
+        except (OSError, ValueError):
+            cdist = None
+        if cdist:
+            gpus = ", ".join(cdist.get("gpu") or ["none"])
+            sections.append("### GPU distance kernel (`bsdb.cdist`)")
+            sections.append("")
+            sections.append(
+                "The vector tables below measure index build/search, which is CPU-bound "
+                "at 20k vectors. The tiled CUDA kernels are reached through `bsdb.cdist` "
+                f"(and k-means). GPU: {gpus}; measured {cdist.get('generated_at')}, "
+                f"Python {cdist.get('python')}."
+            )
+            sections.append("")
+            sections.append(
+                "| Shape | Metric | CPU (ms) | CPU Mdist/s | CUDA (ms) | CUDA Mdist/s | Speedup |"
+            )
+            sections.append("|---|---|---|---|---|---|---|")
+            for r in cdist.get("cases", []):
+                sections.append(
+                    f"| {r['queries']}x{r['vectors']}x{r['dim']} | {r['metric']} | "
+                    f"{r['cpu_ms']} | {r['cpu_mdist_s']} | {r.get('cuda_ms', '-')} | "
+                    f"{r.get('cuda_mdist_s', '-')} | {r.get('speedup', '-')}x |"
+                )
+            sections.append("")
+            dual = cdist.get("dual_gpu")
+            if dual:
+                sections.append(
+                    f"Two-GPU split of {dual['queries']}x{dual['vectors']}x{dual['dim']}: "
+                    f"{dual['single_ms']} ms on one device vs {dual['dual_ms']} ms across "
+                    f"two ({dual['speedup']}x). Both threads release the GIL around the "
+                    "kernel. Larger shapes are transfer-bound (the full MxN matrix is "
+                    "copied back), so the dual-GPU gain depends on the output size."
+                )
+                sections.append("")
+
     # 2. Graph Analytics Benchmarks
     #
     # Sourced from the same Docker competitor matrix as the vector/SQL results
@@ -451,6 +496,13 @@ def generate_summary():
     # only reflects the most recent invocation) so the report always shows the
     # full matrix — every engine, every dataset, and both CPU/GPU passes.
     sections.append("## 9. Docker Competitor Matrix (shared hardware envelope)")
+    sections.append("")
+    sections.append(
+        "BenoStreamDB vector rows pin the requested backend with "
+        "`Device(...).activate()`: `cpu` is the scalar CPU path and `cuda` is CUDA "
+        "device 0. Competitor rows are CPU-only. Index build/search is CPU-bound at "
+        "these sizes, so the `cuda` rows are not faster; see §1b for the GPU kernel."
+    )
     sections.append("")
     records = []
     for f in sorted(glob.glob(os.path.join(BASE_DIR, "competitors", "results", "*.json"))):

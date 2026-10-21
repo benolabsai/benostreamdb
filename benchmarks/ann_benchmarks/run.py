@@ -170,6 +170,21 @@ def main() -> None:
     # Import after the env is configured.
     import benostreamdb as bsdb
 
+    # Pin the run to the requested backend. `--device` used to be written
+    # straight into the result record without touching the engine, so the
+    # "cpu" and "gpu" passes both measured the same auto-detected backend.
+    if args.device in ("gpu", "auto"):
+        active_device = bsdb.Device("auto")
+        if args.device == "gpu" and active_device.backend == "cpu":
+            raise SystemExit(
+                "--device gpu requested, but no GPU backend is available"
+            )
+    else:
+        active_device = bsdb.Device(args.device)
+    active_device.activate()
+    backend = active_device.backend
+    print(f"active backend: {backend}", flush=True)
+
     metric = args.metric or DATASET_METRIC.get(args.dataset, "l2")
 
     path = download(args.dataset)
@@ -312,7 +327,8 @@ def main() -> None:
         "index_type": args.index,
         "dataset": args.dataset,
         "workload": "vector_ann",
-        "device": args.device,
+        "device": backend,
+        "requested_device": args.device,
         "n": int(n),
         "dim": int(dim),
         "index": {
