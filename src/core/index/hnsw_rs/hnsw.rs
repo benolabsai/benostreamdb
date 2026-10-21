@@ -397,16 +397,39 @@ impl LayerGenerator {
     // In Malkov(2016) S = 1./log(max_nb_connection)
     //
     /// generate a layer with given maxlevel. upper layers (higher index) are of decreasing probabilities.
-    /// thread safe method.
+    /// thread safe method. Honors `BSDB_HNSW_SEED` environment variable for deterministic graph structure.
     fn generate(&self) -> usize {
-        let mut rng = rand::thread_rng();
-        let xsi = rng.sample(self.unif);
+        let (xsi, fallback_opt): (f64, Option<usize>) = if let Ok(s) =
+            std::env::var("BSDB_HNSW_SEED")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .ok_or(())
+        {
+            use rand::SeedableRng;
+            thread_local! {
+                static SEEDED_RNG: std::cell::RefCell<Option<rand::rngs::StdRng>> = const { std::cell::RefCell::new(None) };
+            }
+            SEEDED_RNG.with(|cell| {
+                let mut opt = cell.borrow_mut();
+                let rng = opt.get_or_insert_with(|| rand::rngs::StdRng::seed_from_u64(s));
+                (
+                    rng.sample(self.unif),
+                    Some(rng.sample(Uniform::<usize>::new(0, self.maxlevel))),
+                )
+            })
+        } else {
+            let mut rng = rand::thread_rng();
+            (rng.sample(self.unif), None)
+        };
         let level = -xsi.ln() * self.scale;
         let mut ulevel = level.floor() as usize;
         // we redispatch possibly sampled level  >= maxlevel to required range
         if ulevel >= self.maxlevel {
             // This occurs with very low probability. Cf commentary above.
-            ulevel = rng.sample(Uniform::<usize>::new(0, self.maxlevel));
+            ulevel = fallback_opt.unwrap_or_else(|| {
+                let mut rng = rand::thread_rng();
+                rng.sample(Uniform::<usize>::new(0, self.maxlevel))
+            });
         }
         ulevel
     }

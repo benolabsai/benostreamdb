@@ -56,6 +56,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `0` no longer blocks the ingest/update paths.
 
 ### Fixed
+- **Non-deterministic IVF k-means clustering and CPU-dependent list count causing vector search recall test failures** — `simple_kmeans` in `src/core/index/ivf.rs` sampled initial centroids using unseeded `rand::thread_rng()`, and `n_lists` for small collections ($N < 1000$) scaled with `num_cpus.min(4)`, producing different cluster topologies on 2-vCPU CI runners versus multi-core workstations. Added `simple_kmeans_with_seed`, defaulting to deterministic PRNG seed `0x00C0_FFEE_1337` (configurable via `BSDB_KMEANS_SEED` and `BSDB_HNSW_SEED`), exposed `seed` in `Device.kmeans(..., seed=...)`, and normalized small collection cluster counts to a constant `4`.
 - **Disk-cache key collisions across stores, runs, and CI steps** (long-standing;
   present since the on-disk index cache was introduced) — `DiskCache` hashed only
   the relative object path into the host-global `/tmp/hdb_cache`, so an entry

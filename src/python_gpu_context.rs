@@ -245,17 +245,20 @@ impl PyDevice {
         )
     }
 
-    #[pyo3(signature = (vectors, k, max_iters=10))]
+    #[pyo3(signature = (vectors, k, max_iters=10, seed=None))]
     fn kmeans(
         &self,
         py: Python<'_>,
         vectors: Vec<Vec<f32>>,
         k: usize,
         max_iters: usize,
+        seed: Option<u64>,
     ) -> PyResult<(Vec<Vec<f32>>, Vec<usize>)> {
         #[allow(deprecated)]
-        py.allow_threads(|| crate::core::index::ivf::simple_kmeans(&vectors, k, max_iters))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        py.allow_threads(|| {
+            crate::core::index::ivf::simple_kmeans_with_seed(&vectors, k, max_iters, seed)
+        })
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 }
 
