@@ -125,7 +125,12 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     // Or if config.base_path is absolute, reader handles it.
     // Let's use absolute path in config and LocalFileSystem rooted at temp_dir
     let config = SegmentConfig::new("", "seg_test_native");
-    let reader = HybridReader::new(config, local_store, "");
+    // The disk cache is keyed by (root_uri + object path) and is host-global,
+    // so an empty root_uri makes this segment collide with any other run that
+    // uses the same relative filename (e.g. a second `cargo test` invocation).
+    // Root the reader at the temp dir so every run gets unique cache keys.
+    let root_uri = temp_dir.path().to_string_lossy().into_owned();
+    let reader = HybridReader::new(config, local_store, &root_uri);
 
     let query_val = benostreamdb::core::index::VectorValue::Float32(query);
     let results = reader
@@ -286,7 +291,10 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
     config.index_files.push(index_file);
 
     let local_store = Arc::new(LocalFileSystem::new_with_prefix(temp_dir.path())?);
-    let reader = benostreamdb::core::reader::HybridReader::new(config, local_store, "");
+    // Unique root_uri keeps this run's disk-cache entries distinct from any
+    // other process using the same relative segment filenames.
+    let root_uri = temp_dir.path().to_string_lossy().into_owned();
+    let reader = benostreamdb::core::reader::HybridReader::new(config, local_store, &root_uri);
 
     // Query for vector 42 — it should be the nearest neighbour of itself.
     let query = VectorValue::Float32(vectors[42].clone());

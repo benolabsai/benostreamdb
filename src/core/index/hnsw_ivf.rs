@@ -1483,7 +1483,15 @@ impl HnswIvfIndex {
         }
 
         let centroids_path = format!("{}.centroids.parquet", root_path);
-        let centroids_bytes = disk_cache.get_bytes(&centroids_path).await?;
+        // The disk cache is host-global, so key it by the store-qualified
+        // `cache_key` (root_uri + path), not the relative object path. Two
+        // stores — or two CI steps writing the same relative layout into
+        // /tmp — would otherwise share entries and could load a stale
+        // centroids/graph while a mapping is freshly written.
+        let centroids_cache_key = format!("{}.centroids.parquet", cache_key);
+        let centroids_bytes = disk_cache
+            .get_bytes_with_key(&centroids_path, &centroids_cache_key)
+            .await?;
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(centroids_bytes)?;
         let reader = builder.build()?;
@@ -1506,7 +1514,9 @@ impl HnswIvfIndex {
 
         // Load metric and quantizer from parquet metadata
         let (metric, quantizer) = {
-            let centroids_bytes_for_meta = disk_cache.get_bytes(&centroids_path).await?;
+            let centroids_bytes_for_meta = disk_cache
+                .get_bytes_with_key(&centroids_path, &centroids_cache_key)
+                .await?;
             let parquet_reader =
                 parquet::file::reader::SerializedFileReader::new(centroids_bytes_for_meta)?;
             let file_metadata = parquet_reader.metadata().file_metadata();
@@ -1577,13 +1587,20 @@ impl HnswIvfIndex {
                     let hnsw_key = format!("{}.cluster_{}.hnsw.graph", root_path, cluster_id);
                     let mapping_key =
                         format!("{}.cluster_{}.mapping.parquet", root_path, cluster_id);
+                    // Qualified keys keep graph and mapping for one cluster
+                    // together across stores/runs.
+                    let hnsw_cache_key = format!("{}.cluster_{}.hnsw.graph", cache_key, cluster_id);
+                    let mapping_cache_key =
+                        format!("{}.cluster_{}.mapping.parquet", cache_key, cluster_id);
 
                     let res_graph = if use_mmap {
-                        GraphData::Mmap(dc.get_mmap(&hnsw_key).await?)
+                        GraphData::Mmap(dc.get_mmap_with_key(&hnsw_key, &hnsw_cache_key).await?)
                     } else {
-                        GraphData::Bytes(dc.get_bytes(&hnsw_key).await?)
+                        GraphData::Bytes(dc.get_bytes_with_key(&hnsw_key, &hnsw_cache_key).await?)
                     };
-                    let res_mapping = dc.get_bytes(&mapping_key).await?;
+                    let res_mapping = dc
+                        .get_bytes_with_key(&mapping_key, &mapping_cache_key)
+                        .await?;
 
                     Ok(ClusterBytes {
                         cluster_id,

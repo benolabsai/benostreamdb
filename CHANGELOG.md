@@ -56,6 +56,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `0` no longer blocks the ingest/update paths.
 
 ### Fixed
+- **Disk-cache key collisions across stores, runs, and CI steps** (long-standing;
+  present since the on-disk index cache was introduced) — `DiskCache` hashed only
+  the relative object path into the host-global `/tmp/hdb_cache`, so an entry
+  written for one store (or by an earlier process using the same relative layout)
+  could be served for another. `HnswIvfIndex::load_async_with_cache_key()` now
+  keys centroids, HNSW graphs, and `row_id` mappings by the store-qualified
+  `cache_key` via new `get_bytes_with_key()` / `get_mmap_with_key()` methods, so a
+  graph can no longer be paired with a mapping from a different k-means
+  assignment. This was the root cause of the intermittent
+  `test_hnsw_ivf_native_integration` failure (`Dist: 0` reported against rows
+  827..836 instead of row 50) in the second `cargo test` step of a job, where the
+  first step had already populated `/tmp/hdb_cache` for the same relative
+  filenames.
 - **Compiler memory exhaustion (OOM) during release builds** — disabled Thin
   LTO (`lto = false`) in `[profile.release]` and configured `jobs = 4` in
   `.cargo/config.toml`, eliminating 30+ GB memory spikes during compilation of
