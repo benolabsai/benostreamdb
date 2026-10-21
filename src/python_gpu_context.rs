@@ -27,150 +27,78 @@ impl PyDevice {
     #[new]
     #[pyo3(signature = (device, index=None))]
     pub fn new(device: &str, index: Option<i32>) -> PyResult<Self> {
-        let (backend_str, device_id) = if device.contains(':') {
-            let parts: Vec<&str> = device.split(':').collect();
-            if parts.len() != 2 {
+        let lower = device.trim().to_ascii_lowercase();
+        let (backend_str, device_id) = if let Some((backend, idx)) = lower.split_once(':') {
+            if idx.contains(':') {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "Device string must be in 'type:index' format (e.g., 'cuda:0')",
                 ));
             }
-            let b = parts[0];
-            let i = parts[1]
+            let parsed = idx
                 .parse::<i32>()
                 .map_err(|_| pyo3::exceptions::PyValueError::new_err("Invalid device index"))?;
-            (b, i)
+            (backend, parsed)
         } else {
-            let lower = device.to_lowercase();
-            (device, index.unwrap_or(if lower == "cpu" { -1 } else { 0 }))
+            let default_index = if lower == "cpu" { -1 } else { 0 };
+            (lower.as_str(), index.unwrap_or(default_index))
         };
 
-        let backend_enum = match backend_str.to_lowercase().as_str() {
-            "cpu" => ComputeBackend::Cpu,
-            "cuda" => {
-                #[cfg(all(
-                    not(target_os = "macos"),
-                    not(all(target_os = "windows", target_arch = "aarch64")),
-                    feature = "cuda"
-                ))]
-                {
-                    let b = ComputeBackend::Cuda;
-                    if !(ComputeContext {
-                        backend: b,
-                        device_id,
-                        implementation: None,
-                    })
-                    .is_available()
-                    {
-                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                            "CUDA device {} not available",
-                            device_id
-                        )));
-                    }
-                    b
-                }
-                #[cfg(not(all(
-                    not(target_os = "macos"),
-                    not(all(target_os = "windows", target_arch = "aarch64")),
-                    feature = "cuda"
-                )))]
-                {
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                        "CUDA backend not available (enable the 'cuda' feature).",
-                    ));
-                }
+        // `auto`/`gpu`/empty keep detection semantics: these are the only
+        // inputs allowed to choose a backend on the user's behalf.
+        if backend_str.is_empty() || backend_str == "auto" || backend_str == "gpu" {
+            return Ok(Self {
+                context: ComputeContext::auto_detect(),
+                stats: Arc::new(Mutex::new(GPUStats::default())),
+            });
+        }
+
+        // Explicit devices resolve to exactly the requested backend + index or
+        // fail. Never silently substitute the auto-detected device: doing so
+        // made `device="cpu"` and `device="cuda:1"` run on GPU 0.
+        let context = match backend_str {
+            "cpu" => ComputeContext {
+                backend: ComputeBackend::Cpu,
+                device_id,
+                implementation: Some(Arc::new(crate::core::index::gpu::CpuBackend)),
+            },
+            "cuda" => ComputeContext::cached(ComputeBackend::Cuda, device_id).map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "CUDA device {} not available: {}",
+                    device_id, e
+                ))
+            })?,
+            "mps" | "metal" => ComputeContext::cached(ComputeBackend::Mps, 0).map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "MPS device not available: {}",
+                    e
+                ))
+            })?,
+            "intel" | "graphics" | "xpu" => {
+                ComputeContext::cached(ComputeBackend::Intel, device_id).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "Intel GPU device {} not available: {}",
+                        device_id, e
+                    ))
+                })?
             }
-            "mps" | "metal" => {
-                #[cfg(target_os = "macos")]
-                {
-                    let b = ComputeBackend::Mps;
-                    if !(ComputeContext {
-                        backend: b,
-                        device_id: 0,
-                        implementation: None,
-                    })
-                    .is_available()
-                    {
-                        return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                            "MPS device not available",
-                        ));
-                    }
-                    b
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                        "Backend 'mps' is only available on macOS.",
-                    ));
-                }
-            }
-            "intel" | "graphics" => {
-                #[cfg(target_os = "linux")]
-                {
-                    let b = ComputeBackend::Intel;
-                    if !(ComputeContext {
-                        backend: b,
-                        device_id,
-                        implementation: None,
-                    })
-                    .is_available()
-                    {
-                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                            "Intel GPU device {} not available",
-                            device_id
-                        )));
-                    }
-                    b
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                        "Backend 'intel' (XPU) is only supported on Linux.",
-                    ));
-                }
-            }
-            "rocm" => {
-                #[cfg(target_os = "linux")]
-                {
-                    let b = ComputeBackend::Rocm;
-                    if !(ComputeContext {
-                        backend: b,
-                        device_id,
-                        implementation: None,
-                    })
-                    .is_available()
-                    {
-                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                            "ROCm device {} not available",
-                            device_id
-                        )));
-                    }
-                    b
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                        "Backend 'rocm' is only supported on Linux.",
-                    ));
-                }
-            }
-            "auto" | "gpu" => {
-                let context = crate::core::index::gpu::ComputeContext::auto_detect();
-                return Ok(Self {
-                    context,
-                    stats: Arc::new(Mutex::new(GPUStats::default())),
-                });
-            }
+            "rocm" | "hip" => ComputeContext::cached(ComputeBackend::Rocm, device_id).map_err(
+                |e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "ROCm device {} not available: {}",
+                        device_id, e
+                    ))
+                },
+            )?,
             _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown device type '{}'. Valid types: 'cpu', 'cuda', 'mps', 'intel', 'rocm', 'gpu', 'auto'", backend_str)));
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unknown device type '{}'. Valid types: 'cpu', 'cuda', 'mps', 'intel', 'rocm', 'gpu', 'auto'",
+                    backend_str
+                )))
             }
         };
 
         Ok(Self {
-            context: ComputeContext {
-                backend: backend_enum,
-                device_id,
-                implementation: None,
-            },
+            context,
             stats: Arc::new(Mutex::new(GPUStats::default())),
         })
     }
@@ -208,6 +136,15 @@ impl PyDevice {
     #[getter]
     fn index(&self) -> i32 {
         self.context.device_id
+    }
+
+    /// Whether this device resolved to a concrete backend implementation.
+    ///
+    /// `False` would mean the device was never initialised and any compute
+    /// would have been silently redirected to another backend.
+    #[getter]
+    fn initialized(&self) -> bool {
+        self.context.implementation.is_some()
     }
 
     fn get_stats(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

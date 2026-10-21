@@ -29,6 +29,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   round-robin device pool. Python exposes `set_gpu_device_pool()` /
   `gpu_device_pool()`. Worker threads are assigned one device each; a single
   HNSW search still runs on one device.
+- **2D-tiled GPU distance kernels and resident k-means** — 16×16 tiled CUDA
+  kernels for L2/cosine/inner-product/L1 with coalesced loads and
+  bank-conflict-free shared memory, VRAM-resident k-means (no per-iteration
+  PCIe swap), CAGRA graph initialisation and intra-cluster edges routed through
+  `compute_batch_distance`, `bsdb.cdist` in Python, and 65,536-row out-of-core
+  bucketing.
 - **Cross-connector configuration and API documentation** — `docs/CONFIGURATION.md`
   now covers every `BSDB_*` variable, including embeddings, catalog, GPU/HNSW,
   OTLP, Flight SQL, and MCP.
@@ -43,6 +49,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `0` no longer blocks the ingest/update paths.
 
 ### Fixed
+- **Explicit GPU/CPU device selection** — `Device("cpu")` and
+  `Device("cuda:1")` no longer execute on auto-detected GPU 0. `PyDevice` now
+  resolves and caches a concrete backend per `(backend, index)` instead of
+  storing `implementation: None`, so device construction is a hash lookup after
+  the first use (previously ~250–800 ms per construct/call and per worker
+  thread). `cdist` releases the GIL around the kernel, so pools actually scale
+  across GPUs, and an unavailable explicit device raises instead of silently
+  running elsewhere. New `Device.initialized` reports whether a device resolved
+  to a real backend.
 - **Table properties reach external readers** — metadata-only property commits
   now write `TableMetadata.properties` alongside the manifest, so Spark, Trino,
   and PyIceberg see `SET TBLPROPERTIES` values (including embedding provenance).

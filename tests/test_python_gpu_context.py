@@ -164,6 +164,42 @@ def test_case_insensitive_backend():
     assert ctx3.backend == 'cpu'
 
 
+def test_explicit_device_is_initialized():
+    """An explicit device must resolve to a real backend, not a lazy shell.
+
+    Regression: `Device("cpu")` used to store `implementation: None`, so every
+    cdist fell back to the global auto-detected CUDA device.
+    """
+    cpu = bsdb.Device("cpu")
+    assert cpu.initialized is True
+    assert cpu.backend == "cpu"
+
+    if bsdb.Device.is_available("cuda"):
+        cuda = bsdb.Device("cuda:0")
+        assert cuda.initialized is True
+        assert cuda.backend == "cuda"
+        assert cuda.device_id == 0
+
+
+def test_device_construction_is_cached():
+    """Repeated Device construction must not re-initialise the backend."""
+    import time
+
+    bsdb.Device("cpu")  # warm (no-op for CPU)
+    t0 = time.perf_counter()
+    for _ in range(100):
+        bsdb.Device("cpu")
+    assert time.perf_counter() - t0 < 1.0
+
+    if bsdb.Device.is_available("cuda"):
+        bsdb.Device("cuda:0")  # pay driver init once
+        t0 = time.perf_counter()
+        for _ in range(50):
+            bsdb.Device("cuda:0")
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 1.0, f"cached Device construction took {elapsed:.2f}s"
+
+
 if __name__ == "__main__":
     # Run tests
     test_auto_detect()

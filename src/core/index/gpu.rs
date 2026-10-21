@@ -42,7 +42,19 @@ static GPU_DEVICE_POOL: Lazy<parking_lot::RwLock<Vec<String>>> =
 /// Next index into [`GPU_DEVICE_POOL`].
 static GPU_POOL_NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Process-wide cache of initialised backends, keyed by `(backend, device_id)`.
+///
+/// Building a CUDA/ROCm backend costs hundreds of milliseconds (driver init,
+/// PTX module load), and it used to happen on every `bsdb.Device(...)` and
+/// every thread that received a device from the pool. Cached contexts share one
+/// backend instance, so constructing a device is a hash lookup after the first
+/// use. Contexts are wrapped in [`NoDropBackend`] by `from_backend_with_device`,
+/// so clearing the cache at shutdown does not release driver handles.
+static CONTEXT_CACHE: Lazy<
+    parking_lot::Mutex<std::collections::HashMap<(ComputeBackend, i32), ComputeContext>>,
+> = Lazy::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ComputeBackend {
     #[default]
     Cpu,
@@ -1329,6 +1341,23 @@ impl ComputeContext {
         })
     }
 
+    /// Return a cached context for `(backend, device_id)`, initialising the
+    /// backend on first use.
+    ///
+    /// Backend construction (CUDA driver init + PTX module load) costs hundreds
+    /// of milliseconds. Explicit device requests must not pay that on every
+    /// call, and worker threads sharing a pool entry must reuse one backend.
+    pub fn cached(backend: ComputeBackend, device_id: i32) -> Result<Self> {
+        let key = (backend, device_id);
+        if let Some(ctx) = CONTEXT_CACHE.lock().get(&key).cloned() {
+            return Ok(ctx);
+        }
+        // Construct outside the lock: the first CUDA init can take ~1s.
+        let ctx = Self::from_backend_with_device(backend, device_id.max(0) as usize)?;
+        CONTEXT_CACHE.lock().insert(key, ctx.clone());
+        Ok(ctx)
+    }
+
     pub fn auto_detect() -> Self {
         {
             let read = GLOBAL_GPU_CONTEXT.read();
@@ -1354,38 +1383,20 @@ impl ComputeContext {
             not(all(target_os = "windows", target_arch = "aarch64")),
             feature = "cuda"
         ))]
-        if let Ok(Ok(b)) =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaBackend::new(0)))
-        {
-            return Self {
-                backend: ComputeBackend::Cuda,
-                device_id: 0,
-                implementation: Some(Arc::new(NoDropBackend(Arc::new(b)))),
-            };
+        if let Ok(ctx) = Self::cached(ComputeBackend::Cuda, 0) {
+            return ctx;
         }
         #[cfg(target_os = "macos")]
-        if let Ok(b) = MetalBackend::new() {
-            return Self {
-                backend: ComputeBackend::Mps,
-                device_id: 0,
-                implementation: Some(Arc::new(NoDropBackend(Arc::new(b)))),
-            };
+        if let Ok(ctx) = Self::cached(ComputeBackend::Mps, 0) {
+            return ctx;
         }
         #[cfg(all(target_os = "linux", feature = "wgpu"))]
-        if let Ok(b) = WgpuBackend::new("WGPU_ROCm", Some(0x1002)) {
-            return Self {
-                backend: ComputeBackend::Rocm,
-                device_id: 0,
-                implementation: Some(Arc::new(NoDropBackend(Arc::new(b)))),
-            };
+        if let Ok(ctx) = Self::cached(ComputeBackend::Rocm, 0) {
+            return ctx;
         }
         #[cfg(all(target_os = "linux", feature = "wgpu"))]
-        if let Ok(b) = WgpuBackend::new("WGPU_Intel_XPU", Some(0x8086)) {
-            return Self {
-                backend: ComputeBackend::Intel,
-                device_id: 0,
-                implementation: Some(Arc::new(NoDropBackend(Arc::new(b)))),
-            };
+        if let Ok(ctx) = Self::cached(ComputeBackend::Intel, 0) {
+            return ctx;
         }
         Self {
             backend: ComputeBackend::Cpu,
@@ -1404,31 +1415,31 @@ impl ComputeContext {
                 implementation: Some(Arc::new(CpuBackend)),
             }),
             "gpu" | "auto" | "" => Ok(Self::auto_detect()),
-            "cuda" => Self::from_backend(ComputeBackend::Cuda),
+            "cuda" => Self::cached(ComputeBackend::Cuda, 0),
             _ if trimmed.starts_with("cuda:") => {
                 let id = trimmed
                     .strip_prefix("cuda:")
-                    .and_then(|s| s.parse::<usize>().ok())
+                    .and_then(|s| s.parse::<i32>().ok())
                     .unwrap_or(0);
-                Self::from_backend_with_device(ComputeBackend::Cuda, id)
+                Self::cached(ComputeBackend::Cuda, id)
             }
-            "mps" => Self::from_backend(ComputeBackend::Mps),
-            _ if trimmed.starts_with("mps:") => Self::from_backend(ComputeBackend::Mps),
-            "rocm" => Self::from_backend(ComputeBackend::Rocm),
+            "mps" => Self::cached(ComputeBackend::Mps, 0),
+            _ if trimmed.starts_with("mps:") => Self::cached(ComputeBackend::Mps, 0),
+            "rocm" => Self::cached(ComputeBackend::Rocm, 0),
             _ if trimmed.starts_with("rocm:") => {
                 let id = trimmed
                     .strip_prefix("rocm:")
-                    .and_then(|s| s.parse::<usize>().ok())
+                    .and_then(|s| s.parse::<i32>().ok())
                     .unwrap_or(0);
-                Self::from_backend_with_device(ComputeBackend::Rocm, id)
+                Self::cached(ComputeBackend::Rocm, id)
             }
-            "intel" => Self::from_backend(ComputeBackend::Intel),
+            "intel" => Self::cached(ComputeBackend::Intel, 0),
             _ if trimmed.starts_with("intel:") => {
                 let id = trimmed
                     .strip_prefix("intel:")
-                    .and_then(|s| s.parse::<usize>().ok())
+                    .and_then(|s| s.parse::<i32>().ok())
                     .unwrap_or(0);
-                Self::from_backend_with_device(ComputeBackend::Intel, id)
+                Self::cached(ComputeBackend::Intel, id)
             }
             _ => anyhow::bail!("Unsupported device: {}", device),
         }
@@ -1458,13 +1469,7 @@ impl ComputeContext {
                     feature = "cuda"
                 ))]
                 {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        CudaBackend::new(self.device_id as usize).is_ok()
-                            && cudarc::driver::CudaDevice::count()
-                                .map(|c| c > 0)
-                                .unwrap_or(false)
-                    }))
-                    .unwrap_or(false)
+                    Self::cached(ComputeBackend::Cuda, self.device_id).is_ok()
                 }
                 #[cfg(not(all(
                     not(target_os = "macos"),
@@ -1478,7 +1483,7 @@ impl ComputeContext {
             ComputeBackend::Mps => {
                 #[cfg(target_os = "macos")]
                 {
-                    MetalBackend::new().is_ok()
+                    Self::cached(ComputeBackend::Mps, 0).is_ok()
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
@@ -1488,7 +1493,7 @@ impl ComputeContext {
             ComputeBackend::Rocm => {
                 #[cfg(all(target_os = "linux", feature = "wgpu"))]
                 {
-                    WgpuBackend::new("Test", Some(0x1002)).is_ok()
+                    Self::cached(ComputeBackend::Rocm, self.device_id).is_ok()
                 }
                 #[cfg(not(all(target_os = "linux", feature = "wgpu")))]
                 {
@@ -1498,7 +1503,7 @@ impl ComputeContext {
             ComputeBackend::Intel => {
                 #[cfg(all(target_os = "linux", feature = "wgpu"))]
                 {
-                    WgpuBackend::new("Test", Some(0x8086)).is_ok()
+                    Self::cached(ComputeBackend::Intel, self.device_id).is_ok()
                 }
                 #[cfg(not(all(target_os = "linux", feature = "wgpu")))]
                 {
@@ -1766,15 +1771,20 @@ pub fn clear_gpu_context() {
     *GLOBAL_GPU_CONTEXT.write() = None;
     *GPU_DEVICE_POOL.write() = Vec::new();
     THREAD_GPU_CONTEXT.with(|c| *c.borrow_mut() = None);
+    // Backends are wrapped in `NoDropBackend`, so releasing the cache does not
+    // touch driver handles during teardown.
+    CONTEXT_CACHE.lock().clear();
 }
 
 /// Parse a device string into a [`ComputeContext`].
 ///
 /// Accepts `auto` | `gpu` | `cpu` | `cuda[:N]` | `mps`/`metal` | `intel`/`xpu`
 /// | `rocm`/`hip`. Unknown input (and `auto`) falls back to
-/// [`ComputeContext::auto_detect`]. This is the single mapping shared by the
-/// JNI bridges, the Flight server, the MCP server, and the Python binding, so
-/// every surface resolves a device identically.
+/// [`ComputeContext::auto_detect`]. A recognised but unavailable device falls
+/// back to CPU (with a warning) rather than to the auto-detected device, so an
+/// explicit request never silently runs somewhere else. This is the single
+/// mapping shared by the JNI bridges, the Flight server, the MCP server, and
+/// the Python binding, so every surface resolves a device identically.
 pub fn context_from_device_str(device: &str) -> ComputeContext {
     let d = device.trim().to_ascii_lowercase();
     let (backend, device_id) = if let Some(rest) = d.strip_prefix("cuda:") {
@@ -1793,8 +1803,17 @@ pub fn context_from_device_str(device: &str) -> ComputeContext {
             _ => return ComputeContext::auto_detect(),
         }
     };
-    ComputeContext::from_backend_with_device(backend, device_id)
-        .unwrap_or_else(|_| ComputeContext::auto_detect())
+    ComputeContext::cached(backend, device_id as i32).unwrap_or_else(|err| {
+        // Explicit device resolution must be deterministic: never silently
+        // substitute the auto-detected device (which may be a different GPU
+        // or the CPU). Fall back to CPU only, so the failure is visible as
+        // reduced throughput instead of masquerading as the requested device.
+        eprintln!(
+            "warning: device '{}' unavailable ({}); falling back to CPU",
+            device, err
+        );
+        ComputeContext::default()
+    })
 }
 
 /// Resolve the GPU device from `BSDB_GPU_DEVICE` (or `BENOSTREAM_GPU_DEVICE`)
