@@ -24,7 +24,8 @@ BenoStreamDB provides native connectors and API bridges for data engineering and
 ## 📚 Topics & Architecture Guides
 
 ### 1. Getting Started & Architecture
-* **[Installation Guide](INSTALLATION.md)**: Quickstart, PyPI wheel installation, build instructions, and security deployment patterns.
+* **[2-Minute Quickstart](QUICKSTART.md)**: Lightning-fast guide to install, write records, and run vector search and pgvector SQL.
+* **[Installation Guide](INSTALLATION.md)**: Hardware acceleration (CUDA/Metal), connectors build, Docker, and security guidelines.
 * **[Core Architecture](ARCHITECTURE.md)**: The indexed lakehouse philosophy, storage layout, write path, and overlay invariants.
 * **[ADR-001: Tightened Index Overlay Contract](architecture/ADR_001_TIGHTENED_INDEX_OVERLAY_CONTRACT.md)**: Compound Puffin bundles, artifact lifecycle, and metadata synchronization.
 

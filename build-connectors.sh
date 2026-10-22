@@ -28,6 +28,13 @@ for arg in "$@"; do
             fi
             shift
             ;;
+        --metal)
+            echo "Apple Metal support is natively enabled on macOS builds (default on Apple Silicon)."
+            if [[ "$(uname -s)" != "Darwin" ]]; then
+                echo "WARNING: Apple Metal is only available on macOS / Apple Silicon. Building standard artifact."
+            fi
+            shift
+            ;;
     esac
 done
 

@@ -248,10 +248,10 @@ python benchmarks/benchmark_suite.py --quick
 The Spark and Trino connectors require a separate build step:
 
 ```bash
-# Build all connector variants
+# Build all connector variants (CPU + Intel Graphics/XPU; automatically includes Apple Metal on macOS)
 ./build-connectors.sh
 
-# Build with CUDA support
+# Build with CUDA support (NVIDIA GPUs on Linux)
 ./build-connectors.sh --cuda
 ```
 
