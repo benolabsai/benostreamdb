@@ -3429,10 +3429,7 @@ impl PyTable {
                 let vs_config =
                     crate::core::sql::optimizer::VectorSearchConfig::from_sql_hints(&hints)
                         .map_err(|e| e.to_string())?;
-                session_config
-                    .options_mut()
-                    .extensions
-                    .insert(vs_config);
+                session_config.options_mut().extensions.insert(vs_config);
             }
 
             let mut ctx = SessionContext::new_with_config_rt(session_config, runtime);
