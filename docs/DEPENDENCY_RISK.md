@@ -49,16 +49,16 @@ assessment, a migration path, and a review date.
 | Status | Accepted, tracked. |
 | Next review | Each release; re-run `cargo tree -i rustls@0.21.12`. |
 
-### RUSTSEC-2026-0381 / RUSTSEC-2026-0382 — distrusted emSign intermediates (`webpki-roots`, `rustls-webpki`)
+### RUSTSEC-2026-0382 — distrusted emSign intermediates (`webpki-roots`, `rustls-webpki`)
 
 | Field | Value |
 |---|---|
 | Crate / version | `webpki-roots` 0.26.11 and `rustls-webpki` 0.101.7. The fixed copies (`webpki-roots` 1.0.10 and `rustls-webpki` 0.103.16) **are** in `Cargo.lock`; only the upstream-pinned copies below remain affected. |
 | Kind | Vulnerability (certificate path validation) |
 | Chain | `webpki-roots 0.26.11` ← `sqlx-core 0.8.6` (the fix is 1.0.10+; the 0.26 line has no patched release). `rustls-webpki 0.101.7` ← `rustls 0.21.12` ← `aws-smithy-http-client 1.1.13` → `hyper-rustls 0.24` → `tokio-rustls 0.24` (rustls 0.21 is EOL; the 0.101 line has no backport — the fix starts at 0.103.16). |
-| Reachability | Only legacy TLS clients of upstream crates: the AWS SDK's rustls-0.21 client and `sqlx`'s own connector (we do not use `sqlx`'s TLS on the primary object-store / Flight SQL paths). Both advisories require a certificate chain that includes the distrusted emSign intermediates; the well-known private keys only matter if such a path is presented by a peer. Our own TLS paths (reqwest/object_store/metrics) resolve `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10. |
+| Reachability | Only legacy TLS clients of upstream crates: the AWS SDK's rustls-0.21 client and `sqlx`'s own connector (we do not use `sqlx`'s TLS on the primary object-store / Flight SQL paths). The advisory requires a certificate chain that includes the distrusted emSign intermediates; the well-known private keys only matter if such a path is presented by a peer. Our own TLS paths (reqwest/object_store/metrics) resolve `rustls-webpki` 0.103.16 and `webpki-roots` 1.0.10. |
 | Fix status | `cargo update -p rustls-webpki@0.103.15 -p webpki-roots@1.0.8` applied (→ 0.103.16 / 1.0.10). The remaining 0.101.7 / 0.26.11 copies cannot move without an upstream major bump. |
-| Migration path | Track `aws-smithy-http-client` for a release that drops rustls 0.21, and `sqlx` 0.9 for the `webpki-roots` 1.x move. Remove both ignores from `deny.toml` / `audit.toml` once the affected versions leave `Cargo.lock`. |
+| Migration path | Track `aws-smithy-http-client` for a release that drops rustls 0.21, and `sqlx` 0.9 for the `webpki-roots` 1.x move. Remove the ignore from `deny.toml` / `audit.toml` once the affected versions leave `Cargo.lock`. |
 | Status | Accepted, tracked. |
 | Next review | Each release; re-run `cargo tree -i rustls-webpki@0.101.7` and `cargo tree -i webpki-roots@0.26.11`. |
 

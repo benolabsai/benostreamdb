@@ -49,9 +49,6 @@ COMPETITOR_CONFIG = [
     ("vector", "qdrant",
      "collection HNSW, m/ef_construct, hnsw_ef; distance Euclid/Cosine/Dot",
      "client → server (Qdrant)"),
-    ("vector", "milvus",
-     "collection HNSW, M/efConstruction, ef; distance L2/IP/COSINE; Strong consistency",
-     "client → server (Milvus)"),
     ("vector", "weaviate",
      "collection HNSW, max_connections/ef_construction, dynamic ef; "
      "distance cosine/dot/l2-squared",
@@ -206,6 +203,19 @@ def _dataset_from_filename(path: str) -> str | None:
     return "synth_500000" if tok in ("sql", "synth_500000") else tok
 
 
+def _date_range(patterns):
+    """Oldest–newest mtime across a set of artifact globs, as UTC dates."""
+    files = []
+    for pattern in patterns:
+        files.extend(glob.glob(pattern))
+    stamps = [os.path.getmtime(f) for f in files if os.path.isfile(f)]
+    if not stamps:
+        return "not found"
+    fmt = lambda t: time.strftime("%Y-%m-%d", time.gmtime(t))
+    lo, hi = fmt(min(stamps)), fmt(max(stamps))
+    return lo if lo == hi else f"{lo} – {hi}"
+
+
 def generate_summary():
     os.makedirs(RESULTS_DIR, exist_ok=True)
     report_path = os.path.join(RESULTS_DIR, "BENCHMARK_REPORT.md")
@@ -216,6 +226,37 @@ def generate_summary():
         f"- **Generated At**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}",
         f"- **Platform**: {platform.platform()}",
         f"- **Python**: {platform.python_version()}",
+        "",
+        "> **Read this first.** The sections were measured at different times. The",
+        "> table below records each group's artifact mtimes; do not read the",
+        "> generated-at timestamp as the measurement date for every section.",
+        "",
+        "## Data provenance & scope",
+        "",
+        "| Section | Scope | Artifacts last modified (UTC) |",
+        "|---|---|---|",
+        f"| §1b GPU cdist | 4 shapes + 1 dual-GPU split | {_date_range([os.path.join(RESULTS_DIR, 'gpu_cdist.json')])} |",
+        f"| §2 Graph | 10k–500k edges, CPU-only engines | {_date_range([os.path.join(BASE_DIR, 'graph', 'results', '*')])} |",
+        f"| §3 SQL, §6 filters | 200k–500k rows | {_date_range([os.path.join(BASE_DIR, 'sql', 'results', '*'), os.path.join(RESULTS_DIR, 'production_filters.*')])} |",
+        f"| §4 BEIR | 3.6k–8.7k documents | {_date_range([os.path.join(BASE_DIR, 'beir', 'results', '*')])} |",
+        f"| §5, §7, §8 production / resilience / soak | 8–32 threads; 60 s soak | {_date_range([os.path.join(RESULTS_DIR, 'production_*')])} |",
+        f"| §9 vector matrix | 20k vectors, 500 queries; competitors CPU-only | {_date_range([os.path.join(BASE_DIR, 'competitors', 'results', '*.json')])} |",
+        "",
+        "**Scope and limitations**",
+        "",
+        "- Single host (AMD Ryzen 9 5900XT, 32 cores / 121 GB, 2× RTX 5070 Ti); no",
+        "  multi-node or multi-client network measurements.",
+        "- Vector benchmarks cap the train set at **20k** vectors and 500 queries;",
+        "  they do not characterize million-vector indexes.",
+        "- SQL/filter benchmarks use **200k–500k rows**; graph benchmarks use up to",
+        "  **500k edges**.",
+        "- The endurance soak is **60 seconds**; it validates invariants, not",
+        "  multi-hour stability.",
+        "- Competitor rows are CPU-only. BenoStreamDB vector rows are backend-pinned",
+        "  (`cpu` = scalar CPU, `cuda` = CUDA device 0).",
+        "- The GPU kernel numbers in §1b are a microbenchmark of `bsdb.cdist`; they",
+        "  do not imply GPU speedups for HNSW/IVF search, which is CPU-bound at",
+        "  these sizes.",
         "",
         "---",
         "",
@@ -233,7 +274,19 @@ def generate_summary():
         "Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant "
         "`hnsw_tq8`, IVF-PQ) with **no competitor**. Head-to-head vector "
         "comparison is in **§9**; raw results are under "
-        "`benchmarks/ann_benchmarks/results/`."
+        "`benchmarks/competitors/results/`."
+    )
+    sections.append("")
+    sections.append(
+        "**Ground truth.** The HDF5 `neighbors` field is only valid for the full "
+        "train set, so the 20k-vector runs recompute exact neighbours by brute "
+        "force. That recomputation now uses the dataset metric (L2, cosine, or "
+        "inner product). The previous report used L2 for every dataset, which "
+        "inverted the expected order on angular data; with metric-correct truth "
+        "recall is monotonic (`f32` > `tq8` > `pq`) on every supported dataset. "
+        "`hnsw_pq` is unsupported on `glove-100`/`lastfm` (no result), and its "
+        "`glove-200` result collapses to recall ≈0.007 — treat that row as a "
+        "configuration defect, not a quality measurement."
     )
     sections.append("")
     sections.append("### TurboQuant trade-off (pros and cons)")
@@ -262,6 +315,51 @@ def generate_summary():
         "is on the roadmap (Theme 6)."
     )
     sections.append("")
+
+    # 1b. GPU batched-distance kernel
+    #
+    # The ANN tables above are index-bound (HNSW/IVF build and search are
+    # CPU-bound at these sizes). The 2D-tiled CUDA kernels are reached through
+    # `bsdb.cdist` and k-means, so report them from the dedicated benchmark.
+    cdist_path = os.path.join(RESULTS_DIR, "gpu_cdist.json")
+    if os.path.exists(cdist_path):
+        try:
+            with open(cdist_path, encoding="utf-8") as fh:
+                cdist = json.load(fh)
+        except (OSError, ValueError):
+            cdist = None
+        if cdist:
+            gpus = ", ".join(cdist.get("gpu") or ["none"])
+            sections.append("### GPU distance kernel (`bsdb.cdist`)")
+            sections.append("")
+            sections.append(
+                "The vector tables below measure index build/search, which is CPU-bound "
+                "at 20k vectors. The tiled CUDA kernels are reached through `bsdb.cdist` "
+                f"(and k-means). GPU: {gpus}; measured {cdist.get('generated_at')}, "
+                f"Python {cdist.get('python')}."
+            )
+            sections.append("")
+            sections.append(
+                "| Shape | Metric | CPU (ms) | CPU Mdist/s | CUDA (ms) | CUDA Mdist/s | Speedup |"
+            )
+            sections.append("|---|---|---|---|---|---|---|")
+            for r in cdist.get("cases", []):
+                sections.append(
+                    f"| {r['queries']}x{r['vectors']}x{r['dim']} | {r['metric']} | "
+                    f"{r['cpu_ms']} | {r['cpu_mdist_s']} | {r.get('cuda_ms', '-')} | "
+                    f"{r.get('cuda_mdist_s', '-')} | {r.get('speedup', '-')}x |"
+                )
+            sections.append("")
+            dual = cdist.get("dual_gpu")
+            if dual:
+                sections.append(
+                    f"Two-GPU split of {dual['queries']}x{dual['vectors']}x{dual['dim']}: "
+                    f"{dual['single_ms']} ms on one device vs {dual['dual_ms']} ms across "
+                    f"two ({dual['speedup']}x). Both threads release the GIL around the "
+                    "kernel. Larger shapes are transfer-bound (the full MxN matrix is "
+                    "copied back), so the dual-GPU gain depends on the output size."
+                )
+                sections.append("")
 
     # 2. Graph Analytics Benchmarks
     #
@@ -452,6 +550,24 @@ def generate_summary():
     # full matrix — every engine, every dataset, and both CPU/GPU passes.
     sections.append("## 9. Docker Competitor Matrix (shared hardware envelope)")
     sections.append("")
+    sections.append(
+        "BenoStreamDB vector rows pin the requested backend with "
+        "`Device(...).activate()`: `cpu` is the scalar CPU path and `cuda` is CUDA "
+        "device 0. Competitor rows are CPU-only. Index build/search is CPU-bound at "
+        "these sizes, so the `cuda` rows are not faster; see §1b for the GPU kernel."
+    )
+    sections.append("")
+    sections.append(
+        "**Recall comparability.** BenoStreamDB recall was recomputed with "
+        "metric-correct ground truth (see §1). The competitor rows were measured "
+        "before that fix and still use L2 truth for the angular datasets "
+        "(`glove-*`, `nytimes-256`), so cross-engine recall on those datasets is "
+        "**not comparable** and is shown for reference only. QPS, latency, build "
+        "time, and index size are unaffected and remain comparable. "
+        "`benchmarks/competitors/run_competitor.py` now uses the same metric-correct "
+        "truth for future competitor runs."
+    )
+    sections.append("")
     records = []
     for f in sorted(glob.glob(os.path.join(BASE_DIR, "competitors", "results", "*.json"))):
         try:
@@ -460,6 +576,11 @@ def generate_summary():
         except (OSError, ValueError):
             continue
         if r.get("available") is False:
+            continue
+        # Milvus was misconfigured in this pass (3-4 QPS, ~200 ms p50 across
+        # every dataset); publishing it would present a broken client as a
+        # competitor result. Raw files remain under competitors/results/.
+        if r.get("engine") == "milvus":
             continue
         # The SQL harness historically dropped the dataset name; recover it from
         # the filename so the SQL table can group rows by dataset.

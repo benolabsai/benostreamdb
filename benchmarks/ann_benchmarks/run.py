@@ -102,6 +102,33 @@ def load(path: str):
     return train, test, neighbors
 
 
+def ground_truth(train: np.ndarray, test: np.ndarray, q: int, k: int, metric: str) -> np.ndarray:
+    """Exact top-k neighbours for the subsetted train set, using `metric`.
+
+    The HDF5 `neighbors` field is only valid for the full train set. When
+    `--limit` subsets it we must recompute, and the recomputation has to use the
+    dataset's metric: an L2 brute force on an angular dataset produces a
+    different neighbour set, which made quantized indexes appear to beat f32
+    (and every competitor) on glove/nytimes.
+    """
+    truth = []
+    if metric == "cosine":
+        train_n = train / (np.linalg.norm(train, axis=1, keepdims=True) + 1e-12)
+        for i in range(q):
+            query = test[i] / (np.linalg.norm(test[i]) + 1e-12)
+            d = 1.0 - train_n @ query
+            truth.append(np.argsort(d)[:k])
+    elif metric in ("inner_product", "ip", "dot"):
+        for i in range(q):
+            d = -(train @ test[i])
+            truth.append(np.argsort(d)[:k])
+    else:
+        for i in range(q):
+            d = np.linalg.norm(train - test[i], axis=1)
+            truth.append(np.argsort(d)[:k])
+    return np.array(truth)
+
+
 def dir_size_bytes(path: str) -> int:
     total = 0
     for root, _, files in os.walk(path):
@@ -169,6 +196,21 @@ def main() -> None:
 
     # Import after the env is configured.
     import benostreamdb as bsdb
+
+    # Pin the run to the requested backend. `--device` used to be written
+    # straight into the result record without touching the engine, so the
+    # "cpu" and "gpu" passes both measured the same auto-detected backend.
+    if args.device in ("gpu", "auto"):
+        active_device = bsdb.Device("auto")
+        if args.device == "gpu" and active_device.backend == "cpu":
+            raise SystemExit(
+                "--device gpu requested, but no GPU backend is available"
+            )
+    else:
+        active_device = bsdb.Device(args.device)
+    active_device.activate()
+    backend = active_device.backend
+    print(f"active backend: {backend}", flush=True)
 
     metric = args.metric or DATASET_METRIC.get(args.dataset, "l2")
 
@@ -251,14 +293,11 @@ def main() -> None:
         flush=True,
     )
 
-    # If we subsetted the train set, recompute exact ground truth by brute force.
+    # If we subsetted the train set, recompute exact ground truth by brute force
+    # with the dataset's metric (L2 for *all* datasets was wrong for angular).
     if neighbors is None:
         q = min(args.queries, len(test))
-        truth = []
-        for i in range(q):
-            d = np.linalg.norm(train - test[i], axis=1)
-            truth.append(np.argsort(d)[: args.k])
-        neighbors = np.array(truth)
+        neighbors = ground_truth(train, test, q, args.k, metric)
 
     q = min(args.queries, len(test))
     k = args.k
@@ -312,7 +351,8 @@ def main() -> None:
         "index_type": args.index,
         "dataset": args.dataset,
         "workload": "vector_ann",
-        "device": args.device,
+        "device": backend,
+        "requested_device": args.device,
         "n": int(n),
         "dim": int(dim),
         "index": {

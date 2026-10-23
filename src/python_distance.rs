@@ -1645,29 +1645,39 @@ pub fn py_cdist<'py>(
         }
     };
 
-    let start = std::time::Instant::now();
-    let distances = if let Some(dev) = dev_ref {
-        let res = dev
-            .get_context()
-            .implementation
-            .as_ref()
-            .map(|imp| imp.compute_batch_distance(q_slice, v_slice, dim, vec_metric))
-            .unwrap_or_else(|| {
-                crate::core::index::gpu::compute_batch_distance(q_slice, v_slice, dim, vec_metric)
+    // An explicit device must run on exactly that backend. Falling back to the
+    // global auto-detected context here made `device="cpu"` and
+    // `device="cuda:1"` execute on GPU 0.
+    let implementation = dev_ref
+        .map(|dev| {
+            dev.get_context().implementation.clone().ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err(
+                    "device context is not initialized; construct it with Device(...)",
+                )
             })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        })
+        .transpose()?;
 
+    let start = std::time::Instant::now();
+    // Release the GIL for the kernel: without this, two Python threads cannot
+    // drive two GPUs concurrently and the device pool serialises.
+    let distances = py
+        .detach(|| match &implementation {
+            Some(imp) => imp.compute_batch_distance(q_slice, v_slice, dim, vec_metric),
+            None => {
+                crate::core::index::gpu::compute_batch_distance(q_slice, v_slice, dim, vec_metric)
+            }
+        })
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    if let Some(dev) = dev_ref {
         let duration = start.elapsed();
         let tracker = dev.get_stats_tracker();
         let mut stats = tracker.lock().unwrap_or_else(|e| e.into_inner());
         stats.total_kernel_launches += 1;
         stats.total_gpu_time_ms += duration.as_secs_f64() * 1000.0;
         stats.total_vectors_processed += (n_queries * n_vectors) as u64;
-        res
-    } else {
-        crate::core::index::gpu::compute_batch_distance(q_slice, v_slice, dim, vec_metric)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
-    };
+    }
 
     let array_1d = PyArray1::from_vec(py, distances);
     array_1d.reshape([n_queries, n_vectors])

@@ -51,6 +51,10 @@ EMBED_MODEL = os.environ.get("BSDB_DEMO_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 
 st.set_page_config(page_title="BenoStreamDB — Wikipedia Graph RAG", layout="wide")
 st.title("BenoStreamDB — Wikipedia Graph RAG")
+st.warning(
+    "Work in progress: this full-site Wikipedia demo is under active development; "
+    "the data, SQL surface, and UI may change."
+)
 
 
 # ── LLM (optional) ──────────────────────────────────────────────────────────

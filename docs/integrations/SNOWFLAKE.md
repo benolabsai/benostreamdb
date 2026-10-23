@@ -133,15 +133,17 @@ Snowflake supports the Iceberg REST Catalog standard via **Snowflake Open Catalo
 import benostreamdb as bsdb
 
 # Connect via Iceberg REST Catalog endpoint
-table = bsdb.Table.from_catalog(
-    catalog_type="rest",
-    catalog_url="https://<account_locator>.snowflakecomputing.com/polaris/api/catalog",
-    oauth2_client_id="<client_id>",
-    oauth2_client_secret="<client_secret>",
-    namespace="MY_DATABASE.MY_SCHEMA",
-    table="CUSTOMER_INTERACTIONS"
-)
+catalog = bsdb.create_catalog("rest", {
+    "url": "https://<account_locator>.snowflakecomputing.com/polaris/api/catalog",
+    "prefix": "MY_DATABASE",
+})
+
+table = catalog.load_table("MY_SCHEMA", "CUSTOMER_INTERACTIONS")
 ```
+
+> The embedded Python REST wrapper takes `url` and an optional `prefix`; OAuth2
+> client credentials are configured on the engine/search server through
+> `benostream.toml` or the `BSDB_SEARCH_CATALOG_*` environment variables.
 
 ---
 

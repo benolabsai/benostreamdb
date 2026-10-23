@@ -130,7 +130,7 @@ Rank nodes in the extracted context by their structural relevance to the seed en
 pagerank_scores = table.personalized_pagerank(
     seeds=seed_nodes,
     alpha=0.85,
-    max_iter=30
+    iterations=30
 ).to_pandas()
 ```
 

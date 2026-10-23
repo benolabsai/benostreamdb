@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1]
+
+### Fixed
+- **Python `vector_filter` index tuning** — `to_arrow_stream()` (and therefore
+  `to_pandas()`, `to_arrow()`, `vector_search()`, and `search()`) now reads
+  `ef_search`, `probes`, and `use_mmap` from the `vector_filter` dict, matching
+  the behavior already implemented in `Table.explain()`.
+- **`INDEX_HINT` in Python SQL** — `Table.sql()` / `execute_sql()` now parses
+  `/*+ INDEX_HINT(ef_search=..., probes=..., use_index=...) */` and applies it to
+  the query session, matching the core and connector SQL paths.
+- **Documentation examples** — corrected Python, SQL, and catalog examples to
+  match the current public API (distance function names, `ComputeContext` /
+  `Device`, catalog `create_catalog` + `load_table`, index configuration shape,
+  maintenance calls, and Iceberg V2/V3 behavior).
+- **Dependency advisories** — updated `ctutils` to 0.4.5 (RUSTSEC-2026-0385) and
+  `clipboard-win` to 5.4.3 (yanked-version warning), and dropped the stale
+  RUSTSEC-2026-0381 ignore from `deny.toml` / `audit.toml`.
+
 ## [0.13.0]
 
 ### Added
@@ -42,6 +60,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   round-robin device pool. Python exposes `set_gpu_device_pool()` /
   `gpu_device_pool()`. Worker threads are assigned one device each; a single
   HNSW search still runs on one device.
+- **2D-tiled GPU distance kernels and resident k-means** — 16×16 tiled CUDA
+  kernels for L2/cosine/inner-product/L1 with coalesced loads and
+  bank-conflict-free shared memory, VRAM-resident k-means (no per-iteration
+  PCIe swap), CAGRA graph initialisation and intra-cluster edges routed through
+  `compute_batch_distance`, `bsdb.cdist` in Python, and 65,536-row out-of-core
+  bucketing.
 - **Cross-connector configuration and API documentation** — `docs/CONFIGURATION.md`
   now covers every `BSDB_*` variable, including embeddings, catalog, GPU/HNSW,
   OTLP, Flight SQL, and MCP.
@@ -56,6 +80,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `0` no longer blocks the ingest/update paths.
 
 ### Fixed
+- **Explicit GPU/CPU device selection** — `Device("cpu")` and
+  `Device("cuda:1")` no longer execute on auto-detected GPU 0. `PyDevice` now
+  resolves and caches a concrete backend per `(backend, index)` instead of
+  storing `implementation: None`, so device construction is a hash lookup after
+  the first use (previously ~250–800 ms per construct/call and per worker
+  thread). `cdist` releases the GIL around the kernel, so pools actually scale
+  across GPUs, and an unavailable explicit device raises instead of silently
+  running elsewhere. New `Device.initialized` reports whether a device resolved
+  to a real backend.
 - **Non-deterministic IVF k-means clustering and CPU-dependent list count causing vector search recall test failures** — `simple_kmeans` in `src/core/index/ivf.rs` sampled initial centroids using unseeded `rand::thread_rng()`, and `n_lists` for small collections ($N < 1000$) scaled with `num_cpus.min(4)`, producing different cluster topologies on 2-vCPU CI runners versus multi-core workstations. Added `simple_kmeans_with_seed`, defaulting to deterministic PRNG seed `0x00C0_FFEE_1337` (configurable via `BSDB_KMEANS_SEED` and `BSDB_HNSW_SEED`), exposed `seed` in `Device.kmeans(..., seed=...)`, and normalized small collection cluster counts to a constant `4`.
 - **Disk-cache key collisions across stores, runs, and CI steps** (long-standing;
   present since the on-disk index cache was introduced) — `DiskCache` hashed only
@@ -2354,7 +2387,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-[Unreleased]: https://github.com/benolabsai/benostreamdb/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/benolabsai/benostreamdb/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/benolabsai/benostreamdb/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/benolabsai/benostreamdb/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/benolabsai/benostreamdb/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/benolabsai/benostreamdb/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/benolabsai/benostreamdb/compare/v0.9.0...v0.11.0
 [0.9.0]: https://github.com/benolabsai/benostreamdb/compare/v0.8.1...v0.9.0

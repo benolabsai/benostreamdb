@@ -1,5 +1,10 @@
 # BenoStreamDB — full-site Wikipedia Graph RAG demo
 
+> ⚠️ **Work in progress.** This full-site Wikipedia demo is under active
+> development. The data-prep stages, SQL surface, and UI are still changing, and
+> the published demo may lag the current engine. Treat measured timings as
+> indicative rather than final.
+
 A Streamlit UI that puts BenoStreamDB's hybrid engine through its paces on the
 **entire English-Wikipedia link graph** (~51.8M live pages, ~383M edges):
 

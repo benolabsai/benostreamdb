@@ -695,6 +695,27 @@ impl PyTable {
                 }
             }
 
+            // Parse optional ef_search parameter (for HNSW)
+            if let Ok(Some(ef_obj)) = vf.get_item("ef_search") {
+                if let Ok(ef_search) = ef_obj.extract::<usize>() {
+                    params = params.with_ef_search(ef_search);
+                }
+            }
+
+            // Parse optional probes parameter (for IVF)
+            if let Ok(Some(probes_obj)) = vf.get_item("probes") {
+                if let Ok(probes) = probes_obj.extract::<usize>() {
+                    params = params.with_probes(probes);
+                }
+            }
+
+            // Parse optional use_mmap parameter
+            if let Ok(Some(mmap_obj)) = vf.get_item("use_mmap") {
+                if let Ok(use_mmap) = mmap_obj.extract::<bool>() {
+                    params.use_mmap = use_mmap;
+                }
+            }
+
             let rrf_k = if let Ok(Some(rrf_obj)) = vf.get_item("rrf_k") {
                 rrf_obj.extract::<usize>().ok()
             } else {
@@ -3397,8 +3418,20 @@ impl PyTable {
                 .unwrap_or_else(|_| std::sync::Arc::new(RuntimeEnv::default()));
             // Scale query parallelism to the effective CPU budget (respects
             // cgroup limits) rather than hard-coding it.
-            let session_config = SessionConfig::new()
+            let mut session_config = SessionConfig::new()
                 .with_target_partitions(crate::core::sql::effective_target_partitions());
+
+            // Apply `/*+ INDEX_HINT(...) */` optimizer hints so the vector-search
+            // optimizer rule picks up ef_search / probes / use_index overrides.
+            if let Some(hints) =
+                crate::core::sql::optimizer::VectorSearchConfig::extract_sql_hints(&query)
+            {
+                let vs_config =
+                    crate::core::sql::optimizer::VectorSearchConfig::from_sql_hints(&hints)
+                        .map_err(|e| e.to_string())?;
+                session_config.options_mut().extensions.insert(vs_config);
+            }
+
             let mut ctx = SessionContext::new_with_config_rt(session_config, runtime);
 
             // Register standard functions and aggregates

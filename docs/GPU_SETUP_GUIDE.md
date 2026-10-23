@@ -6,10 +6,10 @@ This guide provides detailed instructions for setting up GPU acceleration for ve
 
 BenoStreamDB supports GPU acceleration for vector distance computations across multiple hardware backends:
 
-- **NVIDIA CUDA** - For NVIDIA GPUs (GeForce, Quadro, Tesla)
-- **AMD ROCm** - For AMD Radeon GPUs
-- **Apple Metal (MPS)** - For Apple Silicon Macs
-- **Intel XPU** - For Intel integrated and discrete GPUs (Native Linux via WGPU)
+- **NVIDIA CUDA** - For NVIDIA GPUs (GeForce, Quadro, Tesla, RTX 20/30/40/50 series, Blackwell; tested with CUDA 11, 12, and 13)
+- **Apple Metal (MPS)** - For Apple Silicon Macs (M1–M5, verified)
+- **Intel XPU / Integrated GPU** - For Intel integrated (Iris Xe) and discrete GPUs via WGPU (tested and verified)
+- **AMD ROCm / Vulkan** - For AMD Radeon and Instinct GPUs (architecturally supported via WGPU; physical hardware testers welcome!)
 
 GPU acceleration offloads compute-heavy batch vector distance kernels to hardware accelerators.
 
@@ -58,11 +58,11 @@ print(bsdb.Device.is_available("xpu"))   # True if Intel hardware present
 
 - **GPU**: NVIDIA GPU with compute capability 6.0 or higher
   - Pascal (GTX 10 series) or newer
-  - Recommended: RTX 20/30/40 series, A100, H100
-- **Driver**: NVIDIA driver 450.80.02 or later
-- **CUDA Runtime**: `libcuda.so` (provided by NVIDIA driver — no Toolkit/nvcc required)
+  - Recommended: RTX 20/30/40/50 series, A100, H100, B100/B200
+- **Driver**: NVIDIA driver 450.80.02 or later (550+ recommended for RTX 50 series / Blackwell)
+- **CUDA Runtime & Toolkits**: Supports CUDA 11.x, 12.x, and 13.x (CUDA 13 verified and tested locally). Runtime discovery links against `libcuda.so` (Linux) or `nvcuda.dll` (Windows) provided by the driver.
 
-> **Note:** BenoStreamDB compiles CUDA kernels at **runtime** via NVRTC (Just-In-Time). The CUDA Toolkit and `nvcc` are **not** required for building or running.
+> **Note on NVRTC JIT Compilation:** BenoStreamDB compiles CUDA kernels at **runtime** via NVRTC (Just-In-Time). The CUDA Toolkit and `nvcc` compiler are **not** required for building or running. BenoStreamDB features custom, version-agnostic NVRTC discovery that automatically resolves `libnvrtc` across CUDA 11, CUDA 12, and CUDA 13 (including pip wheels like `nvidia-cuda-nvrtc-cu12` or `nvidia-cuda-nvrtc-cu13`).
 
 ### Supported GPUs
 
@@ -73,9 +73,11 @@ print(bsdb.Device.is_available("xpu"))   # True if Intel hardware present
 | RTX 20 series (Turing) | 7.5 | ✅ Yes |
 | RTX 30 series (Ampere) | 8.6 | ✅ Yes |
 | RTX 40 series (Ada) | 8.9 | ✅ Yes |
+| RTX 50 series (Blackwell) | 10.0 / 12.0 | ✅ Yes |
 | Tesla V100 | 7.0 | ✅ Yes |
 | A100 | 8.0 | ✅ Yes |
 | H100 | 9.0 | ✅ Yes |
+| B100 / B200 (Blackwell) | 10.0 | ✅ Yes |
 
 ### Installation on Linux (Ubuntu/Debian)
 
@@ -104,9 +106,10 @@ maturin develop --features cuda
 
 Without `--features cuda`, the CUDA backend will be unavailable at runtime (other backends like ROCm, Metal, and XPU remain functional).
 
-### Installation on Windows (via WSL2)
+### Installation on Windows
 
-Windows users should use **WSL2** (Windows Subsystem for Linux) to run BenoStreamDB with GPU support.
+**Recommended: WSL2 (Windows Subsystem for Linux)**
+Windows users should use **WSL2** to run BenoStreamDB with GPU support:
 
 1. Install WSL2 and Ubuntu (e.g., `wsl --install -d Ubuntu-22.04`)
 2. Install NVIDIA Windows Driver (this provides the necessary kernel-mode interface for WSL2)
@@ -116,6 +119,11 @@ Windows users should use **WSL2** (Windows Subsystem for Linux) to run BenoStrea
    nvidia-smi
    ```
 
+**Native Windows (outside WSL2):**
+We build and package native Windows binaries with full architectural support for CUDA via dynamic linking to `nvcuda.dll` and runtime NVRTC JIT compilation. However, because our automated CI test suite currently runs on Linux, native Windows GPU execution is currently **untested in CI**. 
+
+If you are running BenoStreamDB natively on Windows with an NVIDIA GPU, we would love your help: please test your workload and [report your results or open an issue](https://github.com/benolabsai/benostreamdb/issues) to let us know how it runs on your machine. For production workflows today, WSL2 remains our tested and recommended environment.
+
 ### Verification
 
 ```python
@@ -123,13 +131,13 @@ import benostreamdb as bsdb
 import numpy as np
 
 # Create CUDA context
-ctx = bsdb.GPUContext("cuda")
+ctx = bsdb.ComputeContext("cuda")
 print(f"CUDA backend initialized: {ctx.backend}")
 
 # Test GPU computation
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = bsdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_batch(query, database, device=ctx)
 print(f"Computed {len(distances)} distances on GPU")
 
 # Check performance stats
@@ -145,33 +153,20 @@ print(f"GPU time: {stats['total_gpu_time_ms']}ms")
 - **OS**: Linux (Primary support for compute workloads).
 - **Backend**: BenoStreamDB uses **WGPU/Vulkan** for AMD compute, ensuring compatibility across a wide range of Linux distributions.
 
-### Installation on Linux (Ubuntu/Debian)
+> **Hardware Testing Status (Help Wanted):** BenoStreamDB targets AMD GPUs via its cross-platform **WGPU / Vulkan** compute pipeline. However, our internal testing environment has validated WGPU primarily on Intel integrated graphics; we currently lack physical AMD discrete GPUs (RX 6000/7000 series or Instinct) in our regular CI test harness. While the WGSL distance shaders compile and run against standard Vulkan compute targets, AMD execution is currently **untested on real hardware**.
+>
+> If you have an AMD GPU with ROCm or Vulkan on Linux, we would love your help! Please run the verification snippet below and [report your benchmark results or open an issue](https://github.com/benolabsai/benostreamdb/issues).
 
-While BenoStreamDB uses Vulkan for cross-backend stability, the official ROCm driver stack is highly recommended for the best performance and stability.
+### Target GPUs
 
-```bash
-# Download and install AMD GPU driver installer
-wget https://repo.radeon.com/amdgpu-install/latest/ubuntu/jammy/amdgpu-install_6.0.2-1_all.deb
-sudo apt install ./amdgpu-install_6.0.2-1_all.deb
-
-# Install the ROCm usecase (includes optimized Vulkan drivers)
-sudo amdgpu-install --usecase=rocm,vulkan
-
-# Add user to necessary groups
-sudo usermod -a -G video,render $USER
-sudo reboot
-```
-
-### Supported GPUs
-
-| Series | Architecture | Supported |
-|--------|-------------|-----------|
-| RX 5000 series | RDNA 1 | ✅ Yes |
-| RX 6000 series | RDNA 2 | ✅ Yes |
-| RX 7000 series | RDNA 3 | ✅ Yes |
-| Radeon VII | GCN 5.1 | ✅ Yes |
-| MI100 | CDNA 1 | ✅ Yes |
-| MI200 series | CDNA 2 | ✅ Yes |
+| Series | Architecture | Testing Status |
+|--------|-------------|----------------|
+| RX 5000 series | RDNA 1 | 🔬 Architecture supported (Untested on hardware — Help Wanted) |
+| RX 6000 series | RDNA 2 | 🔬 Architecture supported (Untested on hardware — Help Wanted) |
+| RX 7000 series | RDNA 3 | 🔬 Architecture supported (Untested on hardware — Help Wanted) |
+| Radeon VII | GCN 5.1 | 🔬 Architecture supported (Untested on hardware — Help Wanted) |
+| MI100 | CDNA 1 | 🔬 Architecture supported (Untested on hardware — Help Wanted) |
+| MI200 series | CDNA 2 | 🔬 Architecture supported (Untested on hardware — Help Wanted) |
 
 ### Installation on Ubuntu
 
@@ -223,14 +218,14 @@ sudo reboot
 import benostreamdb as bsdb
 
 # Create ROCm context
-ctx = bsdb.GPUContext("rocm")
+ctx = bsdb.ComputeContext("rocm")
 print(f"ROCm backend initialized: {ctx.backend}")
 
 # Test computation
 import numpy as np
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = bsdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_batch(query, database, device=ctx)
 print(f"Computed {len(distances)} distances on AMD GPU")
 ```
 
@@ -259,18 +254,18 @@ print(f"Computed {len(distances)} distances on AMD GPU")
 import benostreamdb as bsdb
 
 # Auto-detect should find Metal on Apple Silicon
-ctx = bsdb.GPUContext.auto_detect()
+ctx = bsdb.ComputeContext.auto_detect()
 print(f"Backend: {ctx.backend}")  # Should show "mps"
 
 # Or explicitly create Metal context
-ctx = bsdb.GPUContext("mps")
+ctx = bsdb.ComputeContext("mps")
 print(f"Metal backend initialized")
 
 # Test computation
 import numpy as np
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = bsdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_batch(query, database, device=ctx)
 print(f"Computed {len(distances)} distances on Apple GPU")
 ```
 
@@ -285,7 +280,8 @@ print(f"Computed {len(distances)} distances on Apple GPU")
 
 ### Requirements
 
-- **GPU**: Intel Iris Xe, Arc A-Series (Alchemist), Arc B-Series (Battlemage), or Data Center GPU Max.
+- **GPU**: Intel Iris Xe (tested and verified), Arc A-Series (Alchemist), Arc B-Series (Battlemage), or Data Center GPU Max.
+- **Testing Status**: Tested and validated on Intel integrated graphics (Iris Xe) via WGPU/Vulkan.
 - **OS**: Linux (Native) or Windows via WSL2.
 - **Drivers**: Requires Level Zero and Vulkan user-mode drivers.
 
@@ -306,9 +302,8 @@ sudo apt install intel-level-zero-gpu intel-media-va-driver-non-free
 vulkaninfo | grep "vendorID = 0x8086"
 ```
 
-### Installation on Linux (Ubuntu/Debian)
+### Verification (Linux)
 
-```bash
 ```bash
 # Verify Vulkan/WGPU installation
 vulkaninfo | grep vendor
@@ -333,9 +328,8 @@ print(f"Intel backend initialized: {device.backend}")
 import numpy as np
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = bsdb.compute_distance(query, database, dim=768, metric="l2")
+distances = bsdb.l2_batch(query, database, device=device)
 print(f"Success: Computed on {device.backend}")
-```
 ```
 
 ## Multi-GPU Systems
@@ -348,12 +342,12 @@ Pin a specific device:
 import benostreamdb as bsdb
 
 # List available backends
-ctx = bsdb.GPUContext.auto_detect()
+ctx = bsdb.ComputeContext.auto_detect()
 print(f"Available backends: {ctx.list_available_backends()}")
 
 # Use specific GPU device
-ctx = bsdb.GPUContext("cuda", device_id=0)  # First GPU
-ctx = bsdb.GPUContext("cuda", device_id=1)  # Second GPU
+ctx = bsdb.ComputeContext("cuda", index=0)  # First GPU
+ctx = bsdb.ComputeContext("cuda", index=1)  # Second GPU
 
 # Check which device is being used
 print(f"Using device: {ctx.device_id}")
@@ -395,14 +389,14 @@ pinned to different devices when you need both GPUs busy with independent search
 
 2. Check backend availability:
    ```python
-   ctx = bsdb.GPUContext.auto_detect()
+   ctx = bsdb.ComputeContext.auto_detect()
    print(ctx.list_available_backends())
    ```
 
 3. Try creating backend explicitly:
    ```python
    try:
-       ctx = bsdb.GPUContext("cuda")
+       ctx = bsdb.ComputeContext("cuda")
    except RuntimeError as e:
        print(f"CUDA not available: {e}")
    ```
@@ -418,7 +412,7 @@ pinned to different devices when you need both GPUs busy with independent search
    all_distances = []
    for i in range(0, len(database), chunk_size):
        chunk = database[i:i+chunk_size]
-       distances = bsdb.l2_distance_batch(query, chunk, context=ctx)
+       distances = bsdb.l2_batch(query, chunk, device=ctx)
        all_distances.append(distances)
    all_distances = np.concatenate(all_distances)
    ```
@@ -466,7 +460,7 @@ sudo ubuntu-drivers autoinstall
 In empirical competitor benchmarks, GPU speedup is **workload-dependent**:
 
 - **Point Queries & HNSW Search:** Single-query ANN lookups (sequential graph walks) are dominated by pointer traversals and latency rather than arithmetic throughput. Under single-stream query workloads (batch = 1), optimized CPU SIMD execution (AVX2/AVX-512) delivers lower p50 latency and higher QPS than GPU due to PCIe transfer and kernel dispatch overheads.
-- **Dense Batch Matrix Operations:** Standalone distance kernels (`l2_distance_batch`, `cosine_distance_batch`) running large batches ($N \ge 100,000$ vectors, batch size $\ge 1,000$) effectively saturate GPU warps and achieve high throughput.
+- **Dense Batch Matrix Operations:** Standalone distance kernels (`l2_batch`, `cosine_batch`) running large batches ($N \ge 100,000$ vectors, batch size $\ge 1,000$) effectively saturate GPU warps and achieve high throughput.
 - **Index Construction:** Background IVF clustering and k-means centroid assignments benefit from GPU acceleration during offline index generation.
 - **Full GPU Workloads (Roadmap):** True query speedups for lakehouse vector search require resident GPU index caching and batched search queues, which are actively tracked on the roadmap.
 

@@ -115,3 +115,6 @@ connector-artifacts/
 test_c
 test_prefetch
 scratch_mem_test
+
+# Blog article drafts (unpublished)
+blog/articles/drafts/

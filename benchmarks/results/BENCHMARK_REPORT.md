@@ -1,14 +1,47 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-21 09:32:37 UTC
+- **Generated At**: 2026-10-21 01:30:42 UTC
 - **Platform**: Linux-7.0.0-38-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
+
+> **Read this first.** The sections were measured at different times. The
+> table below records each group's artifact mtimes; do not read the
+> generated-at timestamp as the measurement date for every section.
+
+## Data provenance & scope
+
+| Section | Scope | Artifacts last modified (UTC) |
+|---|---|---|
+| §1b GPU cdist | 4 shapes + 1 dual-GPU split | 2026-10-21 |
+| §2 Graph | 10k–500k edges, CPU-only engines | 2026-10-11 |
+| §3 SQL, §6 filters | 200k–500k rows | 2026-10-11 |
+| §4 BEIR | 3.6k–8.7k documents | 2026-10-11 |
+| §5, §7, §8 production / resilience / soak | 8–32 threads; 60 s soak | 2026-10-11 |
+| §9 vector matrix | 20k vectors, 500 queries; competitors CPU-only | 2026-10-11 – 2026-10-21 |
+
+**Scope and limitations**
+
+- Single host (AMD Ryzen 9 5900XT, 32 cores / 121 GB, 2× RTX 5070 Ti); no
+  multi-node or multi-client network measurements.
+- Vector benchmarks cap the train set at **20k** vectors and 500 queries;
+  they do not characterize million-vector indexes.
+- SQL/filter benchmarks use **200k–500k rows**; graph benchmarks use up to
+  **500k edges**.
+- The endurance soak is **60 seconds**; it validates invariants, not
+  multi-hour stability.
+- Competitor rows are CPU-only. BenoStreamDB vector rows are backend-pinned
+  (`cpu` = scalar CPU, `cuda` = CUDA device 0).
+- The GPU kernel numbers in §1b are a microbenchmark of `bsdb.cdist`; they
+  do not imply GPU speedups for HNSW/IVF search, which is CPU-bound at
+  these sizes.
 
 ---
 
 ## 1. Vector ANN Performance (BenoStreamDB internal characterization)
 
-Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant `hnsw_tq8`, IVF-PQ) with **no competitor**. Head-to-head vector comparison is in **§9**; raw results are under `benchmarks/ann_benchmarks/results/`.
+Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant `hnsw_tq8`, IVF-PQ) with **no competitor**. Head-to-head vector comparison is in **§9**; raw results are under `benchmarks/competitors/results/`.
+
+**Ground truth.** The HDF5 `neighbors` field is only valid for the full train set, so the 20k-vector runs recompute exact neighbours by brute force. That recomputation now uses the dataset metric (L2, cosine, or inner product). The previous report used L2 for every dataset, which inverted the expected order on angular data; with metric-correct truth recall is monotonic (`f32` > `tq8` > `pq`) on every supported dataset. `hnsw_pq` is unsupported on `glove-100`/`lastfm` (no result), and its `glove-200` result collapses to recall ≈0.007 — treat that row as a configuration defect, not a quality measurement.
 
 ### TurboQuant trade-off (pros and cons)
 
@@ -18,6 +51,19 @@ Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant `hnsw_t
 - **Con — lower recall.** Quantization is lossy: the stored codes no longer rank the exact neighbours, so recall@k drops (recovers only partially by raising `ef_search`, at a latency cost).
 - **Con — approximate distances for reranking.** Scores are approximate, so use the index for candidate discovery and rerank from the float payload where exactness matters.
 - **Default.** Full-precision `hnsw` is the default; `hnsw_tq8`/`hnsw_pq` are opt-in for workloads that will trade recall for size/latency. §9 reports the `benostreamdb` engine once per precision, with the **Index Precision** column (`f32`/`tq8`/`pq`) making the trade-off explicit; holding several precisions on one column and selecting per query is on the roadmap (Theme 6).
+
+### GPU distance kernel (`bsdb.cdist`)
+
+The vector tables below measure index build/search, which is CPU-bound at 20k vectors. The tiled CUDA kernels are reached through `bsdb.cdist` (and k-means). GPU: NVIDIA GeForce RTX 5070 Ti, NVIDIA GeForce RTX 5070 Ti; measured 2026-10-21T01:11:22Z, Python 3.14.4.
+
+| Shape | Metric | CPU (ms) | CPU Mdist/s | CUDA (ms) | CUDA Mdist/s | Speedup |
+|---|---|---|---|---|---|---|
+| 512x50000x128 | l2 | 511.35 | 50.1 | 15.14 | 1691.3 | 33.78x |
+| 2048x50000x128 | l2 | 2485.67 | 41.2 | 49.72 | 2059.4 | 49.99x |
+| 1024x200000x128 | l2 | 4956.71 | 41.3 | 109.18 | 1875.8 | 45.4x |
+| 512x50000x100 | cosine | 1099.03 | 23.3 | 14.87 | 1721.2 | 73.89x |
+
+Two-GPU split of 8192x20000x2048: 351.02 ms on one device vs 220.66 ms across two (1.59x). Both threads release the GIL around the kernel. Larger shapes are transfer-bound (the full MxN matrix is copied back), so the dual-GPU gain depends on the output size.
 
 ## 2. Graph Analytics Performance (BenoStreamDB vs NetworkX vs Neo4j + GDS)
 
@@ -516,6 +562,10 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 
 ## 9. Docker Competitor Matrix (shared hardware envelope)
 
+BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`: `cpu` is the scalar CPU path and `cuda` is CUDA device 0. Competitor rows are CPU-only. Index build/search is CPU-bound at these sizes, so the `cuda` rows are not faster; see §1b for the GPU kernel.
+
+**Recall comparability.** BenoStreamDB recall was recomputed with metric-correct ground truth (see §1). The competitor rows were measured before that fix and still use L2 truth for the angular datasets (`glove-*`, `nytimes-256`), so cross-engine recall on those datasets is **not comparable** and is shown for reference only. QPS, latency, build time, and index size are unaffected and remain comparable. `benchmarks/competitors/run_competitor.py` now uses the same metric-correct truth for future competitor runs.
+
 ### Vector — `fashion-mnist-784-euclidean`
 
 | Engine | Index Precision | Backend | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
@@ -523,18 +573,17 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 | faiss | f32 | cpu | 1.0 | 4051.7 | 0.243 | 0.38 | 0.742 | 65.6 |
 | hnswlib | f32 | cpu | 1.0 | 3772.3 | 0.258 | 0.407 | 1.844 | 65.69 |
 | weaviate | f32 | cpu | 0.9998 | 1105.0 | 0.879 | 1.412 | 5.634 | 62.72 |
-| **benostreamdb** | tq8 | cpu | 0.9318 | 950.7 | 0.934 | 1.326 | 2.253 | 149.09 |
-| **benostreamdb** | tq8 | gpu | 0.9318 | 936.5 | 0.945 | 1.294 | 2.511 | 149.09 |
 | pgvector | f32 | cpu | 1.0 | 836.8 | 1.17 | 1.774 | 11.637 | 166.36 |
+| **benostreamdb** | tq8 | cpu | 0.9342 | 807.2 | 1.091 | 1.502 | 2.717 | 149.11 |
+| **benostreamdb** | tq8 | cuda | 0.9348 | 775.4 | 1.161 | 1.488 | 2.983 | 149.11 |
 | opensearch | f32 | cpu | 0.976 | 773.8 | 1.265 | 1.712 | 7.868 | 153.71 |
-| **benostreamdb** | f32 | cpu | 0.9886 | 675.6 | 1.167 | 1.513 | 2.279 | 191.34 |
-| **benostreamdb** | f32 | gpu | 0.9898 | 645.5 | 1.27 | 1.594 | 2.506 | 191.33 |
-| **benostreamdb** | pq | cpu | 0.8128 | 602.5 | 1.165 | 1.613 | 3.835 | 131.91 |
 | qdrant | f32 | cpu | 1.0 | 595.3 | 1.634 | 2.002 | 10.213 | 62.72 |
-| **benostreamdb** | pq | gpu | 0.8112 | 566.2 | 1.228 | 1.74 | 4.026 | 131.94 |
+| **benostreamdb** | f32 | cpu | 0.992 | 532.0 | 1.487 | 2.604 | 2.743 | 191.33 |
+| **benostreamdb** | f32 | cuda | 0.9888 | 526.4 | 1.551 | 1.864 | 2.853 | 191.32 |
+| **benostreamdb** | pq | cpu | 0.7992 | 505.5 | 1.429 | 1.949 | 4.501 | 131.92 |
+| **benostreamdb** | pq | cuda | 0.8044 | 492.8 | 1.446 | 2.081 | 3.304 | 131.94 |
 | lancedb | f32 | cpu | 0.7572 | 435.5 | 2.173 | 2.793 | 5.893 | 64.59 |
 | lancedb_hnsw | f32 | cpu | 1.0 | 426.7 | 2.224 | 2.789 | 1.966 | 81.67 |
-| milvus | f32 | cpu | 0.9984 | 3.4 | 200.756 | 400.884 | 3.051 | 62.72 |
 
 ### Vector — `gist-960-euclidean`
 
@@ -542,18 +591,17 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9916 | 2478.5 | 0.415 | 0.555 | 1.481 | 79.68 |
 | hnswlib | f32 | cpu | 0.99 | 2019.9 | 0.506 | 0.703 | 3.846 | 79.77 |
-| **benostreamdb** | tq8 | gpu | 0.825 | 839.0 | 1.067 | 1.539 | 2.883 | 177.15 |
-| **benostreamdb** | tq8 | cpu | 0.8212 | 822.5 | 1.064 | 1.499 | 2.623 | 177.17 |
 | weaviate | f32 | cpu | 0.9776 | 803.7 | 1.226 | 1.689 | 8.135 | 76.8 |
-| **benostreamdb** | f32 | cpu | 0.9402 | 512.5 | 1.638 | 2.152 | 2.713 | 233.44 |
-| **benostreamdb** | pq | gpu | 0.5484 | 510.6 | 1.317 | 1.937 | 5.097 | 161.49 |
-| **benostreamdb** | pq | cpu | 0.5554 | 492.9 | 1.397 | 1.956 | 4.889 | 161.49 |
-| **benostreamdb** | f32 | gpu | 0.9282 | 481.5 | 1.744 | 2.217 | 2.983 | 233.44 |
+| **benostreamdb** | tq8 | cpu | 0.8228 | 762.6 | 1.176 | 1.443 | 3.338 | 177.17 |
+| **benostreamdb** | tq8 | cuda | 0.8184 | 714.3 | 1.242 | 2.146 | 3.499 | 177.14 |
+| **benostreamdb** | pq | cpu | 0.553 | 448.4 | 1.585 | 2.087 | 5.834 | 161.49 |
+| **benostreamdb** | f32 | cuda | 0.9402 | 423.1 | 1.958 | 2.92 | 3.448 | 233.44 |
+| **benostreamdb** | pq | cuda | 0.5536 | 419.4 | 1.703 | 2.445 | 3.964 | 161.5 |
+| **benostreamdb** | f32 | cpu | 0.933 | 415.4 | 1.93 | 2.341 | 3.332 | 233.41 |
 | lancedb | f32 | cpu | 0.472 | 400.7 | 2.404 | 2.935 | 6.597 | 79.07 |
 | lancedb_hnsw | f32 | cpu | 0.9636 | 391.4 | 2.394 | 2.963 | 2.581 | 99.15 |
 | pgvector | f32 | cpu | 0.999 | 344.7 | 2.986 | 3.62 | 26.095 | 247.3 |
 | opensearch | f32 | cpu | 0.831 | 341.5 | 2.826 | 3.849 | 18.894 | 588.42 |
-| milvus | f32 | cpu | 0.8864 | 3.5 | 200.488 | 400.957 | 3.254 | 76.8 |
 
 ### Vector — `glove-100-angular`
 
@@ -561,17 +609,16 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 0.4624 | 8748.5 | 0.113 | 0.208 | 0.624 | 10.97 |
 | faiss | f32 | cpu | 0.9826 | 7162.6 | 0.136 | 0.259 | 0.419 | 10.88 |
-| **benostreamdb** | tq8 | gpu | 0.342 | 1556.2 | 0.557 | 0.753 | 0.97 | 20.68 |
-| **benostreamdb** | tq8 | cpu | 0.337 | 1555.7 | 0.552 | 0.767 | 0.748 | 20.67 |
 | weaviate | f32 | cpu | 0.4614 | 1179.0 | 0.827 | 1.397 | 4.341 | 8.0 |
-| **benostreamdb** | f32 | gpu | 0.4576 | 1046.1 | 0.856 | 1.305 | 1.038 | 27.91 |
-| **benostreamdb** | f32 | cpu | 0.4554 | 1036.4 | 0.858 | 1.29 | 0.881 | 27.95 |
+| **benostreamdb** | tq8 | cuda | 0.6076 | 1163.8 | 0.671 | 0.855 | 0.816 | 20.67 |
+| **benostreamdb** | tq8 | cpu | 0.617 | 1101.5 | 0.69 | 1.029 | 0.858 | 20.69 |
 | qdrant | f32 | cpu | 0.461 | 967.8 | 0.993 | 1.404 | 1.737 | 8.0 |
+| **benostreamdb** | f32 | cuda | 0.8996 | 841.9 | 1.0 | 1.242 | 1.043 | 27.94 |
+| **benostreamdb** | f32 | cpu | 0.8854 | 796.7 | 1.025 | 1.618 | 1.005 | 27.88 |
 | pgvector | f32 | cpu | 0.4618 | 790.9 | 1.266 | 1.685 | 6.111 | 24.85 |
 | opensearch | f32 | cpu | 0.4362 | 692.1 | 1.431 | 1.87 | 8.508 | 47.05 |
 | lancedb | f32 | cpu | 0.0216 | 520.5 | 1.817 | 2.323 | 0.406 | 8.2 |
 | lancedb_hnsw | f32 | cpu | 0.462 | 449.3 | 2.134 | 2.706 | 0.76 | 13.27 |
-| milvus | f32 | cpu | 0.4408 | 3.5 | 200.503 | 401.007 | 1.616 | 8.0 |
 
 ### Vector — `glove-200-angular`
 
@@ -579,19 +626,18 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9494 | 5272.1 | 0.186 | 0.38 | 0.585 | 18.88 |
 | hnswlib | f32 | cpu | 0.1756 | 5078.3 | 0.194 | 0.366 | 0.958 | 18.97 |
-| **benostreamdb** | tq8 | gpu | 0.1992 | 1392.2 | 0.579 | 0.933 | 1.181 | 38.95 |
-| **benostreamdb** | tq8 | cpu | 0.2056 | 1370.6 | 0.582 | 1.075 | 0.897 | 38.95 |
-| **benostreamdb** | pq | gpu | 0.4138 | 1165.1 | 0.659 | 0.92 | 1.942 | 35.01 |
-| **benostreamdb** | pq | cpu | 0.4294 | 1120.0 | 0.686 | 1.114 | 1.471 | 35.03 |
+| **benostreamdb** | tq8 | cuda | 0.4308 | 1035.0 | 0.691 | 0.977 | 1.311 | 38.93 |
 | weaviate | f32 | cpu | 0.179 | 1007.2 | 0.957 | 1.694 | 5.026 | 16.0 |
-| **benostreamdb** | f32 | cpu | 0.1734 | 857.5 | 1.007 | 1.489 | 1.312 | 52.26 |
-| **benostreamdb** | f32 | gpu | 0.1738 | 841.4 | 1.021 | 1.613 | 1.566 | 52.26 |
+| **benostreamdb** | tq8 | cpu | 0.4808 | 947.3 | 0.746 | 1.504 | 1.148 | 38.96 |
+| **benostreamdb** | pq | cpu | 0.0066 | 869.4 | 0.821 | 1.467 | 2.002 | 34.97 |
+| **benostreamdb** | pq | cuda | 0.0068 | 834.7 | 0.868 | 1.331 | 1.293 | 35.17 |
 | qdrant | f32 | cpu | 0.1752 | 743.7 | 1.308 | 1.892 | 3.205 | 16.0 |
+| **benostreamdb** | f32 | cuda | 0.8372 | 653.3 | 1.243 | 1.973 | 1.786 | 52.31 |
 | pgvector | f32 | cpu | 0.176 | 629.9 | 1.584 | 2.137 | 8.056 | 42.27 |
+| **benostreamdb** | f32 | cpu | 0.8644 | 615.8 | 1.35 | 1.984 | 1.472 | 52.28 |
 | lancedb | f32 | cpu | 0.097 | 473.9 | 2.009 | 2.525 | 2.332 | 16.78 |
 | lancedb_hnsw | f32 | cpu | 0.1772 | 446.5 | 2.125 | 2.634 | 1.042 | 23.26 |
 | opensearch | f32 | cpu | 0.17 | 345.6 | 2.884 | 5.007 | 12.821 | 60.0 |
-| milvus | f32 | cpu | 0.1646 | 3.6 | 200.398 | 401.003 | 2.236 | 16.0 |
 
 ### Vector — `lastfm-64-dot`
 
@@ -599,17 +645,16 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 0.9914 | 20036.8 | 0.049 | 0.065 | 0.259 | 8.17 |
 | faiss | f32 | cpu | 0.9964 | 14752.2 | 0.065 | 0.106 | 0.212 | 8.08 |
-| **benostreamdb** | tq8 | cpu | 0.7616 | 2147.6 | 0.38 | 0.543 | 1.119 | 15.27 |
-| **benostreamdb** | tq8 | gpu | 0.753 | 2074.9 | 0.401 | 0.559 | 1.23 | 15.29 |
-| **benostreamdb** | f32 | gpu | 0.754 | 2040.1 | 0.407 | 0.561 | 1.629 | 17.6 |
-| **benostreamdb** | f32 | cpu | 0.7448 | 1976.6 | 0.419 | 0.629 | 1.403 | 17.63 |
+| **benostreamdb** | tq8 | cuda | 0.6906 | 1521.0 | 0.496 | 0.707 | 1.241 | 15.28 |
 | weaviate | f32 | cpu | 0.9844 | 1447.6 | 0.661 | 1.38 | 3.858 | 5.2 |
+| **benostreamdb** | tq8 | cpu | 0.7542 | 1438.8 | 0.502 | 0.644 | 1.234 | 15.2 |
+| **benostreamdb** | f32 | cpu | 0.7334 | 1414.4 | 0.537 | 0.734 | 1.643 | 17.63 |
+| **benostreamdb** | f32 | cuda | 0.767 | 1358.6 | 0.547 | 0.687 | 1.58 | 17.65 |
 | pgvector | f32 | cpu | 0.996 | 1337.6 | 0.739 | 0.977 | 6.146 | 18.51 |
 | opensearch | f32 | cpu | 0.5954 | 1179.9 | 0.838 | 1.118 | 3.371 | 32.27 |
 | qdrant | f32 | cpu | 1.0 | 1062.6 | 0.912 | 1.422 | 1.264 | 5.2 |
 | lancedb | f32 | cpu | 0.2108 | 545.4 | 1.737 | 2.172 | 0.443 | 5.36 |
 | lancedb_hnsw | f32 | cpu | 0.9356 | 457.2 | 2.073 | 2.489 | 0.547 | 7.91 |
-| milvus | f32 | cpu | 0.9756 | 3.4 | 200.559 | 400.907 | 1.765 | 5.2 |
 
 ### Vector — `mnist-784-euclidean`
 
@@ -618,18 +663,17 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 | faiss | f32 | cpu | 0.9998 | 3177.8 | 0.318 | 0.455 | 1.078 | 65.6 |
 | hnswlib | f32 | cpu | 1.0 | 3097.6 | 0.328 | 0.513 | 2.426 | 65.69 |
 | weaviate | f32 | cpu | 0.999 | 1006.4 | 0.964 | 1.613 | 6.145 | 62.72 |
-| **benostreamdb** | tq8 | cpu | 0.9628 | 932.5 | 0.95 | 1.301 | 2.257 | 149.38 |
-| **benostreamdb** | tq8 | gpu | 0.9604 | 863.2 | 1.042 | 1.398 | 2.472 | 149.39 |
+| **benostreamdb** | tq8 | cpu | 0.9596 | 799.6 | 1.102 | 1.502 | 2.678 | 149.37 |
+| **benostreamdb** | tq8 | cuda | 0.9576 | 793.8 | 1.111 | 1.526 | 2.847 | 149.39 |
 | pgvector | f32 | cpu | 1.0 | 744.0 | 1.336 | 2.065 | 13.313 | 166.35 |
 | opensearch | f32 | cpu | 0.9602 | 717.4 | 1.387 | 1.8 | 8.681 | 137.32 |
-| **benostreamdb** | f32 | cpu | 0.9858 | 627.8 | 1.324 | 1.641 | 2.263 | 191.61 |
-| **benostreamdb** | f32 | gpu | 0.9862 | 623.9 | 1.33 | 1.704 | 2.569 | 191.61 |
-| **benostreamdb** | pq | gpu | 0.8458 | 540.2 | 1.341 | 1.8 | 3.904 | 131.93 |
-| **benostreamdb** | pq | cpu | 0.844 | 538.4 | 1.363 | 1.723 | 3.541 | 131.94 |
+| **benostreamdb** | f32 | cuda | 0.987 | 532.1 | 1.536 | 1.995 | 2.835 | 191.61 |
 | qdrant | f32 | cpu | 1.0 | 523.1 | 1.891 | 2.519 | 10.177 | 62.72 |
+| **benostreamdb** | f32 | cpu | 0.979 | 502.9 | 1.626 | 2.388 | 2.72 | 191.63 |
+| **benostreamdb** | pq | cpu | 0.8528 | 478.9 | 1.545 | 1.93 | 4.175 | 131.92 |
+| **benostreamdb** | pq | cuda | 0.847 | 477.5 | 1.563 | 1.958 | 3.27 | 131.93 |
 | lancedb_hnsw | f32 | cpu | 1.0 | 415.1 | 2.29 | 2.815 | 2.039 | 81.79 |
 | lancedb | f32 | cpu | 0.8318 | 387.8 | 2.475 | 3.259 | 5.555 | 64.59 |
-| milvus | f32 | cpu | 0.9914 | 3.4 | 200.761 | 401.067 | 2.833 | 62.72 |
 
 ### Vector — `nytimes-256-angular`
 
@@ -637,19 +681,18 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 0.0908 | 4261.4 | 0.23 | 0.412 | 1.243 | 23.45 |
 | faiss | f32 | cpu | 0.0922 | 3924.1 | 0.249 | 0.426 | 0.704 | 23.36 |
-| **benostreamdb** | tq8 | gpu | 0.1992 | 1142.6 | 0.71 | 1.079 | 1.26 | 49.74 |
-| **benostreamdb** | tq8 | cpu | 0.1866 | 1116.7 | 0.721 | 1.213 | 1.12 | 49.8 |
 | weaviate | f32 | cpu | 0.0906 | 950.0 | 1.033 | 1.657 | 5.343 | 20.48 |
-| **benostreamdb** | pq | cpu | 0.425 | 906.1 | 0.813 | 1.213 | 1.677 | 46.39 |
-| **benostreamdb** | pq | gpu | 0.3138 | 850.2 | 0.886 | 1.159 | 1.91 | 46.38 |
-| **benostreamdb** | f32 | gpu | 0.086 | 722.5 | 1.189 | 1.778 | 1.421 | 66.26 |
-| **benostreamdb** | f32 | cpu | 0.085 | 704.1 | 1.228 | 1.732 | 1.256 | 66.26 |
+| **benostreamdb** | tq8 | cuda | 0.567 | 898.4 | 0.841 | 1.123 | 1.244 | 49.77 |
+| **benostreamdb** | tq8 | cpu | 0.5714 | 861.7 | 0.873 | 1.156 | 1.296 | 49.78 |
+| **benostreamdb** | pq | cuda | 0.2038 | 726.9 | 0.998 | 1.41 | 1.462 | 46.46 |
+| **benostreamdb** | pq | cpu | 0.2216 | 695.7 | 1.051 | 1.79 | 1.926 | 46.4 |
 | qdrant | f32 | cpu | 0.0908 | 652.2 | 1.477 | 2.256 | 3.97 | 20.48 |
+| **benostreamdb** | f32 | cuda | 0.7202 | 603.9 | 1.332 | 1.807 | 1.294 | 66.3 |
+| **benostreamdb** | f32 | cpu | 0.7356 | 548.7 | 1.527 | 1.949 | 1.318 | 66.27 |
 | pgvector | f32 | cpu | 0.0908 | 529.1 | 1.868 | 2.636 | 10.021 | 50.92 |
 | lancedb | f32 | cpu | 0.0828 | 494.1 | 1.897 | 2.464 | 1.704 | 21.14 |
 | lancedb_hnsw | f32 | cpu | 0.0906 | 434.7 | 2.194 | 2.659 | 1.117 | 28.85 |
 | opensearch | f32 | cpu | 0.079 | 271.1 | 3.673 | 6.128 | 15.471 | 216.01 |
-| milvus | f32 | cpu | 0.0854 | 3.5 | 200.583 | 401.095 | 2.303 | 20.48 |
 
 ### Vector — `sift-128-euclidean`
 
@@ -657,19 +700,18 @@ During initial 600-second endurance testing, peak resident memory climbed to 5,8
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 1.0 | 11430.4 | 0.086 | 0.177 | 0.414 | 13.21 |
 | faiss | f32 | cpu | 1.0 | 7368.4 | 0.105 | 0.188 | 0.299 | 13.12 |
-| **benostreamdb** | tq8 | gpu | 0.9552 | 1468.2 | 0.578 | 0.822 | 0.94 | 26.17 |
-| **benostreamdb** | tq8 | cpu | 0.9546 | 1443.1 | 0.574 | 0.946 | 0.724 | 26.16 |
-| **benostreamdb** | f32 | cpu | 0.9858 | 1324.7 | 0.628 | 0.979 | 0.771 | 33.86 |
-| **benostreamdb** | f32 | gpu | 0.977 | 1270.6 | 0.661 | 0.97 | 0.971 | 33.86 |
-| **benostreamdb** | pq | cpu | 0.5488 | 1250.3 | 0.643 | 0.993 | 1.037 | 24.17 |
-| **benostreamdb** | pq | gpu | 0.5322 | 1248.5 | 0.658 | 0.925 | 1.289 | 24.14 |
+| **benostreamdb** | tq8 | cuda | 0.9502 | 1240.2 | 0.695 | 1.013 | 0.908 | 26.19 |
+| **benostreamdb** | tq8 | cpu | 0.9514 | 1227.2 | 0.693 | 1.012 | 0.865 | 26.15 |
 | weaviate | f32 | cpu | 0.999 | 1209.0 | 0.792 | 1.373 | 4.033 | 10.24 |
 | opensearch | f32 | cpu | 0.947 | 1152.5 | 0.851 | 1.186 | 3.772 | 1.18 |
 | pgvector | f32 | cpu | 1.0 | 1141.7 | 0.882 | 1.152 | 4.224 | 29.2 |
+| **benostreamdb** | f32 | cuda | 0.9878 | 1096.6 | 0.773 | 1.115 | 0.935 | 33.84 |
+| **benostreamdb** | pq | cuda | 0.5392 | 1072.0 | 0.779 | 1.025 | 1.007 | 24.16 |
+| **benostreamdb** | f32 | cpu | 0.9842 | 1056.6 | 0.801 | 1.216 | 0.905 | 33.84 |
+| **benostreamdb** | pq | cpu | 0.5442 | 1035.3 | 0.793 | 1.067 | 1.263 | 24.17 |
 | qdrant | f32 | cpu | 1.0 | 971.2 | 0.998 | 1.387 | 1.973 | 10.24 |
 | lancedb | f32 | cpu | 0.4908 | 506.4 | 1.793 | 2.266 | 0.919 | 10.61 |
 | lancedb_hnsw | f32 | cpu | 0.9884 | 443.2 | 2.136 | 2.573 | 0.687 | 16.19 |
-| milvus | f32 | cpu | 0.9754 | 3.5 | 200.473 | 400.767 | 1.852 | 10.24 |
 
 ### Graph
 
@@ -707,7 +749,6 @@ Every engine runs inside the same Docker envelope (`BENCH_CPUS`/`BENCH_MEM`, rec
 | vector | pgvector | HNSW m/ef_construction; shared_buffers=4GB + maintenance_work_mem=2GB; hnsw.ef_search; op matches opclass (<-> L2 / <=> cosine / <#> IP) | client → server (Postgres) |
 | vector | opensearch | knn_vector, Lucene HNSW, m/ef_construction, knn.algo_param.ef_search | client → server (OpenSearch) |
 | vector | qdrant | collection HNSW, m/ef_construct, hnsw_ef; distance Euclid/Cosine/Dot | client → server (Qdrant) |
-| vector | milvus | collection HNSW, M/efConstruction, ef; distance L2/IP/COSINE; Strong consistency | client → server (Milvus) |
 | vector | weaviate | collection HNSW, max_connections/ef_construction, dynamic ef; distance cosine/dot/l2-squared | client → server (Weaviate) |
 | graph | benostreamdb | CSR graph, in-process Rust (PageRank 30 iters / connected components / shortest path) | embedded (in-process Rust) |
 | graph | networkx | in-memory Python (correctness oracle, not a perf baseline) | embedded (in-process Python) |

@@ -122,7 +122,3 @@ We will, to the best of our ability:
 - Work with you to understand and validate the fix
 - Provide appropriate credit in release notes and CVE advisories
 - No legal action against good-faith reporters
-
----
-
-_Last updated: June 2026_
