@@ -24,6 +24,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.13.0]
 
 ### Added
+- **GPU batch distance kernels and multi-GPU acceleration** — added 2D-tiled
+  batched distance kernels in CUDA NVRTC (`compute_distances_batch`), VRAM-resident
+  GPU k-means clustering for IVF segment indexing, and intra-cluster CAGRA
+  acceleration. Exposed `bsdb.cdist` in Python supporting device routing across
+  CPU and multiple CUDA devices (`cuda:0`, `cuda:1`).
+- **Dynamic heap discipline and proactive cache eviction** — added
+  `invalidate_file_caches()` across all global moka caches (`BLOCK_CACHE`,
+  `PARQUET_BYTES_CACHE`, `BYTE_CACHE`, `PARQUET_META_CACHE`, delete caches) on
+  vacuum, compaction, and row deletions, eliminating stale cache retention.
+  Wired `init_jemalloc()` to start 4 background worker threads
+  (`background_thread: true`) and implemented `trim_heap()` using jemalloc
+  `arena.4096.purge` and `arena.4096.decay` (`MALLCTL_ARENAS_ALL`) to return
+  freed pages to the OS.
 - **Embedding provenance and vector-space guard (core)** — tables can declare
   `benostream.embedding.model`, `.dim`, `.provider`, `.endpoint`, and
   `.query_prefix` as Iceberg table properties. The engine mirrors them into
@@ -73,6 +86,24 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   across GPUs, and an unavailable explicit device raises instead of silently
   running elsewhere. New `Device.initialized` reports whether a device resolved
   to a real backend.
+- **Non-deterministic IVF k-means clustering and CPU-dependent list count causing vector search recall test failures** — `simple_kmeans` in `src/core/index/ivf.rs` sampled initial centroids using unseeded `rand::thread_rng()`, and `n_lists` for small collections ($N < 1000$) scaled with `num_cpus.min(4)`, producing different cluster topologies on 2-vCPU CI runners versus multi-core workstations. Added `simple_kmeans_with_seed`, defaulting to deterministic PRNG seed `0x00C0_FFEE_1337` (configurable via `BSDB_KMEANS_SEED` and `BSDB_HNSW_SEED`), exposed `seed` in `Device.kmeans(..., seed=...)`, and normalized small collection cluster counts to a constant `4`.
+- **Disk-cache key collisions across stores, runs, and CI steps** (long-standing;
+  present since the on-disk index cache was introduced) — `DiskCache` hashed only
+  the relative object path into the host-global `/tmp/hdb_cache`, so an entry
+  written for one store (or by an earlier process using the same relative layout)
+  could be served for another. `HnswIvfIndex::load_async_with_cache_key()` now
+  keys centroids, HNSW graphs, and `row_id` mappings by the store-qualified
+  `cache_key` via new `get_bytes_with_key()` / `get_mmap_with_key()` methods, so a
+  graph can no longer be paired with a mapping from a different k-means
+  assignment. This was the root cause of the intermittent
+  `test_hnsw_ivf_native_integration` failure (`Dist: 0` reported against rows
+  827..836 instead of row 50) in the second `cargo test` step of a job, where the
+  first step had already populated `/tmp/hdb_cache` for the same relative
+  filenames.
+- **Compiler memory exhaustion (OOM) during release builds** — disabled Thin
+  LTO (`lto = false`) in `[profile.release]` and configured `jobs = 4` in
+  `.cargo/config.toml`, eliminating 30+ GB memory spikes during compilation of
+  DataFusion and Arrow dependencies.
 - **Table properties reach external readers** — metadata-only property commits
   now write `TableMetadata.properties` alongside the manifest, so Spark, Trino,
   and PyIceberg see `SET TBLPROPERTIES` values (including embedding provenance).

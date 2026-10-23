@@ -544,6 +544,17 @@ async fn multi_writer_insert_delete_is_exact() -> Result<()> {
 /// deadline. The working set is bounded (each writer deletes its own window) so
 /// a long run does not grow without limit. `#[ignore]`d and wired into the
 /// pre-release gate.
+fn rss_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
 #[tokio::test]
 #[ignore = "soak test; run with `-- --ignored` and BSDB_SOAK_SECONDS"]
 async fn multi_writer_soak() -> Result<()> {
@@ -563,6 +574,20 @@ async fn multi_writer_soak() -> Result<()> {
 
     let writers = 8usize;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let monitor = tokio::spawn(async move {
+        let mut peak: u64 = 0;
+        while std::time::Instant::now() < deadline {
+            if let Some(rss) = rss_bytes() {
+                peak = peak.max(rss);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        if let Some(rss) = rss_bytes() {
+            peak = peak.max(rss);
+        }
+        peak
+    });
+
     let mut handles = Vec::new();
 
     for w in 0..writers {
@@ -608,6 +633,7 @@ async fn multi_writer_soak() -> Result<()> {
     for h in handles {
         total_ops += h.await??;
     }
+    let peak_rss = monitor.await.unwrap_or(0);
 
     // Final state must be a valid committed snapshot.
     let t = open_shared(uri, &tmp.path().join("verify")).await?;
@@ -628,7 +654,8 @@ async fn multi_writer_soak() -> Result<()> {
     }
 
     eprintln!(
-        "[soak-stats] test=multi_writer_soak writers={writers} ops={total_ops} duration_s={secs} rows={count}"
+        "[soak-stats] test=multi_writer_soak writers={writers} ops={total_ops} duration_s={secs} rows={count} peak_rss_mb={}",
+        peak_rss / (1024 * 1024)
     );
     Ok(())
 }

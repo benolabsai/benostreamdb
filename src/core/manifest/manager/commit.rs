@@ -1068,7 +1068,12 @@ impl ManifestManager {
             }
             tracing::info!("Vacuum: Deleting unreferenced file {}", path_str);
             self.store.delete(&location).await?;
+            crate::core::cache::invalidate_file_caches(&self.root_uri, &path_str).await;
             deleted_count += 1;
+        }
+
+        if deleted_count > 0 {
+            crate::core::memory::trim_heap();
         }
 
         Ok(deleted_count)

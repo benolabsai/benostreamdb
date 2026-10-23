@@ -307,6 +307,8 @@ impl TableBuilder {
     }
 
     pub async fn build_async(self) -> Result<Table> {
+        crate::core::memory::init_jemalloc();
+
         // Normalize URI to absolute path if it is local
         let uri = if !self.uri.contains("://") || self.uri.starts_with("file://") {
             let path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);

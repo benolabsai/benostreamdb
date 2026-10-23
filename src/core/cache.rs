@@ -72,11 +72,23 @@ impl DiskCache {
     }
 
     pub async fn get_bytes(&self, path: &str) -> Result<bytes::Bytes> {
+        self.get_bytes_with_key(path, path).await
+    }
+
+    /// Fetch `path` from the store, hashing the on-disk entry by `cache_key`.
+    ///
+    /// [`DISK_CACHE_DIR`] is shared by every store on the host, so hashing the
+    /// bare object path lets unrelated stores collide whenever they happen to
+    /// use the same relative layout — two temp directories, two buckets, or two
+    /// CI steps reusing `/tmp`. Callers that know the store-qualified URI must
+    /// pass it here so a stale graph can never be paired with a fresh row-id
+    /// mapping for the same relative path.
+    pub async fn get_bytes_with_key(&self, path: &str, cache_key: &str) -> Result<bytes::Bytes> {
         use sha2::{Digest, Sha256};
 
         if let Some(cache_dir) = &self.cache_dir {
             let mut hasher = Sha256::new();
-            hasher.update(path);
+            hasher.update(cache_key);
             let hash = format!("{:x}", hasher.finalize());
             let cache_path = cache_dir.join(&hash);
 
@@ -129,6 +141,15 @@ impl DiskCache {
     }
 
     pub async fn get_mmap(&self, path: &str) -> Result<Arc<memmap2::Mmap>> {
+        self.get_mmap_with_key(path, path).await
+    }
+
+    /// Mmap-backed counterpart to [`DiskCache::get_bytes_with_key`].
+    pub async fn get_mmap_with_key(
+        &self,
+        path: &str,
+        cache_key: &str,
+    ) -> Result<Arc<memmap2::Mmap>> {
         use sha2::{Digest, Sha256};
 
         let cache_dir = self
@@ -137,7 +158,7 @@ impl DiskCache {
             .ok_or_else(|| anyhow::anyhow!("Disk cache disabled, cannot memory map files"))?;
 
         let mut hasher = Sha256::new();
-        hasher.update(path);
+        hasher.update(cache_key);
         let hash = format!("{:x}", hasher.finalize());
         let cache_path = cache_dir.join(&hash);
 
@@ -464,6 +485,35 @@ pub static BLOCK_CACHE: Lazy<Cache<String, Arc<RecordBatch>>> = Lazy::new(|| {
         .build()
 });
 
+/// Invalidate all memory caches keyed by an object/file path or (root_uri + path).
+pub async fn invalidate_file_caches(root_uri: &str, path: &str) {
+    let key1 = path.to_string();
+    let key2 = format!("{}/{}", root_uri, path);
+    let key3 = if let Some(stripped) = path.strip_prefix('/') {
+        format!("{}/{}", root_uri, stripped)
+    } else {
+        path.to_string()
+    };
+    let clean_path = path.trim_start_matches('/');
+    let key4 = format!("{}/{}", root_uri.trim_end_matches('/'), clean_path);
+
+    for k in &[&key1, &key2, &key3, &key4] {
+        BLOCK_CACHE.invalidate(*k).await;
+        PARQUET_BYTES_CACHE.invalidate(*k).await;
+        PARQUET_META_CACHE.invalidate(*k).await;
+        BYTE_CACHE.invalidate(*k).await;
+        INDEX_CACHE.invalidate(*k).await;
+        BLOOM_FILTER_CACHE.invalidate(*k).await;
+        HNSW_CACHE.invalidate(*k).await;
+        HNSW_IVF_CACHE.invalidate(*k).await;
+        INVERTED_INDEX_CACHE.invalidate(*k).await;
+        ANALYZER_META_CACHE.invalidate(*k).await;
+        POSITION_DELETE_CACHE.invalidate(*k).await;
+        FULL_DELETE_FILE_CACHE.invalidate(*k).await;
+        EQUALITY_DELETE_CACHE.invalidate(*k).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -698,5 +748,49 @@ mod tests {
         // Cleanup
         BYTE_CACHE.invalidate(&table1_key).await;
         BYTE_CACHE.invalidate(&table2_key).await;
+    }
+
+    /// The host-global disk cache must not serve bytes from another store just
+    /// because both use the same relative object path and byte length.
+    #[tokio::test]
+    async fn test_disk_cache_namespaces_by_qualified_key() {
+        use object_store::memory::InMemory;
+        use object_store::path::Path;
+        use object_store::ObjectStore;
+
+        let store_a = Arc::new(InMemory::new());
+        let store_b = Arc::new(InMemory::new());
+        let object = Path::from("seg.embedding.cluster_0.hnsw.graph");
+
+        store_a
+            .put(&object, bytes::Bytes::from_static(b"graph-a").into())
+            .await
+            .unwrap();
+        store_b
+            .put(&object, bytes::Bytes::from_static(b"graph-b").into())
+            .await
+            .unwrap();
+
+        // Same relative path and same length on purpose.
+        assert_eq!(b"graph-a".len(), b"graph-b".len());
+
+        let nonce = std::process::id();
+        let a = DiskCache::new(store_a)
+            .get_bytes_with_key(
+                "seg.embedding.cluster_0.hnsw.graph",
+                &format!("store-a/{nonce}/seg.embedding.cluster_0.hnsw.graph"),
+            )
+            .await
+            .unwrap();
+        let b = DiskCache::new(store_b)
+            .get_bytes_with_key(
+                "seg.embedding.cluster_0.hnsw.graph",
+                &format!("store-b/{nonce}/seg.embedding.cluster_0.hnsw.graph"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(&a[..], b"graph-a");
+        assert_eq!(&b[..], b"graph-b");
     }
 }

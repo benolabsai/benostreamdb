@@ -875,6 +875,8 @@ table.add_index(
 )
 ```
 
+IVF index clustering uses a deterministic default seed (`0x00C0_FFEE_1337`). You can override this via the `BSDB_KMEANS_SEED` environment variable or specify seeds directly in `Device.kmeans(vectors, k, max_iters=10, seed=42)`.
+
 See [Vector Configuration Guide](CONFIGURATION.md) for tuning parameters.
 
 ## REST Search APIs (`benostreamdb-search`)

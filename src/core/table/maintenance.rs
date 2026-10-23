@@ -346,6 +346,11 @@ impl Table {
         }
 
         if !all_updated_entries.is_empty() {
+            for (entry, _) in &candidates {
+                crate::core::cache::invalidate_file_caches(&self.uri, &entry.file_path).await;
+            }
+            crate::core::memory::trim_heap();
+
             // Commit the entire updated state.
             let new_manifest = manifest_manager
                 .commit(

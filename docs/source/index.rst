@@ -8,6 +8,10 @@ Welcome to BenoStreamDB
 
 BenoStreamDB is an index-overlay engine for the lakehouse built in Rust. It layers reconstructible, persistent secondary indexes—HNSW vector search, BM25 Okapi full-text, Roaring Bitmaps, JSON path filters, and CSR graphs—directly onto Apache Iceberg tables in object storage.
 
+.. tip::
+   **Looking for the fastest way to get started?**
+   Jump straight to the :doc:`guides/quickstart` to run your first vector search and SQL query in under 2 minutes.
+
 Key Architecture Highlights
 ----------------------------
 
@@ -22,6 +26,7 @@ Key Architecture Highlights
    :maxdepth: 2
    :caption: Getting Started
 
+   guides/quickstart
    guides/installation
    guides/architecture
    guides/adr_001

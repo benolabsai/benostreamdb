@@ -429,7 +429,8 @@ We provide a script to build a full matrix of connectors (Java 17/21, Spark 3.5/
 ```
 
 ### Hardware Acceleration
-- **Standard**: Build with CPU + Intel Graphics/XPU support (default).
+- **Standard**: Build with CPU + Intel Graphics/XPU support (default on Linux/Windows).
+- **Apple Metal (MPS)**: Supported out-of-the-box on macOS / Apple Silicon (M1/M2/M3/M4/M5). Running `./build-connectors.sh` on Apple Silicon automatically compiles and bundles native Metal shading kernels (`libbenostreamdb.dylib`) without requiring extra flags. Configure at runtime via `spark.benostream.gpu.device=mps` in Spark or `benostream.gpu-device=mps` in Trino.
 - **CUDA**: Build for NVIDIA GPUs:
   ```bash
   ./build-connectors.sh --cuda

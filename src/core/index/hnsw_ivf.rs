@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing;
 
-use super::ivf::simple_kmeans;
+use super::ivf::simple_kmeans_with_seed;
 use super::pq::{PqConfig, PqEncoder};
 use super::turboquant::TurboQuantEncoder;
 use super::{Quantizer, QuantizerImpl, VectorMetric, VectorValue};
@@ -560,6 +560,17 @@ impl HnswIvfIndex {
         hnsw_m: Option<usize>,
         algo: &IndexAlgorithm,
     ) -> Result<Self> {
+        Self::build_from_file_with_seed(tmp_path, metric, n_lists, hnsw_m, algo, None)
+    }
+
+    pub fn build_from_file_with_seed(
+        tmp_path: &str,
+        metric: VectorMetric,
+        n_lists: Option<usize>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+        seed: Option<u64>,
+    ) -> Result<Self> {
         let start = std::time::Instant::now();
         tracing::info!("Building HNSW-IVF out-of-core from file: {}", tmp_path);
 
@@ -641,7 +652,7 @@ impl HnswIvfIndex {
             })
             .unwrap_or_else(|| {
                 if n_vectors < 1000 {
-                    num_cpus.min(4)
+                    4
                 } else if n_vectors < 10_000 {
                     num_cpus.max(16)
                 } else {
@@ -661,7 +672,7 @@ impl HnswIvfIndex {
             })
             .unwrap_or(16);
 
-        let (centroids, _) = simple_kmeans(&vectors_sampled, n_lists, 10)?;
+        let (centroids, _) = simple_kmeans_with_seed(&vectors_sampled, n_lists, 10, seed)?;
 
         let quantizer = match algo {
             IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::TurboQuant(
@@ -831,6 +842,19 @@ impl HnswIvfIndex {
         algo: &IndexAlgorithm,
         offset: usize,
     ) -> Result<Self> {
+        Self::build_with_seed(vectors, metric, n_lists, hnsw_m, algo, offset, None)
+    }
+
+    /// Build HNSW-IVF index from vectors with an optional PRNG seed for deterministic clustering
+    pub fn build_with_seed(
+        vectors: Vec<Vec<f32>>,
+        metric: VectorMetric,
+        n_lists: Option<usize>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+        offset: usize,
+        seed: Option<u64>,
+    ) -> Result<Self> {
         let start = std::time::Instant::now();
         if vectors.is_empty() {
             anyhow::bail!("Cannot build HNSW-IVF index from empty vector set");
@@ -844,7 +868,7 @@ impl HnswIvfIndex {
         let n_lists = n_lists
             .unwrap_or_else(|| {
                 if n_vectors < 1000 {
-                    num_cpus.min(4)
+                    4
                 } else if n_vectors < 10_000 {
                     num_cpus.max(16)
                 } else {
@@ -867,7 +891,7 @@ impl HnswIvfIndex {
         // Step 1: Cluster vectors using k-means
         let t0 = std::time::Instant::now();
         let max_iters = 10;
-        let (centroids, labels) = simple_kmeans(&vectors, n_lists, max_iters)?;
+        let (centroids, labels) = simple_kmeans_with_seed(&vectors, n_lists, max_iters, seed)?;
 
         // Step 2: Train Quantizer if requested
         let quantizer = match algo {
@@ -1483,7 +1507,15 @@ impl HnswIvfIndex {
         }
 
         let centroids_path = format!("{}.centroids.parquet", root_path);
-        let centroids_bytes = disk_cache.get_bytes(&centroids_path).await?;
+        // The disk cache is host-global, so key it by the store-qualified
+        // `cache_key` (root_uri + path), not the relative object path. Two
+        // stores — or two CI steps writing the same relative layout into
+        // /tmp — would otherwise share entries and could load a stale
+        // centroids/graph while a mapping is freshly written.
+        let centroids_cache_key = format!("{}.centroids.parquet", cache_key);
+        let centroids_bytes = disk_cache
+            .get_bytes_with_key(&centroids_path, &centroids_cache_key)
+            .await?;
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(centroids_bytes)?;
         let reader = builder.build()?;
@@ -1506,7 +1538,9 @@ impl HnswIvfIndex {
 
         // Load metric and quantizer from parquet metadata
         let (metric, quantizer) = {
-            let centroids_bytes_for_meta = disk_cache.get_bytes(&centroids_path).await?;
+            let centroids_bytes_for_meta = disk_cache
+                .get_bytes_with_key(&centroids_path, &centroids_cache_key)
+                .await?;
             let parquet_reader =
                 parquet::file::reader::SerializedFileReader::new(centroids_bytes_for_meta)?;
             let file_metadata = parquet_reader.metadata().file_metadata();
@@ -1577,13 +1611,20 @@ impl HnswIvfIndex {
                     let hnsw_key = format!("{}.cluster_{}.hnsw.graph", root_path, cluster_id);
                     let mapping_key =
                         format!("{}.cluster_{}.mapping.parquet", root_path, cluster_id);
+                    // Qualified keys keep graph and mapping for one cluster
+                    // together across stores/runs.
+                    let hnsw_cache_key = format!("{}.cluster_{}.hnsw.graph", cache_key, cluster_id);
+                    let mapping_cache_key =
+                        format!("{}.cluster_{}.mapping.parquet", cache_key, cluster_id);
 
                     let res_graph = if use_mmap {
-                        GraphData::Mmap(dc.get_mmap(&hnsw_key).await?)
+                        GraphData::Mmap(dc.get_mmap_with_key(&hnsw_key, &hnsw_cache_key).await?)
                     } else {
-                        GraphData::Bytes(dc.get_bytes(&hnsw_key).await?)
+                        GraphData::Bytes(dc.get_bytes_with_key(&hnsw_key, &hnsw_cache_key).await?)
                     };
-                    let res_mapping = dc.get_bytes(&mapping_key).await?;
+                    let res_mapping = dc
+                        .get_bytes_with_key(&mapping_key, &mapping_cache_key)
+                        .await?;
 
                     Ok(ClusterBytes {
                         cluster_id,

@@ -120,6 +120,8 @@ backward compatibility but ignored.
 | `BSDB_HNSW_M` | HNSW per-node neighbour count. | `16` |
 | `BSDB_HNSW_EF_CONSTRUCTION` | HNSW build beam width. | `max(2 × M, 40)` |
 | `BSDB_HNSW_N_LISTS` | IVF list count. | Heuristic from vector count |
+| `BSDB_KMEANS_SEED` | PRNG seed for k-means centroid initialization during IVF index building. Set to an integer to override the deterministic default seed (`0x00C0_FFEE_1337`). | `0x00C0_FFEE_1337` (deterministic) |
+| `BSDB_HNSW_SEED` | PRNG seed for HNSW layer level assignment during graph building. | unset (thread-local randomness) |
 | `BSDB_NVRTC_PATH` | NVRTC library file or directory used to compile GPU kernels. | Auto-discovery (CUDA home, Python site-packages, `LD_LIBRARY_PATH`) |
 | `BSDB_DRIFT_MEMORY_MB` | In-memory budget for graph-algorithm UDAF accumulators before they spill to the CSR index. | Engine memory budget |
 

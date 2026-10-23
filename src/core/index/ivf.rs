@@ -225,8 +225,18 @@ pub fn simple_kmeans(
     k: usize,
     max_iters: usize,
 ) -> Result<(Vec<Vec<f32>>, Vec<usize>)> {
+    simple_kmeans_with_seed(vectors, k, max_iters, None)
+}
+
+/// Variant of `simple_kmeans` accepting an optional PRNG seed for deterministic centroid initialization.
+pub fn simple_kmeans_with_seed(
+    vectors: &[Vec<f32>],
+    k: usize,
+    max_iters: usize,
+    seed: Option<u64>,
+) -> Result<(Vec<Vec<f32>>, Vec<usize>)> {
     use rand::seq::SliceRandom;
-    use rand::thread_rng;
+    use rand::{Rng, SeedableRng};
 
     let n = vectors.len();
     if n == 0 {
@@ -237,10 +247,19 @@ pub fn simple_kmeans(
     }
     let dim = vectors[0].len();
 
+    // Default to a deterministic seed (0x00C0_FFEE_1337) or env var if None is provided,
+    // ensuring reproducibility across platforms, cores, and CI runs.
+    let seed_val = seed.unwrap_or_else(|| {
+        std::env::var("BSDB_KMEANS_SEED")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0x00C0_FFEE_1337)
+    });
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed_val);
+
     // Step 1: Flatten training vectors once for SIMD/Cache locality
     // For large datasets, use a 10% sub-sample to speed up centroid movement
     let sample_size = (n / 10).max(1000).min(n);
-    let mut rng = thread_rng();
     let training_indices: Vec<usize> = (0..n)
         .collect::<Vec<_>>()
         .choose_multiple(&mut rng, sample_size)
@@ -261,7 +280,6 @@ pub fn simple_kmeans(
     // few clusters dominated the whole index build. k-means++ spreads the seeds
     // by sampling each next centroid with probability proportional to its
     // squared distance from the nearest existing centroid.
-    use rand::Rng;
     let mut centroids: Vec<Vec<f32>> = Vec::with_capacity(k);
     {
         let first = training_indices[rng.gen_range(0..training_indices.len())];

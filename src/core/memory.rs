@@ -32,11 +32,39 @@
 //! allocator high-water mark entirely; `malloc_trim` is the in-process
 //! equivalent for the library's `ingest_async` path.
 
+/// Initialize jemalloc background worker threads and decay settings.
+///
+/// When enabled, jemalloc creates background threads to purge unused dirty pages
+/// asynchronously rather than keeping them pinned in arenas.
+pub fn init_jemalloc() {
+    #[cfg(all(target_os = "linux", not(target_env = "musl")))]
+    {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let _ = tikv_jemalloc_ctl::background_thread::write(true);
+            let _ = tikv_jemalloc_ctl::max_background_threads::write(4);
+        });
+    }
+}
+
 /// Return freed heap pages to the OS.
 pub fn trim_heap() -> bool {
-    // No-op because jemalloc automatically returns memory to the OS
-    // via background threads.
-    false
+    #[cfg(all(target_os = "linux", not(target_env = "musl")))]
+    {
+        // Refresh cached statistics
+        let _ = tikv_jemalloc_ctl::epoch::advance();
+        // Purge and decay all arenas back to the kernel via madvise(MADV_DONTNEED)
+        // 4096 is MALLCTL_ARENAS_ALL in jemalloc
+        unsafe {
+            let _ = tikv_jemalloc_ctl::raw::write(b"arena.4096.purge\0", 0u32);
+            let _ = tikv_jemalloc_ctl::raw::write(b"arena.4096.decay\0", 0u32);
+        }
+        true
+    }
+    #[cfg(not(all(target_os = "linux", not(target_env = "musl"))))]
+    {
+        false
+    }
 }
 
 /// Resident set size in bytes, if the platform exposes it.
