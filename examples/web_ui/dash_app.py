@@ -332,6 +332,12 @@ _summary_text = (
 app = Dash(__name__, title="BenoStreamDB — Dash demo")
 app.layout = html.Div([
     html.H2("BenoStreamDB — Wikipedia Graph RAG (Dash)"),
+    html.Div(
+        "Work in progress: this full-site Wikipedia demo is under active "
+        "development; the data, SQL surface, and UI may change.",
+        className="summary",
+        style={"color": "#b45309", "fontWeight": "600"},
+    ),
     html.Div(_summary_text, className="summary"),
     html.Div(id="global-res", className="global-res"),
     dcc.Interval(id="global-interval", interval=1000),

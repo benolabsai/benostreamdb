@@ -222,7 +222,7 @@ import benostreamdb as bsdb
 import numpy as np
 
 # GPU-accelerated batch distance computation
-ctx = bsdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
+ctx = bsdb.ComputeContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
 print(f"Using GPU backend: {ctx.backend}")
 
 # Create query and database vectors
@@ -230,16 +230,16 @@ query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(100000, 768).astype(np.float32)
 
 # Compute distances with batch GPU acceleration (CPU SIMD recommended for single queries)
-distances = bsdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_batch(query, database, device=ctx)
 
 # Find top-k nearest neighbors
 k = 10
 top_k_indices = np.argsort(distances)[:k]
 
-# Single-pair distance computation
-vec1 = np.array([1.0, 2.0, 3.0])
-vec2 = np.array([4.0, 5.0, 6.0])
-distance = bsdb.cosine_distance(vec1, vec2)
+# Single-pair distance computation (1-D float32 arrays)
+vec1 = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+vec2 = np.array([4.0, 5.0, 6.0], dtype=np.float32)
+distance = bsdb.cosine(vec1, vec2)
 
 # Sparse vector support for high-dimensional sparse data
 sparse1 = bsdb.SparseVector(
@@ -252,12 +252,12 @@ sparse2 = bsdb.SparseVector(
     values=np.array([2.0, 1.5, 0.9], dtype=np.float32),
     dim=1000
 )
-distance = bsdb.l2_distance_sparse(sparse1, sparse2)
+distance = bsdb.l2_sparse(sparse1, sparse2)
 
 # Binary vector operations (bit-packed for efficiency)
 binary1 = np.packbits(np.random.randint(0, 2, 128))
 binary2 = np.packbits(np.random.randint(0, 2, 128))
-distance = bsdb.hamming_distance_packed(binary1, binary2)
+distance = bsdb.hamming_packed(binary1, binary2)
 ```
 
 **Supported GPU Backends:**
@@ -272,14 +272,14 @@ distance = bsdb.hamming_distance_packed(binary1, binary2)
 
 See [Python Vector API Documentation](PYTHON_VECTOR_API.md) for complete API reference and GPU installation instructions
 
+```python
 # SQL queries (full DataFusion support with pgvector syntax)
 import benostreamdb as bsdb
 session = bsdb.Session()
 session.register("users", table)
 
-# Optional: Enable GPU acceleration for SQL queries
-ctx = bsdb.GPUContext.auto_detect()
-bsdb.set_thread_gpu_context(ctx)
+# Optional: pin the process to a GPU so SQL queries use it too
+bsdb.set_gpu_device("auto")
 
 # Simple SQL
 results = table.sql("SELECT * FROM t WHERE id > 100")
@@ -304,7 +304,7 @@ results = session.sql("""
 
 # Maintenance
 table.compact()
-table.expire_snapshots(retain_last=10)
+table.vacuum(retention_versions=10)
 ```
 
 ## 📊 Real-World Testing Plan

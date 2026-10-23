@@ -26,9 +26,7 @@ table.replace_sort_order(
     ascending=[False, True]  # timestamp DESC, user_id ASC
 )
 
-# Get current sort order
-# sort_order = table.get_sort_order() 
-# print(sort_order)
+# `set_sort_order(columns, ascending)` is the equivalent convenience wrapper.
 ```
 
 ### Benefits
@@ -200,8 +198,11 @@ Define default values for schema evolution.
 import benostreamdb as bsdb
 import pandas as pd
 
-# Create table with V2 features
+# Create table with V2/V3 features
 table = bsdb.Table("s3://bucket/analytics")
+
+# Opt in to Iceberg V3 metadata (row lineage tracking)
+table.format_version = 3
 
 # Configure sort order for time-series data
 table.replace_sort_order(
@@ -211,10 +212,10 @@ table.replace_sort_order(
 
 # Set partition spec
 table.update_spec([
-    PartitionField(source_ids=[1], name="date", transform="day")
+    bsdb.PartitionField(source_ids=[1], name="date", transform="day")
 ])
 
-# Write data (V3 row lineage added automatically)
+# Write data
 df = pd.DataFrame({
     "event_time": pd.date_range("2024-01-01", periods=1000),
     "user_id": range(1000),
@@ -230,8 +231,9 @@ recent_clicks = table.to_pandas(
     filter="event_time > '2024-01-15' AND user_id < 100"
 )
 
-# Access V3 metadata
-print(recent_clicks[["_row_id", "_last_updated_sequence_number"]].head())
+# V3 row lineage lives in Iceberg metadata (next-row-id, and per-file
+# first-row-id), not as queryable data columns.
+print(table.format_version)
 
 # Time Travel: Rollback to previous state
 table.rollback_to_snapshot(123456789)

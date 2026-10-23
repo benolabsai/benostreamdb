@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1]
+
+### Fixed
+- **Python `vector_filter` index tuning** — `to_arrow_stream()` (and therefore
+  `to_pandas()`, `to_arrow()`, `vector_search()`, and `search()`) now reads
+  `ef_search`, `probes`, and `use_mmap` from the `vector_filter` dict, matching
+  the behavior already implemented in `Table.explain()`.
+- **`INDEX_HINT` in Python SQL** — `Table.sql()` / `execute_sql()` now parses
+  `/*+ INDEX_HINT(ef_search=..., probes=..., use_index=...) */` and applies it to
+  the query session, matching the core and connector SQL paths.
+- **Documentation examples** — corrected Python, SQL, and catalog examples to
+  match the current public API (distance function names, `ComputeContext` /
+  `Device`, catalog `create_catalog` + `load_table`, index configuration shape,
+  maintenance calls, and Iceberg V2/V3 behavior).
+
 ## [0.13.0]
 
 ### Added
@@ -2338,7 +2353,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-[Unreleased]: https://github.com/benolabsai/benostreamdb/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/benolabsai/benostreamdb/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/benolabsai/benostreamdb/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/benolabsai/benostreamdb/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/benolabsai/benostreamdb/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/benolabsai/benostreamdb/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/benolabsai/benostreamdb/compare/v0.9.0...v0.11.0
 [0.9.0]: https://github.com/benolabsai/benostreamdb/compare/v0.8.1...v0.9.0

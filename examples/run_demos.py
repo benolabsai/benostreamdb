@@ -2,6 +2,7 @@ import os
 import time
 import subprocess
 import sys
+import shutil
 
 def run_notebook(path, delay_per_cell=15):
     print(f"\n{'='*60}")
@@ -11,13 +12,11 @@ def run_notebook(path, delay_per_cell=15):
     # Use jupyter nbconvert to execute the notebook
     # We could use the python API for more control, but shell is more robust if dependencies are tricky
     
-    cmd = [
-        "jupyter", "nbconvert", 
-        "--to", "notebook", 
-        "--execute", 
-        "--inplace", 
-        path
-    ]
+    jupyter_cmd = shutil.which("jupyter") or [sys.executable, "-m", "jupyter"]
+    if isinstance(jupyter_cmd, str):
+        cmd = [jupyter_cmd, "nbconvert", "--to", "notebook", "--execute", "--inplace", path]
+    else:
+        cmd = jupyter_cmd + ["nbconvert", "--to", "notebook", "--execute", "--inplace", path]
     
     start_time = time.time()
     
@@ -39,13 +38,12 @@ def run_notebook(path, delay_per_cell=15):
             print(f"\n\nERROR executing {os.path.basename(path)}:")
             print(stderr)
             
-        # Ensure we spend at least some time per notebook to hit the 15 min target
-        # 15 mins total for 3 notebooks = 5 mins each = 300 seconds
+        # Configurable pacing (defaults to 0 for instant runs, or set DEMO_PACE_SECONDS=300 for slow walkthrough)
         total_elapsed = time.time() - start_time
-        target_time = 300 
+        target_time = int(os.environ.get("DEMO_PACE_SECONDS", 0))
         if total_elapsed < target_time:
             wait_time = target_time - total_elapsed
-            print(f"Pacing: Waiting {wait_time:.1f}s to ensure thorough walkthrough experience...")
+            print(f"Pacing: Waiting {wait_time:.1f}s...")
             time.sleep(wait_time)
             
     except Exception as e:

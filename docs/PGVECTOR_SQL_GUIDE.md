@@ -182,18 +182,15 @@ ORDER BY distance;
 
 ## Configuration Parameters
 
-Control vector search behavior with session configuration parameters.
+Control vector search behavior per query with the `INDEX_HINT` optimizer hint.
 
 ### HNSW Parameters
 
 ```sql
--- Set ef_search (search beam width)
+-- ef_search controls the search beam width (default: 64)
 -- Higher values = more accurate but slower
--- Default: 64
-SET hnsw.ef_search = 128;
-
--- Query with custom ef_search
-SELECT id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+SELECT /*+ INDEX_HINT(ef_search=128) */
+       id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
 FROM documents
 ORDER BY distance
 LIMIT 10;
@@ -202,13 +199,10 @@ LIMIT 10;
 ### IVF Parameters
 
 ```sql
--- Set number of clusters to search
+-- probes controls how many IVF clusters are scanned (default: 10)
 -- Higher values = more accurate but slower
--- Default: 10
-SET ivf.probes = 20;
-
--- Query with custom probes
-SELECT id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+SELECT /*+ INDEX_HINT(probes=20) */
+       id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
 FROM documents
 ORDER BY distance
 LIMIT 10;
@@ -218,10 +212,18 @@ LIMIT 10;
 
 ```sql
 -- Force index usage (default: true)
-SET vector.use_index = true;
+SELECT /*+ INDEX_HINT(use_index=true) */
+       id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+FROM documents
+ORDER BY distance
+LIMIT 10;
 
 -- Disable index for testing (forces sequential scan)
-SET vector.use_index = false;
+SELECT /*+ INDEX_HINT(use_index=false) */
+       id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+FROM documents
+ORDER BY distance
+LIMIT 10;
 ```
 
 ### Python API
@@ -229,19 +231,18 @@ SET vector.use_index = false;
 ```python
 import benostreamdb as bsdb
 
-session = bsdb.Session()
+table = bsdb.Table("s3://bucket/documents")
 
-# Set configuration parameters
-session.set_config("hnsw.ef_search", 128)
-session.set_config("ivf.probes", 20)
-
-# Execute query with custom config
-results = session.sql("""
-    SELECT id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
-    FROM documents
-    ORDER BY distance
-    LIMIT 10
-""")
+# Pass index-tuning parameters alongside the vector filter
+results = table.to_pandas(
+    vector_filter={
+        "column": "embedding",
+        "query": [0.1, 0.2, 0.3],
+        "k": 10,
+        "ef_search": 128,
+        "probes": 20,
+    }
+)
 ```
 
 ---
@@ -732,7 +733,3 @@ LIMIT 10;
 - [DataFusion SQL Reference](https://arrow.apache.org/datafusion/user-guide/sql/index.html)
 - [pgvector Documentation](https://github.com/pgvector/pgvector)
 - [Vector Search Best Practices](architecture.md)
-
----
-
-**Last Updated**: September 2026

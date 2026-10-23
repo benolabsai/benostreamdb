@@ -13,12 +13,12 @@ The API supports six distance metrics:
 
 | Metric | Function | Description | Use Case |
 |--------|----------|-------------|----------|
-| **L2 (Euclidean)** | `l2_distance()` | √Σ(a-b)² | General-purpose similarity |
-| **Cosine** | `cosine_distance()` | 1 - (a·b)/(‖a‖‖b‖) | Text embeddings, normalized vectors |
+| **L2 (Euclidean)** | `l2()` | √Σ(a-b)² | General-purpose similarity |
+| **Cosine** | `cosine()` | 1 - (a·b)/(‖a‖‖b‖) | Text embeddings, normalized vectors |
 | **Inner Product** | `inner_product()` | -a·b | Maximum similarity search |
-| **L1 (Manhattan)** | `l1_distance()` | Σ\|a-b\| | Robust to outliers |
-| **Hamming** | `hamming_distance()` | Count of differing bits | Binary vectors, hashing |
-| **Jaccard** | `jaccard_distance()` | 1 - \|A∩B\|/\|A∪B\| | Set similarity |
+| **L1 (Manhattan)** | `l1()` | Σ\|a-b\| | Robust to outliers |
+| **Hamming** | `hamming()` / `hamming_packed()` | Count of differing positions (float arrays) or bits (packed bytes) | Binary vectors, hashing |
+| **Jaccard** | `jaccard()` / `jaccard_packed()` | 1 - \|A∩B\|/\|A∪B\| | Set similarity |
 
 ## GPU Backend Support
 
@@ -34,7 +34,7 @@ The API supports six distance metrics:
 
 ### Backend Priority
 
-When using `GPUContext.auto_detect()`, backends are selected in this priority order:
+When using `ComputeContext.auto_detect()`, backends are selected in this priority order:
 1. CUDA (NVIDIA)
 2. Metal/MPS (Apple Silicon)
 3. ROCm (AMD)
@@ -110,7 +110,7 @@ rocm-smi
 **Verification:**
 ```python
 import benostreamdb as bsdb
-ctx = bsdb.GPUContext.auto_detect()
+ctx = bsdb.ComputeContext.auto_detect()
 print(ctx.backend)  # Should show "mps" on Apple Silicon
 ```
 
@@ -134,16 +134,16 @@ vulkaninfo | grep vendor
 import benostreamdb as bsdb
 import numpy as np
 
-# Create two vectors
-vec1 = np.array([1.0, 2.0, 3.0])
-vec2 = np.array([4.0, 5.0, 6.0])
+# Create two 1-D float32 vectors (the kernel requires float32)
+vec1 = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+vec2 = np.array([4.0, 5.0, 6.0], dtype=np.float32)
 
 # Compute L2 distance
-distance = bsdb.l2_distance(vec1, vec2)
+distance = bsdb.l2(vec1, vec2)
 print(f"L2 distance: {distance}")
 
 # Compute cosine distance
-distance = bsdb.cosine_distance(vec1, vec2)
+distance = bsdb.cosine(vec1, vec2)
 print(f"Cosine distance: {distance}")
 ```
 
@@ -154,7 +154,7 @@ import benostreamdb as bsdb
 import numpy as np
 
 # Create GPU context (auto-detect best backend)
-ctx = bsdb.GPUContext.auto_detect()
+ctx = bsdb.ComputeContext.auto_detect()
 print(f"Using backend: {ctx.backend}")
 
 # Create query vector and database
@@ -163,7 +163,7 @@ database = np.random.randn(100000, 768).astype(np.float32)
 
 # Compute distances using GPU batch acceleration for large matrices
 # (CPU SIMD is recommended for single-vector queries to avoid PCIe transfer overhead)
-distances = bsdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_batch(query, database, device=ctx)
 
 # Find top-k nearest neighbors
 k = 10
@@ -196,7 +196,7 @@ sparse2 = bsdb.SparseVector(
 )
 
 # Compute sparse distance (only processes non-zero elements)
-distance = bsdb.l2_distance_sparse(sparse1, sparse2)
+distance = bsdb.l2_sparse(sparse1, sparse2)
 print(f"Sparse L2 distance: {distance}")
 
 # Convert to dense if needed
@@ -217,18 +217,18 @@ binary1 = np.packbits(np.random.randint(0, 2, 128))  # 128 bits = 16 bytes
 binary2 = np.packbits(np.random.randint(0, 2, 128))
 
 # Compute Hamming distance (counts differing bits)
-distance = bsdb.hamming_distance_packed(binary1, binary2)
+distance = bsdb.hamming_packed(binary1, binary2)
 print(f"Hamming distance: {distance} bits differ")
 
 # Compute Jaccard distance for binary vectors
-distance = bsdb.jaccard_distance_packed(binary1, binary2)
+distance = bsdb.jaccard_packed(binary1, binary2)
 print(f"Jaccard distance: {distance}")
 
 # Auto-packing: provide unpacked binary vectors (0/1 values)
-# The API will automatically pack them for efficiency
+# `hamming_auto` / `jaccard_auto` pack them for you
 unpacked1 = np.random.randint(0, 2, 128, dtype=np.uint8)
 unpacked2 = np.random.randint(0, 2, 128, dtype=np.uint8)
-distance = bsdb.hamming_distance(unpacked1, unpacked2)  # Auto-packed internally
+distance = bsdb.hamming_auto(unpacked1, unpacked2)  # Auto-packs internally
 ```
 
 ## API Reference
@@ -240,42 +240,42 @@ distance = bsdb.hamming_distance(unpacked1, unpacked2)  # Auto-packed internally
 All single-pair functions accept two vectors and return a scalar distance:
 
 ```python
-l2_distance(vec1, vec2, context=None) -> float
-cosine_distance(vec1, vec2, context=None) -> float
-inner_product(vec1, vec2, context=None) -> float
-l1_distance(vec1, vec2, context=None) -> float
-hamming_distance(vec1, vec2, context=None) -> float
-jaccard_distance(vec1, vec2, context=None) -> float
+l2(vec1, vec2, device=None) -> float
+cosine(vec1, vec2, device=None) -> float
+inner_product(vec1, vec2, device=None) -> float
+l1(vec1, vec2, device=None) -> float
+hamming(vec1, vec2, device=None) -> float
+jaccard(vec1, vec2, device=None) -> float
 ```
 
 **Parameters:**
-- `vec1`, `vec2`: NumPy arrays, Python lists, or any array-like objects
-- `context` (optional): `GPUContext` for GPU acceleration
+- `vec1`, `vec2`: 1-D NumPy `float32` arrays
+- `device` (optional): `ComputeContext` for GPU acceleration
 
 **Returns:** `float` - The computed distance
 
 **Raises:**
 - `ValueError`: If vectors have different dimensions
 - `ValueError`: If vectors contain NaN or infinite values
-- `TypeError`: If input types are invalid
+- `TypeError`: If inputs are not 1-D `float32` NumPy arrays (for example `float64`)
 
 #### Batch Distance Functions
 
 Compute distances between one query vector and multiple database vectors:
 
 ```python
-l2_distance_batch(query, database, context=None) -> np.ndarray
-cosine_distance_batch(query, database, context=None) -> np.ndarray
-inner_product_batch(query, database, context=None) -> np.ndarray
-l1_distance_batch(query, database, context=None) -> np.ndarray
-hamming_distance_batch(query, database, context=None) -> np.ndarray
-jaccard_distance_batch(query, database, context=None) -> np.ndarray
+l2_batch(query, database, device=None) -> np.ndarray
+cosine_batch(query, database, device=None) -> np.ndarray
+inner_product_batch(query, database, device=None) -> np.ndarray
+l1_batch(query, database, device=None) -> np.ndarray
+hamming_batch(query, database, device=None) -> np.ndarray
+jaccard_batch(query, database, device=None) -> np.ndarray
 ```
 
 **Parameters:**
-- `query`: 1D NumPy array (shape: `[dim]`)
-- `database`: 2D NumPy array (shape: `[n_vectors, dim]`)
-- `context` (optional): `GPUContext` for GPU acceleration
+- `query`: 1-D NumPy `float32` array (shape: `[dim]`)
+- `database`: 2-D NumPy `float32` array (shape: `[n_vectors, dim]`)
+- `device` (optional): `ComputeContext` for GPU acceleration
 
 **Returns:** `np.ndarray` - 1D array of distances (shape: `[n_vectors]`)
 
@@ -286,14 +286,14 @@ jaccard_distance_batch(query, database, context=None) -> np.ndarray
 Efficient distance computation for sparse vectors:
 
 ```python
-l2_distance_sparse(sparse1, sparse2, context=None) -> float
-cosine_distance_sparse(sparse1, sparse2, context=None) -> float
-inner_product_sparse(sparse1, sparse2, context=None) -> float
+l2_sparse(sparse1, sparse2, device=None) -> float
+cosine_sparse(sparse1, sparse2, device=None) -> float
+inner_product_sparse(sparse1, sparse2, device=None) -> float
 ```
 
 **Parameters:**
-- `sparse1`, `sparse2`: `SparseVector` objects
-- `context` (optional): `GPUContext` for GPU acceleration
+- `sparse1`, `sparse2`: `SparseVector` objects (`values` must be `float32`)
+- `device` (optional): `ComputeContext` for GPU acceleration
 
 **Returns:** `float` - The computed distance
 
@@ -302,62 +302,79 @@ inner_product_sparse(sparse1, sparse2, context=None) -> float
 Efficient distance computation for bit-packed binary vectors:
 
 ```python
-hamming_distance_packed(binary1, binary2, context=None) -> int
-jaccard_distance_packed(binary1, binary2, context=None) -> float
+hamming_packed(binary1, binary2, device=None) -> int
+jaccard_packed(binary1, binary2, device=None) -> float
 ```
 
 **Parameters:**
 - `binary1`, `binary2`: NumPy uint8 arrays (bit-packed)
-- `context` (optional): `GPUContext` for GPU acceleration
+- `device` (optional): `ComputeContext` for GPU acceleration
 
 **Returns:** Distance value (int for Hamming, float for Jaccard)
 
 ### GPU Context Management
 
-#### GPUContext Class
+#### ComputeContext Class
+
+`ComputeContext` is an alias of the `Device` class; `GPUContext` is also accepted.
 
 ```python
-class GPUContext:
-    """Manages GPU backend selection and device configuration."""
-    
+class Device:  # exported as ComputeContext and GPUContext
+    """BenoStreamDB compute device (CPU, CUDA, ROCm, MPS, Intel)."""
+
     @staticmethod
-    def auto_detect() -> GPUContext:
-        """Detect and return the highest-priority available GPU backend."""
-    
-    def __init__(self, backend: str, device_id: int = 0):
+    def auto_detect() -> ComputeContext:
+        """Detect and return the highest-priority available backend."""
+
+    def __init__(self, device: str = "cpu", index: Optional[int] = None):
         """
-        Create GPU context with specific backend.
-        
+        Create a context for a specific backend.
+
         Args:
-            backend: Backend name ("cuda", "rocm", "mps", "intel", "cpu")
-            device_id: GPU device ID for multi-GPU systems (default: 0)
-        
+            device: Backend name ("cuda", "rocm", "mps", "intel"/"xpu", "cpu")
+            index: Device index for multi-GPU systems (default: None)
+
         Raises:
-            RuntimeError: If backend is not available
+            RuntimeError: If the backend is not available
         """
-    
+
     @property
     def backend(self) -> str:
         """Get current backend name."""
-    
+
     @property
     def device_id(self) -> int:
-        """Get current device ID."""
-    
-    def list_available_backends(self) -> list[str]:
-        """List all detected GPU backends."""
-    
+        """Get current device index."""
+
+    @property
+    def type_name(self) -> str:
+        """Get the native backend name (for example "cuda" or "rocm")."""
+
+    @property
+    def index(self) -> int:
+        """Get the device index within the backend."""
+
+    @staticmethod
+    def list_available_backends() -> list[str]:
+        """List all detected backends."""
+
+    @staticmethod
+    def is_available(device_type: str) -> bool:
+        """Return True when a backend is usable on this host."""
+
     def get_stats(self) -> dict:
         """
         Get performance statistics.
-        
+
         Returns:
             dict with keys:
+                - total_kernel_launches: Number of GPU kernel launches
                 - total_gpu_time_ms: Total GPU computation time
-                - kernel_launches: Number of GPU kernel launches
-                - vectors_processed: Total vectors processed
+                - total_cpu_time_ms: Total CPU computation time
+                - total_vectors_processed: Total vectors processed
+                - memory_transfers_mb: Host <-> device transfer volume
         """
-    
+
     def reset_stats(self):
         """Clear all accumulated performance metrics."""
 ```
@@ -380,20 +397,20 @@ gpu_device_pool() -> list[str]
 
 ```python
 # Auto-detect best backend
-ctx = bsdb.GPUContext.auto_detect()
+ctx = bsdb.ComputeContext.auto_detect()
 
 # Create specific backend
-ctx = bsdb.GPUContext("cuda", device_id=0)
+ctx = bsdb.ComputeContext("cuda", index=0)
 
 # List available backends
 backends = ctx.list_available_backends()
 print(f"Available backends: {backends}")
 
 # Monitor performance
-distances = bsdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_batch(query, database, device=ctx)
 stats = ctx.get_stats()
 print(f"GPU time: {stats['total_gpu_time_ms']}ms")
-print(f"Kernel launches: {stats['kernel_launches']}")
+print(f"Kernel launches: {stats['total_kernel_launches']}")
 
 # Reset stats for next benchmark
 ctx.reset_stats()
@@ -461,14 +478,14 @@ For large databases, consider:
 
 ```python
 # ✅ Good: Reuse GPU context
-ctx = bsdb.GPUContext.auto_detect()
+ctx = bsdb.ComputeContext.auto_detect()
 for query in queries:
-    distances = bsdb.l2_distance_batch(query, database, context=ctx)
+    distances = bsdb.l2_batch(query, database, device=ctx)
 
 # ❌ Bad: Create new context each time
 for query in queries:
-    ctx = bsdb.GPUContext.auto_detect()  # Overhead!
-    distances = bsdb.l2_distance_batch(query, database, context=ctx)
+    ctx = bsdb.ComputeContext.auto_detect()  # Overhead!
+    distances = bsdb.l2_batch(query, database, device=ctx)
 
 # ✅ Good: Use appropriate data types
 query = np.array(data, dtype=np.float32)  # float32 is faster on GPU
@@ -479,14 +496,13 @@ query = np.array(data, dtype=np.float64)  # Slower and uses more memory
 
 ## Integration with SQL
 
-The Python API shares the same GPU context with SQL queries:
+Set the process-wide compute device once; subsequent operations (including SQL) use it:
 
 ```python
 import benostreamdb as bsdb
 
-# Set global GPU context
-ctx = bsdb.GPUContext.auto_detect()
-bsdb.set_thread_gpu_context(ctx)
+# Pin the process to an auto-detected GPU ("auto" also accepts "cpu", "cuda:0", ...)
+bsdb.set_gpu_device("auto")
 
 # SQL queries now use GPU acceleration
 session = bsdb.Session()
@@ -510,7 +526,7 @@ print(f"GPU time: {stats['total_gpu_time_ms']}ms")
 ### GPU Not Detected
 
 ```python
-ctx = bsdb.GPUContext.auto_detect()
+ctx = bsdb.ComputeContext.auto_detect()
 print(ctx.backend)  # Shows "cpu" instead of GPU backend
 ```
 
@@ -523,7 +539,7 @@ print(ctx.backend)  # Shows "cpu" instead of GPU backend
 
 ```python
 # Error: RuntimeError: GPU out of memory
-distances = bsdb.l2_distance_batch(query, huge_database, context=ctx)
+distances = bsdb.l2_batch(query, huge_database, device=ctx)
 ```
 
 **Solutions:**
@@ -533,7 +549,7 @@ chunk_size = 10000
 all_distances = []
 for i in range(0, len(database), chunk_size):
     chunk = database[i:i+chunk_size]
-    distances = bsdb.l2_distance_batch(query, chunk, context=ctx)
+    distances = bsdb.l2_batch(query, chunk, device=ctx)
     all_distances.append(distances)
 all_distances = np.concatenate(all_distances)
 ```
@@ -542,7 +558,7 @@ all_distances = np.concatenate(all_distances)
 
 ```python
 # Error: ValueError: Vector dimensions must match
-distance = bsdb.l2_distance(vec1, vec2)
+distance = bsdb.l2(vec1, vec2)
 ```
 
 **Solutions:**
@@ -624,25 +640,33 @@ df = table.to_pandas(
     }
 )
 
-# Multi-vector search with Reciprocal Rank Fusion (RRF)
-results = table.multi_vector_search(
-    queries=[
-        {"column": "text_embedding", "query": text_vec, "k": 20, "metric": "cosine"},
-        {"column": "image_embedding", "query": image_vec, "k": 20, "metric": "l2"}
-    ],
-    top_k=10,
-    rrf_k=60
+# Parallel multi-query vector search (runs concurrently in Rust)
+results = table.search_parallel([
+    ("text_embedding", text_vec, 20, None),
+    ("image_embedding", image_vec, 20, None),
+])
+text_hits = results[0].to_pandas()
+image_hits = results[1].to_pandas()
+
+# Reciprocal Rank Fusion (RRF) of BM25 + vector results
+fused = table.hybrid_search(
+    text_column="title",
+    query_text="graph rag",
+    vector_column="text_embedding",
+    query_vector=text_vec,
+    k=10,
+    rrf_k=60,
 )
 
 # Composite scalar index (multi-column roaring bitmap)
-table.create_composite_index(
-    columns=["tenant_id", "status"],
-    algorithm="composite_bitmap"
+table.add_index(
+    "tenant_id",
+    {"type": "composite_bitmap", "columns": ["tenant_id", "status"]},
 )
 
 # Maintenance
 table.compact()
-table.expire_snapshots(retain_last=10)
+table.vacuum(retention_versions=10)
 ```
 
 ### Vector Distance API
@@ -654,28 +678,28 @@ import benostreamdb as bsdb
 import numpy as np
 
 # Single-pair distance
-distance = bsdb.l2_distance(vec1, vec2)
-distance = bsdb.cosine_distance(vec1, vec2)
+distance = bsdb.l2(vec1, vec2)
+distance = bsdb.cosine(vec1, vec2)
 
 # Batch operations with GPU acceleration
-ctx = bsdb.GPUContext.auto_detect()
-distances = bsdb.l2_distance_batch(query, database, context=ctx)
+ctx = bsdb.ComputeContext.auto_detect()
+distances = bsdb.l2_batch(query, database, device=ctx)
 
 # Sparse vectors
 sparse = bsdb.SparseVector(indices, values, dim)
-distance = bsdb.l2_distance_sparse(sparse1, sparse2)
+distance = bsdb.l2_sparse(sparse1, sparse2)
 
 # Binary vectors
-distance = bsdb.hamming_distance_packed(binary1, binary2)
+distance = bsdb.hamming_packed(binary1, binary2)
 ```
 
 **Supported Distance Metrics:**
-- `l2_distance()` - Euclidean distance
-- `cosine_distance()` - Cosine distance
+- `l2()` - Euclidean distance
+- `cosine()` - Cosine distance
 - `inner_product()` - Inner product
-- `l1_distance()` - Manhattan distance
-- `hamming_distance()` - Hamming distance
-- `jaccard_distance()` - Jaccard distance
+- `l1()` - Manhattan distance
+- `hamming()` - Hamming distance
+- `jaccard()` - Jaccard distance
 
 **GPU Backends:**
 - CUDA (NVIDIA)
@@ -704,8 +728,7 @@ results = session.sql("""
 """)
 
 # Enable GPU acceleration for SQL
-ctx = bsdb.GPUContext.auto_detect()
-bsdb.set_thread_gpu_context(ctx)
+bsdb.set_gpu_device("auto")
 ```
 
 See [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md) for SQL syntax reference.
@@ -726,12 +749,15 @@ table.set_partition_spec([
 ])
 
 # Row lineage (V3) - automatic when format_version >= 3
-# Adds _row_id and _last_updated_sequence_number columns
+# Tracked in Iceberg table metadata (next-row-id / first-row-id per data file),
+# not exposed as queryable data columns.
 
 # Standard Iceberg operations
-table.update_spec(new_spec)
-table.replace_sort_order(sort_order)
-table.rewrite_data_files(filter_expr)
+table.update_spec([
+    bsdb.PartitionField(source_ids=[1], field_id=1001, name="month", transform="month")
+])
+table.replace_sort_order(["timestamp", "user_id"], ascending=[False, True])
+table.rewrite_data_files(min_file_size_bytes=128 * 1024 * 1024)
 table.rollback_to_snapshot(snapshot_id)
 ```
 
@@ -783,7 +809,7 @@ LIMIT 10;
 
 ### GPU Context Configuration
 
-BenoStreamDB supports GPU acceleration across NVIDIA CUDA, AMD ROCm, Apple Metal (MPS), and Intel XPU. You can configure execution devices using PyTorch-style strings (`"cuda:0"`) or explicit parameters (`device_id=0` / `index=0`).
+BenoStreamDB supports GPU acceleration across NVIDIA CUDA, AMD ROCm, Apple Metal (MPS), and Intel XPU. You can configure execution devices using PyTorch-style strings (`"cuda:0"`) or the explicit `index=` parameter.
 
 ```python
 import benostreamdb as bsdb
@@ -800,8 +826,8 @@ device = bsdb.Device("mps")                 # Apple Silicon (always index 0)
 device = bsdb.Device("xpu:0")               # Intel discrete / integrated GPU
 device = bsdb.Device("cpu")                 # Force CPU execution
 
-# Or using GPUContext API
-ctx = bsdb.GPUContext("cuda", device_id=0)
+# ComputeContext is an alias for Device (GPUContext also works)
+ctx = bsdb.ComputeContext("cuda", index=0)
 
 # 3. Query system availability & performance stats
 print("Available backends:", bsdb.Device.list_available_backends())
@@ -840,8 +866,8 @@ table.add_index("embedding", "hnsw_tq4")
 
 # Custom HNSW configuration
 table.add_index(
-    column="embedding",
-    index_config={
+    "embedding",
+    {
         "type": "hnsw",
         "complexity": 16, # connections per node
         "quality": 200     # construction search width
@@ -923,7 +949,7 @@ cargo run -p benostreamdb-search --bin bsdb-search
 import benostreamdb as bsdb
 
 try:
-    distance = bsdb.l2_distance(vec1, vec2)
+    distance = bsdb.l2(vec1, vec2)
 except ValueError as e:
     # Dimension mismatch, NaN/inf values, invalid input
     print(f"Invalid input: {e}")
@@ -944,12 +970,12 @@ except MemoryError as e:
 import benostreamdb as bsdb
 
 # GPU operations automatically fall back to CPU on error
-ctx = bsdb.GPUContext.auto_detect()
+ctx = bsdb.ComputeContext.auto_detect()
 try:
-    distances = bsdb.l2_distance_batch(query, database, context=ctx)
+    distances = bsdb.l2_batch(query, database, device=ctx)
 except RuntimeError as e:
     print(f"GPU error, falling back to CPU: {e}")
-    distances = bsdb.l2_distance_batch(query, database)  # No context = CPU
+    distances = bsdb.l2_batch(query, database)  # No context = CPU
 ```
 
 ## Performance Tips

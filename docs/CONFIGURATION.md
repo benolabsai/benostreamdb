@@ -268,7 +268,7 @@ BenoStreamDB uses the standard `object-store` crate, which automatically picks u
 
 ## Query Configuration (QueryConfig)
 
-Query-level options can be set via the `QueryConfig` struct (Rust) or passed as keyword arguments in Python.
+Query-level options are set via the `QueryConfig` struct (Rust). The Python binding exposes the same SQL execution surface through `Table.sql()` and `Session.sql()`.
 
 | Option | Description | Default |
 |:---|:---|:---|
@@ -283,13 +283,15 @@ import benostreamdb as bsdb
 
 table = bsdb.Table("s3://bucket/my-table")
 
-# Apply query-level limits
+# The table is registered as 't' for the duration of the query
 results = table.sql(
-    "SELECT * FROM documents WHERE embedding <-> '[0.1, 0.2]'::vector",
-    query_timeout_secs=30,
-    max_result_rows=100_000,
+    "SELECT * FROM t WHERE embedding <-> '[0.1, 0.2]'::vector"
 )
 ```
+
+> Query timeouts, result-row caps, and reader concurrency are `QueryConfig`
+> fields on the Rust surface; they are not keyword arguments on the Python
+> `Table.sql()` method.
 
 ### Rust Example
 
@@ -318,7 +320,7 @@ This guide covers configuration parameters for tuning vector search performance 
 
 ### HNSW Parameters
 
-#### `hnsw.ef_search`
+#### `ef_search`
 
 Controls the search beam width for HNSW index queries.
 
@@ -327,31 +329,29 @@ Controls the search beam width for HNSW index queries.
 - **Range**: 1 - 1000
 - **Effect**: Higher values increase accuracy but reduce speed
 
-**Usage**:
+**Usage** (optimizer hint):
 ```sql
--- Set for session
-SET hnsw.ef_search = 128;
-
--- Query with custom ef_search
-SELECT id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+SELECT /*+ INDEX_HINT(ef_search=128) */
+       id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
 FROM documents
 ORDER BY distance
 LIMIT 10;
 ```
 
-**Python API**:
+**Python API** (per-query vector filter):
 ```python
 import benostreamdb as bsdb
 
-session = bsdb.Session()
-session.set_config("hnsw.ef_search", 128)
+table = bsdb.Table("s3://bucket/documents")
 
-results = session.sql("""
-    SELECT id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
-    FROM documents
-    ORDER BY distance
-    LIMIT 10
-""")
+results = table.to_pandas(
+    vector_filter={
+        "column": "embedding",
+        "query": [0.1, 0.2, 0.3],
+        "k": 10,
+        "ef_search": 128,
+    }
+)
 ```
 
 **Performance Impact**:
@@ -362,7 +362,7 @@ results = session.sql("""
 
 ### IVF Parameters
 
-#### `ivf.probes`
+#### `probes`
 
 Controls the number of IVF clusters to search.
 
@@ -371,21 +371,29 @@ Controls the number of IVF clusters to search.
 - **Range**: 1 - 1000
 - **Effect**: Higher values increase accuracy but reduce speed
 
-**Usage**:
+**Usage** (optimizer hint):
 ```sql
--- Set for session
-SET ivf.probes = 20;
-
--- Query with custom probes
-SELECT id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+SELECT /*+ INDEX_HINT(probes=20) */
+       id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
 FROM documents
 ORDER BY distance
 LIMIT 10;
 ```
 
-**Python API**:
+**Python API** (per-query vector filter):
 ```python
-session.set_config("ivf.probes", 20)
+import benostreamdb as bsdb
+
+table = bsdb.Table("s3://bucket/documents")
+
+results = table.to_pandas(
+    vector_filter={
+        "column": "embedding",
+        "query": [0.1, 0.2, 0.3],
+        "k": 10,
+        "probes": 20,
+    }
+)
 ```
 
 **Performance Impact**:
@@ -396,7 +404,7 @@ session.set_config("ivf.probes", 20)
 
 ### Index Control
 
-#### `vector.use_index`
+#### `use_index`
 
 Controls whether to use vector indexes or force sequential scan.
 
@@ -404,22 +412,14 @@ Controls whether to use vector indexes or force sequential scan.
 - **Default**: true
 - **Effect**: When false, forces sequential scan (useful for testing)
 
-**Usage**:
+**Usage** (optimizer hint):
 ```sql
--- Force sequential scan (for testing)
-SET vector.use_index = false;
-
--- Re-enable index usage
-SET vector.use_index = true;
-```
-
-**Python API**:
-```python
-# Disable index for testing
-session.set_config("vector.use_index", False)
-
-# Re-enable
-session.set_config("vector.use_index", True)
+-- Force a sequential scan (for testing)
+SELECT /*+ INDEX_HINT(use_index=false) */
+       id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+FROM documents
+ORDER BY distance
+LIMIT 10;
 ```
 
 ## Tuning Guidelines
@@ -437,40 +437,38 @@ session.set_config("vector.use_index", True)
 
 **Small datasets (< 100K vectors)**:
 ```sql
-SET hnsw.ef_search = 128;
-SET ivf.probes = 20;
+SELECT /*+ INDEX_HINT(ef_search=128, probes=20) */
+       id, embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+FROM documents
+ORDER BY distance
+LIMIT 10;
 ```
 
 **Medium datasets (100K - 10M vectors)**:
 ```sql
-SET hnsw.ef_search = 64;  -- Default
-SET ivf.probes = 10;      -- Default
+SELECT /*+ INDEX_HINT(ef_search=64, probes=10) */ ...   -- defaults
 ```
 
 **Large datasets (> 10M vectors)**:
 ```sql
-SET hnsw.ef_search = 32;
-SET ivf.probes = 5;
+SELECT /*+ INDEX_HINT(ef_search=32, probes=5) */ ...
 ```
 
 ### Dimensionality Recommendations
 
 **Low dimensions (< 128)**:
 ```sql
-SET hnsw.ef_search = 64;
-SET ivf.probes = 10;
+SELECT /*+ INDEX_HINT(ef_search=64, probes=10) */ ...
 ```
 
 **Medium dimensions (128 - 768)**:
 ```sql
-SET hnsw.ef_search = 64;
-SET ivf.probes = 10;
+SELECT /*+ INDEX_HINT(ef_search=64, probes=10) */ ...
 ```
 
 **High dimensions (> 768)**:
 ```sql
-SET hnsw.ef_search = 128;
-SET ivf.probes = 20;
+SELECT /*+ INDEX_HINT(ef_search=128, probes=20) */ ...
 ```
 
 ## Benchmarking
@@ -481,30 +479,33 @@ SET ivf.probes = 20;
 import benostreamdb as bsdb
 import numpy as np
 
-session = bsdb.Session()
+table = bsdb.Table("s3://bucket/documents")
+query_vector = [0.1, 0.2, 0.3]
 
-# Ground truth (sequential scan)
-session.set_config("vector.use_index", False)
-ground_truth = session.sql("""
-    SELECT id FROM documents
-    ORDER BY embedding <-> '[0.1, 0.2, 0.3]'::vector
-    LIMIT 100
-""")
-ground_truth_ids = set(ground_truth['id'])
+# High-recall reference run (wide beam)
+reference = table.to_pandas(
+    vector_filter={
+        "column": "embedding",
+        "query": query_vector,
+        "k": 100,
+        "ef_search": 512,
+    }
+)
+reference_ids = set(reference["id"])
 
-# Test with index
-session.set_config("vector.use_index", True)
-session.set_config("hnsw.ef_search", 64)
-
-results = session.sql("""
-    SELECT id FROM documents
-    ORDER BY embedding <-> '[0.1, 0.2, 0.3]'::vector
-    LIMIT 100
-""")
-result_ids = set(results['id'])
+# Run under test (default beam)
+results = table.to_pandas(
+    vector_filter={
+        "column": "embedding",
+        "query": query_vector,
+        "k": 100,
+        "ef_search": 64,
+    }
+)
+result_ids = set(results["id"])
 
 # Calculate recall
-recall = len(ground_truth_ids & result_ids) / len(ground_truth_ids)
+recall = len(reference_ids & result_ids) / len(reference_ids)
 print(f"Recall@100: {recall:.2%}")
 ```
 
@@ -512,18 +513,26 @@ print(f"Recall@100: {recall:.2%}")
 
 ```python
 import time
+import numpy as np
+import benostreamdb as bsdb
 
-session.set_config("hnsw.ef_search", 64)
+table = bsdb.Table("s3://bucket/documents")
+vector_filter = {
+    "column": "embedding",
+    "query": [0.1, 0.2, 0.3],
+    "k": 10,
+    "ef_search": 64,
+}
 
 # Warmup
 for _ in range(10):
-    session.sql("SELECT id FROM documents ORDER BY embedding <-> '[0.1, 0.2, 0.3]'::vector LIMIT 10")
+    table.to_pandas(vector_filter=vector_filter)
 
 # Measure
 latencies = []
 for _ in range(100):
     start = time.time()
-    session.sql("SELECT id FROM documents ORDER BY embedding <-> '[0.1, 0.2, 0.3]'::vector LIMIT 10")
+    table.to_pandas(vector_filter=vector_filter)
     latencies.append(time.time() - start)
 
 print(f"P50: {np.percentile(latencies, 50)*1000:.2f}ms")
@@ -563,8 +572,8 @@ table.add_index("embedding", "hnsw_tq4")
 
 # Custom HNSW parameters
 table.add_index(
-    column="embedding",
-    index_config={
+    "embedding",
+    {
         "type": "hnsw",
         "complexity": 16, # Max connections per node (formerly 'm')
         "quality": 200,    # Construction beam width (formerly 'ef_construction')
@@ -573,8 +582,8 @@ table.add_index(
 
 # Product Quantization (PQ)
 table.add_index(
-    column="embedding",
-    index_config={
+    "embedding",
+    {
         "type": "hnsw_pq",
         "compression": 32 # PQ subspaces (formerly 'subspaces')
     }
@@ -623,12 +632,8 @@ table.add_index(
 
 ## Configuration Reference
 
-| Parameter | Type | Default | Range | Description |
+| Hint key | Type | Default | Range | Description |
 |-----------|------|---------|-------|-------------|
-| `hnsw.ef_search` | Integer | 64 | 1-1000 | HNSW search beam width |
-| `ivf.probes` | Integer | 10 | 1-1000 | IVF clusters to search |
-| `vector.use_index` | Boolean | true | true/false | Enable/disable index usage |
-
----
-
-**Last Updated**: 2026-02-08
+| `ef_search` | Integer | 64 | 1-1000 | HNSW search beam width |
+| `probes` | Integer | 10 | 1-1000 | IVF clusters to search |
+| `use_index` | Boolean | true | true/false | Enable/disable index usage |

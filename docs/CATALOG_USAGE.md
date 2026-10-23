@@ -24,11 +24,10 @@ The Hive Metastore (HMS) is the industry standard for metadata management in Had
 import benostreamdb as bsdb
 
 # Connect to HMS via Thrift (no auth example)
-table = bsdb.Table.from_hive(
-    address="thrift://metastore-host:9083",
-    namespace="default",
-    table="events_analytics"
-)
+catalog = bsdb.create_catalog("hive", {"url": "thrift://metastore-host:9083"})
+
+# Load a table from the catalog (returns a Table)
+table = catalog.load_table("default", "events_analytics")
 ```
 
 ### How it Works
@@ -51,19 +50,16 @@ docker run -p 19120:19120 projectnessie/nessie
 
 ### Python API
 ```python
+import benostreamdb as bsdb
+
 # Connect to Nessie
-catalog = bsdb.NessieCatalog("http://localhost:19120")
+catalog = bsdb.create_catalog("nessie", {"url": "http://localhost:19120"})
 
 # Create a branch for experimentation
 catalog.create_branch("etl-job-v2", source_ref="main")
 
-# Load table from the specific branch
-table = bsdb.Table.from_nessie(
-    "http://localhost:19120", 
-    namespace="prod", 
-    table="users",
-    ref="etl-job-v2"
-)
+# Load a table from the specific branch
+table = catalog.load_table("etl-job-v2", "users")
 ```
 
 ---
@@ -74,11 +70,12 @@ For AWS users, the Glue Data Catalog provides a managed, serverless metadata sto
 
 ### Usage
 ```python
+import benostreamdb as bsdb
+
 # BenoStreamDB uses your local AWS credentials (IAM/Env)
-table = bsdb.Table.from_glue(
-    namespace="production_db", 
-    table="clickstream_data"
-)
+catalog = bsdb.create_catalog("glue", {})
+
+table = catalog.load_table("production_db", "clickstream_data")
 ```
 
 ---
@@ -91,26 +88,25 @@ The vendor-neutral REST catalog is the most interoperable way to manage Iceberg 
 ```python
 import benostreamdb as bsdb
 
-# Connect to Apache Polaris REST catalog using client credentials grant
-table = bsdb.Table.from_rest(
-    url="https://polaris.example.com/api/catalog/v1",
-    namespace="production",
-    table="campaign_results",
-    credential="<POLARIS_CLIENT_ID>:<POLARIS_CLIENT_SECRET>",
-    scope="PRINCIPAL_ROLE:ALL"
-)
+# Connect to an Apache Polaris REST catalog and load a table
+catalog = bsdb.create_catalog("rest", {
+    "url": "https://polaris.example.com/api/catalog/v1",
+    "prefix": "my_warehouse",
+})
+table = catalog.load_table("production", "campaign_results")
 ```
 
-BenoStreamDB automatically executes the OAuth2 `/v1/oauth/tokens` token exchange and caches the bearer token, refreshing it automatically within 60 seconds of expiration.
+The embedded Python REST wrapper accepts `url` and an optional `prefix`. OAuth2 client
+credentials (`credential` / `scope`) and static bearer tokens are configured on the
+`benostreamdb-search` server (or any engine process) through `benostream.toml` or the
+`BSDB_SEARCH_CATALOG_*` environment variables. The engine then executes the OAuth2
+`/v1/oauth/tokens` exchange and caches the bearer token, refreshing it automatically
+within 60 seconds of expiration.
 
 ### Static Token (Tabular / Nessie REST)
 ```python
-table = bsdb.Table.from_rest(
-    url="https://api.tabular.io/v1/",
-    namespace="marketing",
-    table="campaign_results",
-    token="YOUR_STATIC_BEARER_TOKEN"
-)
+catalog = bsdb.create_catalog("rest", {"url": "https://api.tabular.io/v1/"})
+table = catalog.load_table("marketing", "campaign_results")
 ```
 
 ---

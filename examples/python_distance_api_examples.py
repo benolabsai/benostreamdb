@@ -80,7 +80,7 @@ def example_gpu_context():
     
     # Create context with specific backend (if available)
     if 'cuda' in backends:
-        cuda_ctx = bsdb.ComputeContext('cuda', device_id=0)
+        cuda_ctx = bsdb.ComputeContext('cuda')
         print(f"Created CUDA context: {cuda_ctx}")
     
     # Force CPU computation
@@ -92,8 +92,8 @@ def example_gpu_context():
     vec_a = np.random.rand(128).astype(np.float32)
     vec_b = np.random.rand(128).astype(np.float32)
     
-    dist_gpu = bsdb.l2(vec_a, vec_b, context=ctx)
-    dist_cpu = bsdb.l2(vec_a, vec_b, context=cpu_ctx)
+    dist_gpu = bsdb.l2(vec_a, vec_b, device=ctx)
+    dist_cpu = bsdb.l2(vec_a, vec_b, device=cpu_ctx)
     
     print(f"Distance (GPU): {dist_gpu:.6f}")
     print(f"Distance (CPU): {dist_cpu:.6f}")
@@ -131,7 +131,7 @@ def example_batch_operations():
     import time
     
     start = time.time()
-    distances = bsdb.l2_batch(query, database, context=ctx)
+    distances = bsdb.l2_batch(query, database, device=ctx)
     elapsed = time.time() - start
     
     print(f"Computed {len(distances)} distances in {elapsed*1000:.2f}ms")
@@ -150,9 +150,9 @@ def example_batch_operations():
     
     # Compare different metrics
     print("Comparing different distance metrics:")
-    l2_dists = bsdb.l2_batch(query, database[:100], context=ctx)
-    cosine_dists = bsdb.cosine_batch(query, database[:100], context=ctx)
-    inner_prods = bsdb.inner_product_batch(query, database[:100], context=ctx)
+    l2_dists = bsdb.l2_batch(query, database[:100], device=ctx)
+    cosine_dists = bsdb.cosine_batch(query, database[:100], device=ctx)
+    inner_prods = bsdb.inner_product_batch(query, database[:100], device=ctx)
     
     print(f"  L2 distances (first 5): {l2_dists[:5]}")
     print(f"  Cosine distances (first 5): {cosine_dists[:5]}")
@@ -294,7 +294,7 @@ def example_performance_monitoring():
     database = np.random.rand(50000, 256).astype(np.float32)
     
     print(f"Computing distances for {len(database)} vectors...")
-    distances = bsdb.l2_batch(query, database, context=ctx)
+    distances = bsdb.l2_batch(query, database, device=ctx)
     print(f"Computed {len(distances)} distances")
     print()
     
@@ -320,43 +320,43 @@ def example_performance_monitoring():
 # ============================================================================
 
 def example_semantic_search():
-    """Demonstrate a real-world semantic search use case"""
+    """Demonstrate real-world semantic search on the SciFact benchmark"""
     print("=" * 80)
-    print("Example 7: Real-World Use Case - Semantic Search")
+    print("Example 7: Real-World Use Case - Semantic Search (SciFact Benchmark)")
     print("=" * 80)
-    
-    # Simulate document embeddings (in practice, these would come from a model)
-    dim = 384  # Common embedding dimension
-    n_documents = 1000
-    
-    # Create document embeddings
-    document_embeddings = np.random.rand(n_documents, dim).astype(np.float32)
-    # Normalize for cosine similarity
-    document_embeddings = document_embeddings / np.linalg.norm(document_embeddings, axis=1, keepdims=True)
-    
-    # Create query embedding
-    query_embedding = np.random.rand(dim).astype(np.float32)
-    query_embedding = query_embedding / np.linalg.norm(query_embedding)
-    
-    print(f"Document database: {n_documents} documents")
-    print(f"Embedding dimension: {dim}")
-    print()
-    
-    # Use GPU acceleration for search
+    from datasets import load_dataset
+    from sentence_transformers import SentenceTransformer
+    import pandas as pd
+
+    print("Loading SciFact dataset from Hugging Face...")
+    try:
+        corpus = load_dataset("mteb/scifact", "corpus", split="corpus[:100]")
+    except Exception:
+        corpus = load_dataset("BeIR/scifact", "corpus", split="corpus[:100]")
+
+    df = pd.DataFrame(corpus).rename(columns={"_id": "doc_id"})
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    document_embeddings = model.encode(df["text"].tolist(), show_progress_bar=False).astype(np.float32)
+
+    query_text = "Microstructural development of human cerebral cortex and white matter"
+    query_embedding = model.encode(query_text).astype(np.float32)
+
+    print(f"Loaded {len(df)} peer-reviewed documents from SciFact.")
+    print(f"Embedding dimension: {document_embeddings.shape[1]}")
+    print(f"Query: {query_text}\n")
+
     ctx = bsdb.ComputeContext.auto_detect()
-    
-    # Compute cosine distances (lower is more similar)
-    distances = bsdb.cosine_batch(query_embedding, document_embeddings, context=ctx)
-    
-    # Find top-10 most similar documents
-    k = 10
+    distances = bsdb.cosine_batch(query_embedding, document_embeddings, device=ctx)
+
+    k = 5
     top_k_indices = np.argsort(distances)[:k]
     top_k_distances = distances[top_k_indices]
-    
-    print(f"Top-{k} most similar documents:")
+
+    print(f"Top-{k} most similar scientific papers:")
     for i, (idx, dist) in enumerate(zip(top_k_indices, top_k_distances)):
-        similarity = 1.0 - dist  # Convert distance to similarity
-        print(f"  {i+1}. Document {idx}: similarity = {similarity:.4f}")
+        similarity = 1.0 - dist
+        title = df.iloc[idx]["title"]
+        print(f"  {i+1}. [{df.iloc[idx][doc_id]}] {title[:65]}... (sim: {similarity:.4f}, dist: {dist:.4f})")
     print()
 
 

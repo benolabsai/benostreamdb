@@ -5,7 +5,7 @@
 # BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
-> ⚠️ **Developer Preview (v0.13.0)**
+> ⚠️ **Developer Preview (v0.13.1)**
 > BenoStreamDB is an early-stage database engine intended for evaluation, benchmarking, and community feedback. 
 > - **API & Storage Mutability:** APIs, configuration schemas, and secondary index sidecar on-disk layouts may evolve between preview releases.
 > - **Workload Suitability:** Not yet recommended for irreplaceable production data or mission-critical workloads requiring enterprise high-availability SLAs. Always back up authoritative data and pin versions.
@@ -195,7 +195,7 @@ schema = pa.schema([
 table = bsdb.Table.create("s3://my-warehouse/tables/articles", schema)
 
 # Or open an existing table
-table = bsdb.Table.open("s3://my-warehouse/tables/articles")
+table = bsdb.open_table("s3://my-warehouse/tables/articles")
 ```
 
 #### Step 2: Declare Primary Key & Secondary Indexes
@@ -219,8 +219,8 @@ table.add_index("status", "bitmap")
 table.insert(arrow_batch)
 table.commit()
 
-# Or bulk cluster-free ingestion from existing Arrow datasets or Parquet
-table.ingest(arrow_table)
+# Or bulk cluster-free ingestion from existing Parquet files
+table.ingest(["s3://my-warehouse/raw/part-0001.parquet"])
 ```
 
 #### Step 4: Maintenance & Compaction
@@ -229,7 +229,7 @@ table.ingest(arrow_table)
 table.compact()
 
 # Prune unreferenced snapshots and orphan files
-table.vacuum(retention_hours=24)
+table.vacuum(retention_versions=24)
 ```
 
 ---
@@ -641,8 +641,8 @@ import benostreamdb as bsdb
 import numpy as np
 
 # GPU-accelerated batch distance computation
-# `Device` is the canonical class; `GPUContext` / `ComputeContext` are aliases.
-ctx = bsdb.Device.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
+# `ComputeContext` is an alias for `Device` (`GPUContext` also works).
+ctx = bsdb.ComputeContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
 print(f"Using GPU backend: {ctx.backend}")
 
 # Create query and database vectors

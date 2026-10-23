@@ -88,8 +88,8 @@ df = pd.DataFrame({
     "vector": [[0.1, 0.2, 0.3], [0.3, 0.4, 0.5], [0.5, 0.6, 0.7]]
 })
 
-# Append rows (accepts pandas DataFrame or pyarrow Table/RecordBatch)
-table.append(df)
+# Write rows (accepts pandas DataFrame or pyarrow Table/RecordBatch)
+table.write(df)      # append mode by default
 table.commit()
 
 # Read data back into Arrow or Pandas
@@ -104,12 +104,11 @@ You can configure vector, full-text (BM25), or bitmap indexes over table columns
 ```python
 # Add an HNSW vector index on the 'vector' column
 # Index algorithms: "hnsw" (default float32), "hnsw_tq8", "hnsw_tq4", "bm25", "bitmap"
-table.add_index(["vector"], index_type="hnsw")
-table.build_indexes()
+table.add_index("vector", "hnsw")
 
 # Top-k vector search
 query_vector = [0.1, 0.2, 0.3]
-results = table.vector_search(query_vector, column="vector", k=10)
+results = table.vector_search("vector", query_vector, k=10)
 ```
 
 ### SQL Analytics & Filtering
@@ -117,20 +116,20 @@ results = table.vector_search(query_vector, column="vector", k=10)
 Execute ANSI SQL queries with pgvector distance operators directly through `Table.sql()` or an engine `Session`:
 
 ```python
-# Ad-hoc query on the table (referenced as 'self' or table name)
-matches = table.sql("SELECT id, text FROM self WHERE id > 1 AND text LIKE '%world%'")
+# Ad-hoc query on the table (registered as 't')
+matches = table.sql("SELECT id, text FROM t WHERE id > 1 AND text LIKE '%world%'")
 print(matches.to_pandas())
 
 # Full DataFusion session across multiple tables
 session = bsdb.Session()
-session.register_table("documents", table)
+session.register("documents", table)
 res = session.sql("""
     SELECT id, text, embedding <-> '[0.1, 0.2, 0.3]'::vector AS dist
     FROM documents
     ORDER BY dist ASC
     LIMIT 5
 """)
-print(res.to_arrow())
+print(res.to_pandas())
 ```
 
 ### Live Subscriptions (change feed)
