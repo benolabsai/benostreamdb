@@ -5,11 +5,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      rollback_on_failure:
-        description: "Delete/yank a partially published release if a publish job fails"
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -721,9 +716,6 @@ jobs:
     # decorative. Keep it out of any `if:` that could skip it on tags.
     # Waits for every registry publish so the verification step below is a real
     # post-condition, and so a partial publish blocks the GitHub Release.
-    # NOTE: `release` (the verification step) is deliberately NOT in the
-    # `rollback` job's needs, so a verification failure cannot trigger a
-    # destructive rollback of otherwise-good artifacts.
     needs: [publish-pypi-core, publish-pypi-addons, publish-crates, connectors]
     environment: release_pypi
     timeout-minutes: 30
@@ -830,94 +822,3 @@ jobs:
             server/flight_sql/dist/*
             connector-artifacts/*
           generate_release_notes: true
-
-  # ---------------------------------------------------------------------------
-  # Rollback — the compensating half of "all or nothing".
-  #
-  # Registries have no transactions, so instead of pretending otherwise we undo
-  # what we already published when a SIBLING PUBLISH JOB FAILS:
-  #
-  #   * PyPI        -> `pypi-cleanup` DELETES the version. PyPI has no yank
-  #                    API or CLI, so delete is the only scriptable option.
-  #                    NOTE: PyPI forbids re-using a deleted filename, so a
-  #                    re-publish must use a NEW version (e.g. <base>.post1).
-  #   * crates.io   -> `cargo yank`. A crates.io version can never be deleted,
-  #                    so a yank is the strongest possible undo there.
-  #
-  # SAFETY VALVES (both deliberate):
-  #   1. `needs` deliberately EXCLUDES the `release` job, so a failure of the
-  #      post-publish *verification* step does NOT trigger a destructive
-  #      rollback of otherwise-good artifacts.
-  #   2. Each destructive step no-ops with a warning unless its credential is
-  #      present. PyPI deletes need a REAL account password — pypi-cleanup logs
-  #      into the website, which rejects API tokens — so set PYPI_USERNAME,
-  #      PYPI_PASSWORD and (if 2FA is on) PYPI_TOTP_SECRET. crates yanks need
-  #      CARGO_REGISTRY_TOKEN.
-  #
-  # NOTE: this is intentionally destructive for PyPI. Because the project has no
-  # users yet, deleting is safe; once 0.12.x is announced, prefer bumping the
-  # version over rolling back.
-  # ---------------------------------------------------------------------------
-  rollback:
-    name: Rollback a partial release
-    runs-on: ubuntu-latest
-    if: ${{ always() && failure() && startsWith(github.ref, 'refs/tags/') }}
-    needs: [publish-crates, publish-pypi-core, publish-pypi-addons]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Resolve the version being released
-        id: v
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - name: Yank the crates published by this run
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -uo pipefail
-          V="${{ steps.v.outputs.version }}"
-          # crates.io has no post-releases: a PyPI repack (<base>.postN) still
-          # maps to the plain base version on crates.io.
-          BASE="${V%%.post*}"
-          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
-            echo "::warning::CARGO_REGISTRY_TOKEN is not set — skipping crates.io yank"
-            exit 0
-          fi
-          # Reverse dependency order: dependents first, core last.
-          for crate in benostreamdb-search benostreamdb benostream-gpu-ann; do
-            echo "Yanking $crate $BASE ..."
-            cargo yank --version "$BASE" --registry crates-io --token "$CARGO_REGISTRY_TOKEN" "$crate" \
-              || echo "::warning::could not yank $crate $BASE (already yanked, or version differs — e.g. benostream-gpu-ann tracks its own version)"
-          done
-      - name: Delete the PyPI releases published by this run
-        env:
-          PYPI_USERNAME: ${{ secrets.PYPI_USERNAME }}
-          PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
-          PYPI_TOTP_SECRET: ${{ secrets.PYPI_TOTP_SECRET }}
-        run: |
-          set -uo pipefail
-          V="${{ steps.v.outputs.version }}"
-          if [ -z "${PYPI_PASSWORD:-}" ]; then
-            echo "::warning::PYPI_PASSWORD is not set — skipping PyPI rollback (nothing was deleted)."
-            echo "::warning::pypi-cleanup logs into the PyPI website, which rejects API tokens; set PYPI_PASSWORD + PYPI_USERNAME (+ PYPI_TOTP_SECRET if 2FA is on)."
-            exit 0
-          fi
-          # Delegate to the tested teardown tool: it logs in with the real
-          # account password (+ optional TOTP) and deletes exactly this version.
-          python -m pip install --upgrade pypi-cleanup
-          python scripts/release_teardown.py --version "$V" --dbt-version "$V" --pypi-only --apply
-      - name: Rollback summary
-        if: always()
-        run: |
-          {
-            echo "## Rollback attempted for \`${{ steps.v.outputs.version }}\`"
-            echo
-            echo "| Target | Action |"
-            echo "|---|---|"
-            echo "| crates.io | \`cargo yank\` at the base version (a version can never be deleted there) |"
-            echo "| PyPI | \`pypi-cleanup\` delete of the exact (possibly \`.postN\`) version |"
-            echo
-            echo "Re-run the release once the failing target is fixed; the surviving"
-            echo "targets will no-op via \`skip-existing\` / the crates.io guard."
-          } >> "$GITHUB_STEP_SUMMARY"
