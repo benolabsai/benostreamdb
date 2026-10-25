@@ -40,9 +40,9 @@ Key Architecture Highlights
    integrations/trino
    integrations/dbt
    integrations/flight_sql
+   integrations/java_jni
    integrations/search_gateway
    integrations/mcp
-   integrations/java_jni
 
 .. toctree::
    :maxdepth: 2

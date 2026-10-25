@@ -14,7 +14,7 @@ Install the official Python package from PyPI (precompiled wheels with PyArrow, 
 pip install benostreamdb
 ```
 
-*Prefer Docker or REST APIs? Jump to [Docker Gateway Quickstart](#-docker-gateway-opensearch--qdrant-apis).*
+*Prefer a network endpoint or an existing query engine? Jump to [Core Connectors](#-core-connectors-flight-sql-trino-spark--dbt).*
 
 ---
 
@@ -173,23 +173,79 @@ print(results[["id", "title", "distance"]])
 
 ---
 
-## 🐳 Docker Gateway: OpenSearch & Qdrant APIs
+## 🔌 Core Connectors: Flight SQL, Trino, Spark & dbt
 
-If your stack already uses **OpenSearch / Elasticsearch 7.10** or **Qdrant**, you can spin up the dual-API gateway with one command:
+BenoStreamDB's primary integration surface is the lakehouse query stack: **Arrow Flight SQL**, **Trino**, **Apache Spark**, and **dbt**. Every connector reads and writes the same Apache Iceberg tables through the Rust engine — there is no export step and no second copy of the data.
+
+### Arrow Flight SQL (`:50051`)
+
+The network endpoint for JDBC/ODBC/ADBC clients, DuckDB, and BI tools:
 
 ```bash
-docker run -d --name benostreamdb \
-  -p 9200:9200 \
-  -p 6333:6333 \
-  -p 50051:50051 \
-  benostreamdb/quickstart:latest
+# Build and run the server (binds 127.0.0.1:50051 by default)
+cargo run --release -p benostreamdb-flight
 ```
 
-* **OpenSearch / Elasticsearch 7.10 API (`:9200`)**: Text indexing, BM25, and hybrid search. Test with `curl http://localhost:9200/_cluster/health`.
-* **Qdrant Vector API (`:6333`)**: Vector upsert, collection management, and filtered similarity search.
-* **Arrow Flight SQL (`:50051`)**: Streaming columnar SQL for DuckDB, Spark, and BI tools.
+```sql
+-- DuckDB client
+INSTALL flight;
+LOAD flight;
+SELECT * FROM flight_sql_query('grpc://127.0.0.1:50051', 'SELECT * FROM documents');
+```
 
-Both APIs share the exact same underlying Iceberg tables with zero data duplication.
+### Trino
+
+Build the JNI-backed connector and drop the plugin into every Trino node:
+
+```bash
+cd trino-benostreamdb
+mvn clean install -DskipTests
+```
+
+```properties
+# etc/catalog/benostreamdb.properties
+connector.name=benostreamdb
+benostream.base-uri=s3://my-bucket/
+```
+
+```sql
+SELECT * FROM benostreamdb.default.logs WHERE severity = 'ERROR';
+```
+
+### Apache Spark
+
+A fully native Spark DataSource V2 connector — reads, writes, DDL, row-level operations, and vector UDFs run in-process through JNI:
+
+```bash
+cd spark-benostreamdb
+mvn clean package -Pspark-4.0     # or -Pspark-3.5 / -Pspark-4.1 / -Pspark-4.2
+```
+
+```scala
+val spark = SparkSession.builder()
+  .config("spark.sql.catalog.benostream", "com.benostreamdb.spark.BenoStreamProcedureCatalog")
+  .config("spark.sql.catalog.benostream.warehouse", "s3://my-lakehouse/warehouse")
+  .getOrCreate()
+```
+
+### dbt
+
+```bash
+pip install dbt-benostreamdb
+```
+
+```yaml
+# ~/.dbt/profiles.yml
+benostreamdb_profile:
+  target: dev
+  outputs:
+    dev:
+      type: benostreamdb
+      database: default
+      schema: public
+      threads: 4
+      uri: "file:///path/to/benostreamdb/warehouse"
+```
 
 ---
 
@@ -197,7 +253,10 @@ Both APIs share the exact same underlying Iceberg tables with zero data duplicat
 
 Now that you've run your first query:
 
+* **[Arrow Flight SQL Connector](integrations/FLIGHT_SQL.md)** — Configuration, authentication, and client examples for JDBC/ODBC/ADBC.
+* **[Trino Connector](integrations/TRINO.md)** — Distributed SQL, predicate pushdown, graph table functions, and GPU device selection.
+* **[Apache Spark Connector](integrations/SPARK.md)** — DataSource V2 reads/writes, row-level operations, vector functions, and streaming.
+* **[dbt Adapter](integrations/DBT.md)** — Models, incremental materializations, vector/hybrid-search macros, and lineage.
 * **[Installation Guide](installation.md)** — Hardware acceleration (CUDA, Metal, ROCm), package variants, and security guidelines.
 * **[pgvector SQL Reference](pgvector_sql_guide.md)** — Complete reference for operators (`<->`, `<=>`, `<#>`, `<~>`), sparse vectors, and index acceleration.
 * **[Graph RAG on Iceberg](graph_rag_edge_tables.md)** — Traverse edge tables natively with SQL UDFs (`graph_neighbors`, PageRank).
-* **[Connectors](../index.rst#connectors-integrations)** — Integrate with **Apache Spark**, **Trino**, **dbt**, or **Arrow Flight SQL**.

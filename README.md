@@ -382,74 +382,44 @@ Model identity cannot be inferred from a vector: the property is the contract. W
 the engine and the catalog (direct Parquet/object-store mutation) remain outside the guard.
 
 
-## 🌐 REST APIs (OpenSearch & Qdrant)
-
-BenoStreamDB includes an optional contrib HTTP search gateway (`contrib/benostreamdb-search`, crate `benostreamdb-search`) that exposes the core engine over standard REST protocols. By translating incoming requests into native BenoStreamDB columnar operations, it allows you to use existing tools without running traditional clustered databases.
-
-- **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for standard text indexing, bulk writes, and keyword search (e.g., connect Kibana or Grafana directly). See the [OpenSearch compatibility matrix](contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md).
-- **Qdrant Vector API (Port 6333)**: Qdrant v1.x REST emulation covering collections, points, payloads, vectors, aliases, and the universal query API. Qdrant's unstructured JSON payloads are dynamically inferred and converted into highly compressed Arrow columns on write. See the [Qdrant compatibility matrix](contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md) for the exact supported surface and known approximations.
-
-Both APIs are hosted concurrently from a single binary, completely share the exact same underlying `AppState` and data files, and require zero data duplication. You can write a collection of embeddings via the Qdrant API and instantly query it via the OpenSearch API!
-
-To start the dual-API server:
-```bash
-# Uses BSDB_SEARCH_PORT=9200 and BSDB_QDRANT_PORT=6333 by default
-cargo run -p benostreamdb-search
-```
-
 ## 🚀 Quick Start
 
-### 🐳 Docker Quickstart (3 Minutes to First Query)
+### 🔌 Core Connectors (3 Minutes to First Query)
 
-Run the full BenoStreamDB gateway stack with one command:
+BenoStreamDB's primary integration surface is the lakehouse stack — **Arrow Flight SQL**, **Trino**, **Apache Spark**, and **dbt**. Every connector reads and writes the same Apache Iceberg tables through the Rust engine, with no export step and no second copy of the data.
+
+| Connector | Artifact | Entry point |
+| :--- | :--- | :--- |
+| **Arrow Flight SQL** | `benostreamdb-flight` | `cargo run --release -p benostreamdb-flight` (gRPC `:50051`) |
+| **Trino** | `trino-benostreamdb` | `mvn clean install -DskipTests` → plugin ZIP |
+| **Apache Spark** | `spark-benostreamdb` | `mvn clean package -Pspark-4.0` |
+| **dbt** | `pip install dbt-benostreamdb` | `~/.dbt/profiles.yml` |
+
+Build and start the connectors:
 
 ```bash
-# Standalone All-in-One Container (Local storage)
-docker run -d --name benostreamdb \
-  -p 9200:9200 \
-  -p 6333:6333 \
-  -p 50051:50051 \
-  benostreamdb/quickstart:latest
+# Arrow Flight SQL (binds 127.0.0.1:50051)
+cargo run --release -p benostreamdb-flight
 
-# Or Full-Stack Compose (RustFS S3 + Nessie Catalog + BenoStreamDB)
-docker compose -f docker/docker-compose.quickstart.yml up -d
+# Trino connector -> target/trino-benostream-*-plugin.zip
+cd trino-benostreamdb && mvn clean install -DskipTests
+
+# Spark connector (4.0 default; also -Pspark-3.5, -Pspark-4.1, -Pspark-4.2)
+cd spark-benostreamdb && mvn clean package -Pspark-4.0
+
+# dbt adapter
+pip install dbt-benostreamdb
 ```
 
-| Service | Protocol | Port | Description |
-| :--- | :--- | :--- | :--- |
-| **Elasticsearch 7.10** | REST / JSON | `9200` | Text indexing, BM25, and hybrid search |
-| **Qdrant Vector** | REST / JSON | `6333` | Collections, point upsert/retrieve, payload & vector edits, vector search, aliases |
-| **Arrow Flight SQL** | gRPC / Flight | `50051` | Zero-copy SQL for DuckDB, Polars, BI tools |
+Query the engine over Flight SQL from DuckDB:
 
-Verify cluster health:
-```bash
-curl http://localhost:9200/_cluster/health
+```sql
+INSTALL flight;
+LOAD flight;
+SELECT * FROM flight_sql_query('grpc://127.0.0.1:50051', 'SELECT * FROM documents');
 ```
 
-#### GPU-Accelerated Docker (NVIDIA CUDA, AMD ROCm, Intel XPU)
-Run with hardware acceleration across NVIDIA, AMD, or Intel GPUs:
-```bash
-# Launch with GPU override:
-docker compose -f docker/docker-compose.quickstart.yml -f docker/docker-compose.gpu.yml up -d
-
-# Verify compute engine reported by the Search API:
-curl -s http://localhost:9200/
-```
-Output:
-```json
-{
-  "name": "bsdb-search-1",
-  "cluster_name": "bsdb-search",
-  "version": { "number": "7.10.2", ... },
-  "compute": {
-    "backend": "cuda",
-    "device_id": 0,
-    "gpu_accelerated": true,
-    "available": true
-  },
-  "tagline": "You know, you search"
-}
-```
+Full setup for each connector: [Flight SQL](docs/integrations/FLIGHT_SQL.md) · [Trino](docs/integrations/TRINO.md) · [Spark](docs/integrations/SPARK.md) · [dbt](docs/integrations/DBT.md).
 
 
 ### Python Installation
@@ -944,38 +914,7 @@ df = bsdb.Table("s3://bucket/table").query().execute()
 # Network Arrow Flight SQL client (zero-copy gRPC streaming)
 flight = bsdb.FlightClient("grpc://127.0.0.1:50051", token="secret")
 df = flight.execute_pandas("SELECT * FROM market_data WHERE symbol = 'NVDA'")
-
-# Network Search client (OpenSearch 7.10 / Qdrant REST gateway)
-search = bsdb.SearchClient("http://127.0.0.1:9200")
-results = search.hybrid_search(
-    index="filings",
-    text="revenue guidance semiconductor",
-    vector=[0.12, -0.45, 0.88],
-    top_k=10,
-)
 ```
-
-### MCP Server (AI Agent Tools)
-
-Official **Model Context Protocol (MCP)** server (`contrib/benostreamdb-mcp`,
-crate `benostreamdb-mcp`) that exposes BenoStreamDB to LLM agents (Claude
-Desktop, Cursor, VS Code, Antigravity IDE) as JSON-RPC tools. It ships 12 tools —
-including `execute_sql`, `hybrid_search`, `graph_rag_search`, `ingest_records`,
-`list_embedding_models`, and persistent agent memory (`store_memory` /
-`recall_memory`). It also runs local, no-LLM embeddings by default
-(`BAAI/bge-small-en-v1.5`, 384-d), so ingestion and memory do not require an
-external embedding API.
-
-```bash
-# Run instantly without local compilation
-uvx benostreamdb-mcp --warehouse /path/to/warehouse
-```
-
-MCP is treated as an **untrusted connector**: if `.benostream-policy.json` is
-absent, it is locked to read-only across persistent schemas (writes are limited
-to `scratch.*`). See
-[`contrib/benostreamdb-mcp/README.md`](contrib/benostreamdb-mcp/README.md) and
-[`docs/integrations/MCP.md`](docs/integrations/MCP.md).
 
 ### Snowflake (Untested / Developer Preview)
 
@@ -1023,6 +962,62 @@ The build script automatically downloads a project-local Maven and JDK 21 if the
 
 ### Artifacts
 Final JARs and ZIPs are collected in the `connector-artifacts/` directory.
+
+## 🧩 Optional Add-ons: Search Gateway & MCP
+
+Everything in this section is **optional**. The core engine and the Spark, Trino, dbt, and Arrow Flight SQL connectors above do not depend on it — enable these only if you need Elasticsearch/Qdrant wire compatibility or LLM-agent tooling.
+
+### Search Gateway (OpenSearch / Elasticsearch 7.10 & Qdrant)
+
+`bsdb-search` (`contrib/benostreamdb-search`, crate `benostreamdb-search`) serves an **OpenSearch 1.x / Elasticsearch 7.10**-compatible REST API — plus a **Qdrant**-compatible vector API — on top of the engine. It targets website search, document catalogs, and knowledge bases where a 50–200 ms query envelope is acceptable and object-storage-native, scale-to-zero hosting is desired.
+
+* **OpenSearch / Elasticsearch 7.10 (`:9200`)**: text indexing, bulk writes, and keyword search. See the [OpenSearch compatibility matrix](contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md).
+* **Qdrant (`:6333`)**: collections, point upsert/retrieve, payload and vector edits, aliases, and the universal query API. See the [Qdrant compatibility matrix](contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md).
+
+Both APIs are hosted concurrently from a single binary, share the same `AppState` and data files, and require zero data duplication.
+
+```bash
+cargo build --release -p benostreamdb-search --bin bsdb-search
+BSDB_SEARCH_BIND=127.0.0.1 BSDB_SEARCH_PORT=9200 ./target/release/bsdb-search
+
+# Or during development (defaults: BSDB_SEARCH_PORT=9200, BSDB_QDRANT_PORT=6333)
+cargo run -p benostreamdb-search
+
+# Index + search (ES 7.10 wire format)
+curl -X POST localhost:9200/articles/_doc -H 'content-type: application/json' \
+     -d '{"title":"Hello","body":"Welcome to BenoStreamDB"}'
+curl -X POST localhost:9200/articles/_refresh
+curl -X POST localhost:9200/articles/_search -H 'content-type: application/json' \
+     -d '{"query":{"match":{"body":"BenoStreamDB"}}}'
+```
+
+```python
+# Python network client
+search = bsdb.SearchClient("http://127.0.0.1:9200")
+results = search.hybrid_search(
+    index="filings",
+    text="revenue guidance semiconductor",
+    vector=[0.12, -0.45, 0.88],
+    top_k=10,
+)
+```
+
+**Supported:** cluster/health/cat/stats, index CRUD, mapping GET/PUT, `_doc`, `_bulk`, `_refresh`, `_search` (`match` BM25, `knn` HNSW, hybrid RRF, `filter`/`bool` with `term`/`terms`/`range`/`exists`, `match_all`), `_count`, `_source` filtering, `from`/`size`, and Prometheus `/metrics`.
+
+**Not supported (v1):** ILM (index lifecycle), multi-node sharding/replicas, and Kibana. Stateless authentication (API key / JWT, admin-only writes) *is* supported.
+
+**Background service:** `sudo benostreamdb install-service` installs the gateway as a `systemd`/`launchd` daemon. See [scripts/services/README.md](scripts/services/README.md) for configuration and uninstallation.
+
+### MCP Server (AI Agent Tools)
+
+`benostreamdb-mcp` (`contrib/benostreamdb-mcp`) exposes BenoStreamDB to LLM agents (Claude Desktop, Cursor, VS Code, Antigravity IDE) as JSON-RPC tools. It ships 12 tools — including `execute_sql`, `hybrid_search`, `graph_rag_search`, `ingest_records`, `list_embedding_models`, and persistent agent memory (`store_memory` / `recall_memory`) — and runs local, no-LLM embeddings by default (`BAAI/bge-small-en-v1.5`, 384-d), so ingestion and memory need no external embedding API.
+
+```bash
+# Run instantly without local compilation
+uvx benostreamdb-mcp --warehouse /path/to/warehouse
+```
+
+MCP is treated as an **untrusted connector**: if `.benostream-policy.json` is absent, it is locked to read-only across persistent schemas (writes are limited to `scratch.*`). See [`contrib/benostreamdb-mcp/README.md`](contrib/benostreamdb-mcp/README.md) and [`docs/integrations/MCP.md`](docs/integrations/MCP.md).
 
 ## 🧪 Development
 
@@ -1086,48 +1081,6 @@ benostreamdb/
 │   └── python/                 # Python binding tests
 └── benchmarks/                 # Benchmarks
 ```
-
-## 🔎 Search API (OpenSearch / Elasticsearch 7.10-compatible)
-
-BenoStreamDB ships an optional contrib add-on, **`bsdb-search`** (`contrib/benostreamdb-search`, crate `benostreamdb-search`),
-that serves an **OpenSearch 1.x / Elasticsearch 7.10**-compatible REST API on top of
-the engine — plus a **Qdrant**-compatible API for vector workloads. It is built for
-website search, document catalogs, and knowledge bases where a 50–200 ms query latency
-envelope is acceptable and object-storage-native, scale-to-zero hosting is desired.
-
-```bash
-cargo build --release -p benostreamdb-search --bin bsdb-search
-BSDB_SEARCH_BIND=127.0.0.1 BSDB_SEARCH_PORT=9200 ./target/release/bsdb-search
-
-# Index + search (ES 7.10 wire format)
-curl -X POST localhost:9200/articles/_doc -H 'content-type: application/json' \
-     -d '{"title":"Hello","body":"Welcome to BenoStreamDB"}'
-curl -X POST localhost:9200/articles/_refresh
-curl -X POST localhost:9200/articles/_search -H 'content-type: application/json' \
-     -d '{"query":{"match":{"body":"BenoStreamDB"}}}'
-```
-
-**Running as a Background Service**
-
-For production deployments on Linux and macOS, you can easily install `benostream-search` as a native background daemon (`systemd` or `launchd`) so it runs continuously and starts on boot:
-
-```bash
-# Ensure the binary is built and available at /usr/local/bin/benostream-search
-sudo benostreamdb install-service
-```
-This will automatically generate the configuration file and start the service. See [scripts/services/README.md](scripts/services/README.md) for full configuration and uninstallation details.
-
-**Supported:** cluster/health/cat/stats, index CRUD, mapping GET/PUT, `_doc`, `_bulk`,
-`_refresh`, `_search` (`match` BM25, `knn` HNSW, hybrid RRF, `filter`/`bool` with
-`term`/`terms`/`range`/`exists`, `match_all`), `_count`, `_source` filtering,
-`from`/`size`, and Prometheus `/metrics`.
-
-**Not supported (v1):** ILM (index lifecycle), multi-node
-sharding/replicas, and Kibana. (Stateless **authentication** — API key / JWT,
-with admin-only writes — *is* supported; see the search-gateway Security
-section.) See
-[contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md](contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md) for the full matrix and
-[docs/INSTALLATION.md](docs/INSTALLATION.md) for a complete quickstart.
 
 ## 📈 Roadmap
 
