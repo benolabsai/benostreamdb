@@ -1,26 +1,29 @@
 {
   "engine": "lancedb",
-  "index": "bm25+hnsw",
+  "index": "hnsw",
   "dataset": "scifact",
   "workload": "hybrid_rrf",
   "backend": "cpu",
   "queries": 300,
   "k": 10,
-  "build_s": 0.865,
-  "index_mb": 14.34,
-  "recall_at_k": 0.8201,
-  "ndcg_at_k": 0.6626,
-  "mrr_at_k": 0.6186,
-  "qps": 195.9,
-  "p50_ms": 4.744,
-  "p99_ms": 5.956,
+  "build_s": 0.972,
+  "index_mb": 14.41,
+  "recall_at_k": 0.8281,
+  "ndcg_at_k": 0.6699,
+  "mrr_at_k": 0.6245,
+  "qps": 180.7,
+  "p50_ms": 5.227,
+  "p99_ms": 6.825,
   "env": {
     "cpu_model": "x86_64",
     "cores": 32,
     "ram_gb": 121.4,
-    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
-    "python": "3.12.15",
-    "containerized": true,
-    "gpus": []
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "python": "3.14.4",
+    "containerized": false,
+    "gpus": [
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+    ]
   }
 }

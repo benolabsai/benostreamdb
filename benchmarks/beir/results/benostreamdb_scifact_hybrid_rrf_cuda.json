@@ -1,0 +1,29 @@
+{
+  "engine": "benostreamdb",
+  "index": "hnsw",
+  "dataset": "scifact",
+  "workload": "hybrid_rrf",
+  "backend": "cuda",
+  "queries": 300,
+  "k": 10,
+  "build_s": 1.085,
+  "index_mb": 11.8,
+  "recall_at_k": 0.836,
+  "ndcg_at_k": 0.6734,
+  "mrr_at_k": 0.6261,
+  "qps": 137.7,
+  "p50_ms": 7.121,
+  "p99_ms": 9.303,
+  "env": {
+    "cpu_model": "x86_64",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "python": "3.14.4",
+    "containerized": false,
+    "gpus": [
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+    ]
+  }
+}

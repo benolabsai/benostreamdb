@@ -111,6 +111,8 @@ target-jni/
 # ── Unintended large files / test artifacts ────────────────────────
 test_db/
 test_ingestion_db/
+news_db/
+scifact_news_db/
 connector-artifacts/
 test_c
 test_prefetch

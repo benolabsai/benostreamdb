@@ -1,85 +1,97 @@
 import os
-import getpass
+import shutil
 import pandas as pd
 import numpy as np
+import requests
 import benostreamdb as bsdb
 from datasets import load_dataset
-from huggingface_hub import InferenceClient
+from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 
-# RAG Demo: BenoStreamDB + Hugging Face
-# ------------------------------------
+# RAG Demo: BenoStreamDB + Hugging Face SciFact Benchmark
+# -------------------------------------------------------
 
-# 1. Setup API Token
-if "HF_TOKEN" not in os.environ:
-    os.environ["HF_TOKEN"] = getpass.getpass("Enter your Hugging Face API Token: ")
+print("=== BENOSTREAMDB RAG DEMO (SciFact Benchmark) ===")
 
-# 2. Initialize Hugging Face Inference Client
-# We use this for both generating embeddings and asking questions
-client = InferenceClient(token=os.environ["HF_TOKEN"])
+# 1. Setup Models & Embeddings
+local_embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-print("\n--- BENOSTREAMDB RAG DEMO ---")
-
-# 3. Define Inference Functions
 def get_embeddings(texts):
-    """Generate embeddings using a hosted model"""
-    # Retrieval-tuned 384-d default.
-    return client.feature_extraction(
-        texts,
-        model="BAAI/bge-small-en-v1.5"
-    )
+    return local_embedder.encode(texts, show_progress_bar=False)
 
-def get_answer(question, contexts):
-    """Generate an answer using a hosted LLM (Mistral)"""
+def get_answer(claim, contexts):
     context_str = "\n".join([f"- {c}" for c in contexts])
-    prompt = f"Answer the question accurately using ONLY the provided context.\n\nContext:\n{context_str}\n\nQuestion: {question}\nAnswer:"
+    base_url = os.environ.get("OPENCODE_BASE_URL", "https://opencode.ai/zen/go/v1")
+    api_key = os.environ.get("OPENCODE_API_KEY", "")
     
-    return client.text_generation(
-        prompt,
-        model="mistralai/Mistral-7B-Instruct-v0.2",
-        max_new_tokens=250,
-        temperature=0.7
-    )
+    if api_key:
+        try:
+            client = OpenAI(
+                base_url=base_url,
+                api_key=api_key,
+                default_headers={"x-opencode-session": "benolabs-howto"}
+            )
+            prompt = f"Evaluate this scientific claim based ONLY on the provided context.\n\nContext:\n{context_str}\n\nClaim: {claim}"
+            res = client.chat.completions.create(
+                model="deepseek-v4.1-flash",
+                messages=[
+                    {"role": "system", "content": "You are a concise scientific assistant. Answer in 2 sentences with factual evidence."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                extra_body={"thinking": {"type": "disabled"}}
+            )
+            return res.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"[Notice] OpenCode Go call failed ({e}); falling back to local citation.")
+            
+    return contexts[0][:250] + "..."
 
-# 4. Ingest Data (SQuAD Knowledge Base)
-dataset_full = load_dataset("squad", split="train")
-full_df = pd.DataFrame(dataset_full)
-unique_contexts_df = full_df.drop_duplicates(subset=["context"]).head(300).copy()
-df = pd.DataFrame({
-    "id": range(len(unique_contexts_df)),
-    "context": unique_contexts_df["context"].tolist(),
-    "title": unique_contexts_df["title"].tolist()
-})
+# 2. Ingest Data (SciFact Knowledge Base from Hugging Face)
+print("Loading SciFact dataset from Hugging Face...")
+try:
+    corpus = load_dataset("mteb/scifact", "corpus", split="corpus[:150]")
+except Exception:
+    corpus = load_dataset("BeIR/scifact", "corpus", split="corpus[:150]")
 
-print(f"\nIngesting {len(df)} knowledge base articles...")
-embeddings = get_embeddings(df["context"].tolist())
-df["embedding"] = [np.array(e).astype(np.float32) for e in embeddings]
+df = pd.DataFrame(corpus).rename(columns={"_id": "doc_id"})
+df["id"] = list(range(len(df)))
 
-# Setup BenoStreamDB Table
-table_uri = "./rag_hf_db"
+print(f"Generating embeddings for {len(df)} peer-reviewed abstracts...")
+embeddings = get_embeddings(df["text"].tolist())
+df["embedding"] = [list(e) for e in embeddings]
+
+# 3. Setup BenoStreamDB Table
+table_uri = "./scifact_hf_db"
+shutil.rmtree(table_uri, ignore_errors=True)
 table = bsdb.Table(table_uri)
-table.add_index_columns(["embedding"])  # Enable semantic graph indexing
+table.add_index_columns(["embedding", "doc_id", "title"])
 table.write_pandas(df)
-table.commit()  # Finalize the initial manifest
+table.commit()
 
 print(f"Index built! Knowledge base ready at {table_uri}")
 
-# 5. Retrieval + Generation
-def run_query(question):
-    print(f"\nUser Question: {question}")
+# 4. Retrieval + Generation
+def run_query(claim):
+    print(f"\nScientific Claim: {claim}")
     
     # Retrieval
-    q_emb = np.array(get_embeddings([question])[0]).astype(np.float32)
-    # BenoStreamDB search handles the vector indexing + scalar filtering automatically
-    results = table.to_pandas(vector_filter={"column": "embedding", "query": q_emb, "k": 3})
+    q_emb = list(get_embeddings([claim])[0])
+    results = table.filter(vector_filter=q_emb, k=3).to_pandas()
     
-    contexts = results["context"].tolist()
+    contexts = results["text"].tolist()
     print(f"Retrieved {len(contexts)} contexts from BenoStreamDB.")
     
     # Generation
-    print("Generating answer via Mistral...")
-    answer = get_answer(question, contexts)
-    print(f"\nFINAL ANSWER:\n{answer}")
-    print("-" * 30)
+    print("Generating answer via OpenCode Go (deepseek-v4.1-flash)...")
+    answer = get_answer(claim, contexts)
+    print(f"\nEVALUATION:\n{answer}")
+    print("-" * 50)
 
-# Final Demo Query
-run_query("Why did Notre Dame's main building burn down in 1879?")
+# 5. Run Demo Queries
+run_query("Microstructural development of human cerebral cortex and white matter can be measured in vivo.")
+run_query("Cerebral organoids model human brain development and microcephaly.")
+
+# 6. Clean Up
+shutil.rmtree(table_uri, ignore_errors=True)
+print("\nDemo completed cleanly.")

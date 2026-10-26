@@ -3,115 +3,139 @@ import pandas as pd
 import numpy as np
 import os
 import shutil
-import requests
-import time
-
-# Set pandas options to show full text in results
-pd.set_option('display.max_colwidth', None)
-pd.set_option('display.width', 1000)
-pd.set_option('display.max_rows', 50)
+import warnings
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
-import warnings
+from openai import OpenAI
 
-# Suppress warnings and chatty loggers
 warnings.filterwarnings('ignore')
-try:
-    from transformers import logging as tf_logging
-    tf_logging.set_verbosity_error()
-except ImportError:
-    pass
+pd.set_option('display.max_colwidth', 90)
+pd.set_option('display.width', 1000)
 
 def run_rag_demo():
-    print("=== BenoStreamDB RAG Pipeline Demo ===")
+    print("=== BenoStreamDB RAG Pipeline Demo (SciFact Dataset) ===")
     
-    db_path = "rag_db"
+    db_path = "scifact_rag_db"
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
 
-    # Initialize context
-    # Standard CPU context provides the most stable IO path for the HNSW-IVF reader
+    # 1. Hardware compute context
     ctx = None
-    print("Using stable CPU compute context")
+    for target in ["cuda", "intel"]:
+        try:
+            ctx = bsdb.ComputeContext(target)
+            print(f"Using {target.upper()} GPU compute context")
+            break
+        except Exception:
+            pass
+    if ctx is None:
+        print("Using CPU compute context")
 
-    # 1. Setup Models
-    # Retrieval-tuned 384-d default; documents plain, queries with the BGE prefix.
-    print("Loading embedding model (BAAI/bge-small-en-v1.5)...")
-    model = SentenceTransformer("BAAI/bge-small-en-v1.5")
-    model.max_seq_length = 512
+    # 2. Embedding Model
+    print("Loading embedding model (sentence-transformers/all-MiniLM-L6-v2)...")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
 
-    # 2. Ingest Knowledge Base (SQuAD)
-    print("\nLoading and embedding SQuAD contexts...")
-    dataset_full = load_dataset("squad", split="validation")
-    full_df = pd.DataFrame(dataset_full)
-    unique_contexts_df = full_df.drop_duplicates(subset=["context"]).copy()
-    
-    print(f"Generating embeddings for {len(unique_contexts_df)} unique contexts...")
-    # This model generates 384D vectors
-    embeddings = model.encode(unique_contexts_df["context"].tolist(), show_progress_bar=True)
-    unique_contexts_df["embedding"] = [list(e) for e in embeddings]
+    # 3. Load SciFact Knowledge Base from Hugging Face
+    print("\nLoading SciFact corpus from Hugging Face...")
+    try:
+        corpus = load_dataset("mteb/scifact", "corpus", split="corpus[:250]")
+    except Exception:
+        corpus = load_dataset("BeIR/scifact", "corpus", split="corpus[:250]")
+        
+    df = pd.DataFrame(corpus).rename(columns={"_id": "doc_id"})
+    print(f"Generating embeddings for {len(df)} scientific papers...")
+    embeddings = model.encode(df["text"].tolist(), show_progress_bar=False)
+    df["embedding"] = [list(e) for e in embeddings]
 
-    print(f"Ingesting {len(unique_contexts_df)} entries into BenoStreamDB...")
+    # 4. Ingest into BenoStreamDB
+    print(f"Ingesting {len(df)} entries into BenoStreamDB...")
     table = bsdb.Table(db_path, explain=True, device=ctx)
-    table.add_index_columns(["embedding", "context"])
-    table.write(unique_contexts_df[["context", "title", "embedding"]])
-    print("Committing table (flushes data and builds vector indexes)...")
+    table.add_index_columns(["embedding", "doc_id", "title"])
+    table.write_pandas(df)
     table.commit()
     print("Ingestion complete.")
 
-    # 3. Retrieval
-    def retrieve(question, k=3):
-        print(f"Question: '{question}'")
-        q_emb = model.encode(question)
-        # Using a title filter to show the full "Postgres EXPLAIN" style query plan
-        results = table.to_pandas(
-            vector_filter={"column": "embedding", "query": q_emb, "k": k},
-            filter="title != 'Unknown'"
-        )
-        if results.empty: return []
-        print(f"   Found: {len(results)} contexts")
-        return results["context"].tolist()
+    # 5. OpenCode Go Client Setup
+    api_key = os.environ.get("OPENCODE_API_KEY")
+    client = OpenAI(
+        base_url="https://opencode.ai/zen/go/v1",
+        api_key=api_key or "dummy",
+        default_headers={"x-opencode-session": "benolabs-howto"}
+    )
 
-    # 4. Generation
-    def generate_answer(question, contexts):
-        if not contexts: return "No results."
-        
-        prompt = f"Using context below, answer the question precisely: {question}\n\nContexts:\n" + "\n".join([f"- {c}" for c in contexts])
-        
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key and os.path.exists("groq_api_key.txt"):
-            with open("groq_api_key.txt", "r") as f:
-                api_key = f.read().strip()
-                
-        if not api_key: return "[GROQ_API_KEY missing]"
+    def retrieve(query: str, k: int = 3, max_distance: float = 1.3):
+        """Retrieve most relevant scientific papers from BenoStreamDB."""
+        query_vec = list(model.encode(query))
+        res = table.filter(vector_filter=query_vec, k=k).to_pandas()
+        dist_col = "distance" if "distance" in res.columns else "_distance"
+        if max_distance is not None and not res.empty:
+            res = res[res[dist_col] <= max_distance]
+        return res
 
-        max_retries = 3
-        for attempt in range(max_retries):
+    def generate_answer(claim: str, retrieved_df: pd.DataFrame) -> str:
+        """Synthesize answer citing retrieved papers using OpenCode Go (deepseek-v4.1-flash)."""
+        if retrieved_df.empty:
+            return "No sufficiently relevant literature found in the database."
+
+        dist_col = "distance" if "distance" in retrieved_df.columns else "_distance"
+        context_blocks = []
+        for _, row in retrieved_df.iterrows():
+            context_blocks.append(
+                f"[Doc ID: {row['doc_id']}] Title: {row['title']}\n"
+                f"Abstract: {row['text'][:400]}... (Distance: {row[dist_col]:.4f})"
+            )
+        combined_context = "\n\n".join(context_blocks)
+
+        prompt = f"""You are an expert scientific research assistant. Evaluate the following scientific claim based ONLY on the provided peer-reviewed literature context.
+Cite specific document IDs in your answer.
+
+Claim: {claim}
+
+Retrieved Literature:
+{combined_context}
+
+Provide a concise, factual evaluation in 2-3 sentences."""
+
+        if api_key:
             try:
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                headers = {"Authorization": f"Bearer {api_key}"}
-                payload = {
-                    "model": "qwen/qwen3-32b",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.1,
-                }
-                r = requests.post(url, headers=headers, json=payload, timeout=20)
-                r.raise_for_status() # Raise error for bad status codes
-                return r.json()["choices"][0]["message"]["content"]
+                response = client.chat.completions.create(
+                    model="deepseek-v4.1-flash",
+                    messages=[
+                        {"role": "system", "content": "You are an objective scientific evaluation assistant. Answer concisely and cite document IDs."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=250,
+                    temperature=0.2,
+                    extra_body={"thinking": {"type": "disabled"}}
+                )
+                return response.choices[0].message.content.strip()
             except Exception as e:
-                if attempt < max_retries - 1:
-                    print(f"   Groq API connection error: {e}. Retrying ({attempt+1}/{max_retries})...")
-                    time.sleep(2 * (attempt + 1))
-                    continue
-                return f"[Error: {e}]"
+                print(f"[Warning: OpenCode Go call failed ({e}); falling back to local citation]")
 
-    # 5. Live Runs
-    test_questions = full_df["question"].unique()[:3].tolist()
-    for question in test_questions:
-        print(f"\n--- RAG RUN: {question} ---")
-        contexts = retrieve(question, k=3)
-        answer = generate_answer(question, contexts)
-        print(f"Final Answer:\n{answer}")
+        # Fallback if API key missing or network failure
+        top = retrieved_df.iloc[0]
+        return f"[Synthesized from Doc {top['doc_id']}: {top['title']}] Evidence indicates: {top['text'][:200]}..."
+
+    # 6. Execute Scientific Claims Evaluation
+    test_claims = [
+        "Microstructural development of human cerebral cortex and white matter can be measured in vivo.",
+        "Cerebral organoids model human brain development and microcephaly pathogenesis."
+    ]
+
+    for claim in test_claims:
+        print("\n" + "=" * 70)
+        print(f"Scientific Claim: \"{claim}\"")
+        matches = retrieve(claim, k=3)
+        dist_col = "distance" if "distance" in matches.columns else "_distance"
+        print(f"Retrieved {len(matches)} papers (top match dist: {matches[dist_col].iloc[0]:.4f} - Doc {matches['doc_id'].iloc[0]})")
+        
+        answer = generate_answer(claim, matches)
+        print(f"\nSynthesized Evaluation:\n{answer}")
+
+    # 7. Cleanup
+    if os.path.exists(db_path):
+        shutil.rmtree(db_path)
+    print("\n=== Demo Complete ===")
 
 if __name__ == "__main__":
     run_rag_demo()
