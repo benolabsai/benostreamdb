@@ -20,9 +20,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   match the current public API (distance function names, `ComputeContext` /
   `Device`, catalog `create_catalog` + `load_table`, index configuration shape,
   maintenance calls, and Iceberg V2/V3 behavior).
-- **Dependency advisories** — updated `ctutils` to 0.4.5 (RUSTSEC-2026-0385) and
-  `clipboard-win` to 5.4.3 (yanked-version warning), and dropped the stale
-  RUSTSEC-2026-0381 ignore from `deny.toml` / `audit.toml`.
+- **Dependency advisories** — updated `ctutils` to 0.4.5 (RUSTSEC-2026-0385),
+  `tokio` to 1.54.1 (RUSTSEC-2026-0386), and `clipboard-win` to 5.4.3
+  (yanked-version warning), and dropped the stale RUSTSEC-2026-0381 ignore from
+  `deny.toml` / `audit.toml`.
 
 ## [0.13.0]
 

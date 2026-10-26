@@ -7,14 +7,14 @@
 ### 1. Graph Degree Skew (Power-Law / Scale-Free Network)
 
 - **Dataset**: Scale-free network (20,000 nodes, 99,975 edges, max node degree = 667)
-- **Global PageRank (20 iterations)**: **16.43 ms**
+- **Global PageRank (20 iterations)**: **23.83 ms**
 
 | Degree Stratum | Avg Degree | 2-Hop Subgraph p50 | 2-Hop Subgraph p99 | Expanded Edges | Shortest Path p50 | Shortest Path p99 |
 |---|---|---|---|---|---|---|
-| **Low Degree (p25)** | 5.0 | **33.93 ms** | 42.60 ms | 239.0 | 0.05 ms | 2.48 ms |
-| **Median Degree (p50)** | 6.5 | **33.03 ms** | 36.40 ms | 347.0 | 0.05 ms | 0.07 ms |
-| **High Degree (p90)** | 10.6 | **34.15 ms** | 42.15 ms | 564.0 | 0.07 ms | 1.14 ms |
-| **Supernode Hub (p99+)** | 92.9 | **34.06 ms** | 38.79 ms | 5,676.0 | 2.51 ms | 4.44 ms |
+| **Low Degree (p25)** | 5.0 | **40.62 ms** | 49.84 ms | 239.0 | 0.06 ms | 2.03 ms |
+| **Median Degree (p50)** | 6.5 | **38.86 ms** | 43.05 ms | 347.0 | 0.06 ms | 0.09 ms |
+| **High Degree (p90)** | 10.6 | **40.27 ms** | 47.14 ms | 564.0 | 0.09 ms | 1.40 ms |
+| **Supernode Hub (p99+)** | 92.9 | **39.72 ms** | 44.59 ms | 5,676.0 | 3.43 ms | 6.18 ms |
 
 ### 2. Relational Filter Skew (Zipfian 80/20 Hot-Key Workload)
 
@@ -23,9 +23,9 @@
 
 | Query Pattern | Selectivity / Match Density | p50 Latency | p90 Latency | p99 Latency | Tail Inflation (p99/p50) | Status |
 |---|---|---|---|---|---|---|
-| **Hot-Key Point Filter** | Dense (Heavy Aggregation) | **5.30 ms** | - | 6.73 ms | 1.27x | ✅ PASS |
-| **Cold-Key Point Filter** | Sparse (Pruned Scans) | **4.57 ms** | - | 5.53 ms | 1.21x | ✅ PASS |
-| **Production Workload Mix (80/20)** | 80% Hot / 20% Cold | **4.91 ms** | 5.23 ms | **5.58 ms** | **1.14x** | ✅ PASS |
+| **Hot-Key Point Filter** | Dense (Heavy Aggregation) | **6.64 ms** | - | 9.16 ms | 1.38x | ✅ PASS |
+| **Cold-Key Point Filter** | Sparse (Pruned Scans) | **5.90 ms** | - | 6.63 ms | 1.12x | ✅ PASS |
+| **Production Workload Mix (80/20)** | 80% Hot / 20% Cold | **6.64 ms** | 7.11 ms | **8.15 ms** | **1.23x** | ✅ PASS |
 
 ### Skew Resilience Invariants Verified
 - **CSR Graph Supernode Traversal**: 2-hop neighborhood expansion on high-degree supernodes expands thousands of edges in low single-digit milliseconds without thrashing memory.

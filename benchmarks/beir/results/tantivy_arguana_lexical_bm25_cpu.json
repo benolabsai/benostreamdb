@@ -1,26 +1,29 @@
 {
   "engine": "tantivy",
-  "index": "bm25",
+  "index": "-",
   "dataset": "arguana",
   "workload": "lexical_bm25",
   "backend": "cpu",
   "queries": 1406,
   "k": 10,
-  "build_s": 0.202,
-  "index_mb": 10.44,
+  "build_s": 0.138,
+  "index_mb": 10.45,
   "recall_at_k": 0.67,
   "ndcg_at_k": 0.3226,
   "mrr_at_k": 0.2137,
-  "qps": 381.6,
-  "p50_ms": 2.486,
-  "p99_ms": 5.285,
+  "qps": 281.2,
+  "p50_ms": 3.388,
+  "p99_ms": 7.113,
   "env": {
     "cpu_model": "x86_64",
     "cores": 32,
     "ram_gb": 121.4,
-    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
-    "python": "3.12.15",
-    "containerized": true,
-    "gpus": []
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "python": "3.14.4",
+    "containerized": false,
+    "gpus": [
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+    ]
   }
 }

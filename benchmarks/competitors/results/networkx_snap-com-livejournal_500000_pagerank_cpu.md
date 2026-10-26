@@ -8,8 +8,9 @@
 | algorithm | pagerank |
 | nodes | 291629 |
 | edges | 478351 |
-| seconds | 1.135 |
+| seconds | 0.948 |
 | result_size | 291629 |
 | dataset | snap-com-livejournal_500000 |
+| device | cpu |
 | layer | embedded (in-process Python) |
-| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-34-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |
+| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=32, ram_gb=121.4, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-38-generic-x86_64-with-glibc2.43, python=3.14.4, containerized=False, gpus=['NVIDIA GeForce RTX 5070 Ti, 16303 MiB', 'NVIDIA GeForce RTX 5070 Ti, 16303 MiB'] |

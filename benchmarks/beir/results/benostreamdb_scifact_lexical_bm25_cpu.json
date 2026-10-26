@@ -1,26 +1,29 @@
 {
   "engine": "benostreamdb",
-  "index": "bm25",
+  "index": "-",
   "dataset": "scifact",
   "workload": "lexical_bm25",
   "backend": "cpu",
   "queries": 300,
   "k": 10,
-  "build_s": 0.364,
+  "build_s": 0.469,
   "index_mb": 3.31,
   "recall_at_k": 0.7909,
   "ndcg_at_k": 0.6617,
   "mrr_at_k": 0.6276,
-  "qps": 422.6,
-  "p50_ms": 2.239,
-  "p99_ms": 3.94,
+  "qps": 301.7,
+  "p50_ms": 3.058,
+  "p99_ms": 5.812,
   "env": {
     "cpu_model": "x86_64",
     "cores": 32,
     "ram_gb": 121.4,
-    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
-    "python": "3.12.15",
-    "containerized": true,
-    "gpus": []
+    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "python": "3.14.4",
+    "containerized": false,
+    "gpus": [
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+    ]
   }
 }

@@ -5,15 +5,15 @@
 - **Evaluated Queries**: 323
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
-- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
-- **GPUs**: none (CPU-only host)
+- **Resource Envelope**: unconstrained (host)
+- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB, NVIDIA GeForce RTX 5070 Ti, 16303 MiB
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.28s | 2.5 MB | **1059.9** | **0.71 ms** | 1.65 ms | 0.1491 | 0.3069 |
-| **tantivy** | `cpu` | ✅ Pass | 0.14s | 6.2 MB | **8180.4** | **0.07 ms** | 0.34 ms | 0.1452 | 0.3001 |
-| **opensearch** | `cpu` | ✅ Pass | 0.52s | 4.8 MB | **1495.3** | **0.69 ms** | 0.91 ms | 0.1532 | 0.3215 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.34s | 2.5 MB | **756.4** | **1.01 ms** | 2.29 ms | 0.1491 | 0.3069 |
+| **tantivy** | `cpu` | ✅ Pass | 0.08s | 6.2 MB | **8825.0** | **0.07 ms** | 0.22 ms | 0.1438 | 0.2992 |
+| **opensearch** | `cpu` | ✅ Pass | 0.74s | 4.8 MB | **801.1** | **1.21 ms** | 1.99 ms | 0.1532 | 0.3215 |
 
 ### Differential Oracle & Result Agreement
 

@@ -1,106 +1,104 @@
 import benostreamdb as bsdb
 import pandas as pd
 import numpy as np
-
-# Set pandas options to show full text in results
-pd.set_option('display.max_colwidth', None)
-pd.set_option('display.width', 1000)
-pd.set_option('display.max_rows', 50)
 import os
 import shutil
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
 import warnings
 
-# Suppress warnings
 warnings.filterwarnings('ignore')
 
-def run_demo():
-    print("=== BenoStreamDB Basics Demo ===")
+# Set pandas options to show clean formatted results
+pd.set_option('display.max_colwidth', 100)
+pd.set_option('display.width', 1000)
+pd.set_option('display.max_rows', 50)
 
-    # 1. Setup
-    db_path = "news_db"
+def run_demo():
+    print("=== BenoStreamDB Basics Demo (SciFact Dataset) ===")
+
+    # 1. Setup Table Path
+    db_path = "scifact_news_db"
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
 
-    # Initialize the Intel GPU context (or CPU if not available)
-    # Note: If "intel" fails, fallback to CPU
+    # Initialize Hardware Compute Context
+    ctx = None
+    for target in ["cuda", "intel"]:
+        try:
+            ctx = bsdb.ComputeContext(target)
+            print(f"Using {target.upper()} GPU compute context")
+            break
+        except Exception:
+            pass
+    if ctx is None:
+        print("Using CPU compute context")
+
+    # 2. Load Real SciFact Dataset from Hugging Face
+    print("\nLoading SciFact scientific literature dataset from Hugging Face...")
     try:
-        ctx = bsdb.ComputeContext("intel")
-        print("Using Intel GPU context")
-    except Exception as e:
-        print(f"Intel GPU not available ({e}), using CPU")
-        ctx = None
+        corpus = load_dataset("mteb/scifact", "corpus", split="corpus[:200]")
+    except Exception:
+        corpus = load_dataset("BeIR/scifact", "corpus", split="corpus[:200]")
+    
+    df = pd.DataFrame(corpus)
+    # Ensure standard schema: doc_id, title, text
+    df = df.rename(columns={"_id": "doc_id"})
+    print(f"Loaded {len(df)} peer-reviewed scientific papers.")
 
-    # 2. Load Data
-    print("\nLoading AG News dataset...")
-    dataset = load_dataset("ag_news", split="test[:500]")
-    df = pd.DataFrame(dataset)
-    label_map = {0: "World", 1: "Sports", 2: "Business", 3: "Sci/Tech"}
-    df["category"] = df["label"].map(label_map)
-
-    # 3. Embedding
-    print(f"Embedding {len(df)} articles using BAAI/bge-small-en-v1.5...")
-    model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+    # 3. Embedding Generation
+    print("Embedding scientific abstracts using sentence-transformers/all-MiniLM-L6-v2...")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
     embeddings = model.encode(df["text"].tolist())
     df["embedding"] = [list(e) for e in embeddings]
 
-    # 4. Ingest into BenoStreamDB
+    # 4. Ingest into BenoStreamDB Table
     print("\nIngesting into BenoStreamDB...")
     table = bsdb.Table(db_path, device=ctx)
     
-    # Enable Vector Indexing for the embedding column and Inverted Index for category
-    # Note: Use add_index_columns for multiple columns
-    table.add_index_columns(["embedding", "category", "text"])
-    
-    table.write(df)
+    # Overlay indexing: HNSW vector index + Inverted index on text/title
+    table.add_index_columns(["embedding", "doc_id", "title"])
+    table.write_pandas(df)
     table.commit()
-    print("Ingestion complete.")
+    print(f"Ingestion complete: {len(df)} documents indexed.")
 
-    # 5. Scalar Filtering
-    print("\n--- Scalar Filtering ---")
-    # Using the fluent API: table.filter(expr).to_pandas()
-    # Or table.to_pandas(filter=expr)
-    sports_query = table.filter("category = 'Sports'")
-    sports_df = sports_query.to_pandas()
-    print(f"Found {len(sports_df)} sports articles.")
-    if len(sports_df) > 0:
-        print(sports_df[["category", "text"]].head())
+    # 5. Scalar Filtering (Inverted Index)
+    print("\n--- 1. Scalar Filtering (Fast RoaringBitmap Inverted Index) ---")
+    # Filter documents by keyword in title
+    cancer_docs = table.filter("title LIKE '%cancer%' OR title LIKE '%cells%'").to_pandas()
+    print(f"Found {len(cancer_docs)} cellular / oncology papers:")
+    if not cancer_docs.empty:
+        print(cancer_docs[["doc_id", "title"]].head())
 
-    # 6. Vector Search
-    print("\n--- Vector Search ---")
-    query_text = "Winning medals in international sports competitions"
+    # 6. Vector Search (HNSW Index)
+    print("\n--- 2. Semantic Vector Search (HNSW) ---")
+    query_text = "Microstructural development of human cerebral cortex and white matter"
     query_embedding = list(model.encode(query_text))
 
-    # Using the fluent API: table.filter(vector_filter=...).to_pandas()
-    # Or table.to_pandas(vector_filter=...)
-    # The current API seems to prefer vector_filter as a dict or list in to_pandas
+    print(f"Query: '{query_text}'")
+    results = table.filter(vector_filter=query_embedding, k=5).to_pandas()
     
-    print(f"Searching for: '{query_text}'")
-    results = table.to_pandas(vector_filter=query_embedding, k=5)
-    
-    if "_distance" in results.columns:
-        print(results[["category", "text", "_distance"]])
-    elif "distance" in results.columns:
-        print(results[["category", "text", "distance"]])
-    else:
-        print(results[["category", "text"]])
+    dist_col = "distance" if "distance" in results.columns else "_distance"
+    cols = ["doc_id", "title", dist_col]
+    print(results[cols].to_string(index=False))
 
-    # 7. Hybrid Search
-    print("\n--- Hybrid Search (Sci/Tech + Vector) ---")
-    query_text = "What is the latest news in Artificial Intelligence?"
-    query_embedding = list(model.encode(query_text))
-    # Use Fluent API (as requested by user)
-    hybrid_results = (table.filter("category = 'Sci/Tech'")
-                           .vector_search(query_embedding, k=5)
-                           .to_pandas())
+    # 7. Hybrid Search (Scalar Filter + HNSW Vector Search)
+    print("\n--- 3. Hybrid Search (Title Filter + Vector Search) ---")
+    hybrid_results = table.to_pandas(
+        filter="title LIKE '%human%' OR title LIKE '%cells%'",
+        vector_filter=query_embedding,
+        k=3
+    )
     if not hybrid_results.empty:
-        cols = ["category", "text"]
-        if "_distance" in hybrid_results.columns: cols.append("_distance")
-        elif "distance" in hybrid_results.columns: cols.append("distance")
-        print(hybrid_results[cols].to_string())
+        dist_col = "distance" if "distance" in hybrid_results.columns else "_distance"
+        print(hybrid_results[["doc_id", "title", dist_col]].to_string(index=False))
     else:
-        print("No results found for hybrid search.")
+        print("No results found for hybrid criteria.")
+
+    # Clean up
+    if os.path.exists(db_path):
+        shutil.rmtree(db_path)
+    print("\nDemo completed successfully.")
 
 if __name__ == "__main__":
     run_demo()
