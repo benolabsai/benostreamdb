@@ -1,7 +1,10 @@
 package com.benostreamdb.spark
 
 import com.benostreamdb.spark.jni.BenoStreamJNIBridge
-import scala.jdk.CollectionConverters._
+// `scala.collection.JavaConverters` (not `scala.jdk.CollectionConverters`) because
+// this file is shared by the Scala 2.12 (Spark 3.5) and 2.13 (Spark 4.x) builds.
+// It matches BenoStreamJson, the other shared converter user.
+import scala.collection.JavaConverters._
 import org.apache.arrow.c.{ArrowArray, ArrowSchema, Data}
 import org.apache.arrow.memory.RootAllocator
 import org.apache.arrow.vector.VectorSchemaRoot

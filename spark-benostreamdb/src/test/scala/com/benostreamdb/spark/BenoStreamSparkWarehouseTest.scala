@@ -26,15 +26,24 @@ import scala.util.Try
 class BenoStreamSparkWarehouseTest {
 
   private val procedureCatalogClass = "com.benostreamdb.spark.BenoStreamProcedureCatalog"
+  private val tableCatalogClass = "com.benostreamdb.spark.BenoStreamCatalog"
 
-  private def procedureCatalogAvailable: Boolean =
-    Try(Class.forName(procedureCatalogClass)).isSuccess
+  /**
+   * True only where the procedure catalog is *also* the table catalog.
+   *
+   * Spark 4's `BenoStreamProcedureCatalog` extends `BenoStreamCatalog` (tables +
+   * `system.*` procedures). Spark 3.5's class of the same name is an Iceberg
+   * `ProcedureCatalog` shim with no table support, so procedures and tables cannot
+   * share one catalog there.
+   */
+  private def procedureCatalogHasTables: Boolean =
+    Try {
+      val procedureCatalog = Class.forName(procedureCatalogClass)
+      Class.forName(tableCatalogClass).isAssignableFrom(procedureCatalog)
+    }.getOrElse(false)
 
-  // `BenoStreamProcedureCatalog` (Spark 4) adds `system.*` procedures to the same
-  // table catalog; Spark 3.5 uses the base catalog.
   private def catalogClass: String =
-    if (procedureCatalogAvailable) procedureCatalogClass
-    else "com.benostreamdb.spark.BenoStreamCatalog"
+    if (procedureCatalogHasTables) procedureCatalogClass else tableCatalogClass
 
   private var spark: SparkSession = _
   private var warehouse: java.nio.file.Path = _
@@ -42,6 +51,10 @@ class BenoStreamSparkWarehouseTest {
   @Before
   def setUp(): Unit = {
     warehouse = Files.createTempDirectory("bsdb-spark-warehouse-")
+    // `SparkSession.getOrCreate` returns whatever session another test class left
+    // behind, ignoring the catalog config below. Start from a clean session so the
+    // warehouse catalog is actually installed.
+    SparkSession.getActiveSession.foreach(_.stop())
     spark = SparkSession
       .builder()
       .master("local[2]")
@@ -137,75 +150,55 @@ class BenoStreamSparkWarehouseTest {
   }
 
   /**
-   * `show_indexes` must hand Spark a scan over the engine's index listing.
+   * `CALL add_index(...)` with no ALGORITHM, then `CALL show_indexes(...)`.
    *
-   * `CALL` is used via reflection because the Spark 4 procedure class does not
-   * exist in the Spark 3.5 build, and the index is created through the same JNI
-   * bridge the procedure uses (Spark 4.0.1's `CALL` rejects parameters carrying
-   * default values, which is a Spark-side limitation, not a connector one).
+   * Covers two user-visible contracts at once:
+   *
+   *  * a VARCHAR procedure parameter default is a *quoted SQL literal* (Spark
+   *    parses `defaultValue` as an expression, so unquoted `vector` fails with
+   *    `INVALID_DEFAULT_VALUE.UNRESOLVED_EXPRESSION`);
+   *  * procedure output reaches the user as rows — the connector's scan has to be
+   *    a `LocalScan`, otherwise Spark aborts with "Only local scans are
+   *    temporarily supported as procedure output".
    */
   @Test
-  def showIndexesScanCarriesTheConnectorColumns(): Unit = {
+  def callAcceptsDefaultedArgument(): Unit = {
     Assume.assumeTrue(
-      "show_indexes result scans exist only on the Spark 4 procedure catalog",
-      procedureCatalogAvailable
+      "CALL against the table catalog exists only on Spark 4",
+      procedureCatalogHasTables
     )
-    spark.sql("CREATE TABLE benostream.default.idx_t (id bigint, label string)")
-    spark.sql("INSERT INTO benostream.default.idx_t VALUES (1, 'graph rag'), (2, 'vector search')")
+    spark.sql("CREATE TABLE benostream.default.call_t (id bigint, label string)")
+    spark.sql("INSERT INTO benostream.default.call_t VALUES (1, 'graph rag')")
 
-    val uri = warehouse.toUri.toString.stripSuffix("/") + "/default/idx_t"
-    val bridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
-    Assert.assertTrue("add_index should succeed", bridge.addIndex(uri, "label", "bm25"))
-    Assert.assertTrue("build_index should succeed", bridge.buildIndex(uri, "all"))
-
-    val procClass = Class.forName("com.benostreamdb.spark.procedures.ShowIndexesProcedure")
-    val procedure = procClass.getDeclaredConstructor().newInstance()
-    val args = new org.apache.spark.sql.catalyst.expressions.GenericInternalRow(
-      Array[Any](org.apache.spark.unsafe.types.UTF8String.fromString("default.idx_t"))
-    )
-    val scans = procClass
-      .getMethod("call", classOf[org.apache.spark.sql.catalyst.InternalRow])
-      .invoke(procedure, args)
-      .asInstanceOf[java.util.Iterator[org.apache.spark.sql.connector.read.Scan]]
-
-    Assert.assertTrue("show_indexes must return a scan", scans.hasNext)
-    val scan = scans.next()
+    // ALGORITHM is omitted on purpose: this is the default-value path.
+    spark.sql("CALL benostream.system.add_index('default.call_t', 'label')")
 
     // The five-column shape is the connector's contract with Trino's
     // `system.list_indexes`; a shape change must fail here.
+    val listing = spark.sql("CALL benostream.system.show_indexes('default.call_t')")
     Assert.assertEquals(
       Seq("column_name", "index_category", "algorithm", "index_id", "format_version"),
-      scan.readSchema().fieldNames.toSeq
+      listing.columns.toSeq
     )
 
-    // The index build is detached, so poll briefly for the listing to catch up.
-    var columnNames = Seq.empty[String]
+    var indexedColumns = Seq.empty[String]
     var attempts = 0
-    while (columnNames.isEmpty && attempts < 40) {
-      val batch = scan.toBatch()
-      val factory = batch.createReaderFactory()
-      columnNames = batch
-        .planInputPartitions()
-        .flatMap { partition =>
-          val reader = factory.createReader(partition)
-          val buffer = scala.collection.mutable.ArrayBuffer.empty[InternalRow]
-          while (reader.next()) {
-            buffer += reader.get().copy()
-          }
-          reader.close()
-          buffer
-        }
-        .map(row => row.getUTF8String(0).toString)
+    while (indexedColumns.isEmpty && attempts < 40) {
+      indexedColumns = spark
+        .sql("CALL benostream.system.show_indexes('default.call_t')")
+        .select("column_name")
+        .collect()
+        .map(_.getString(0))
         .toSeq
-      if (columnNames.isEmpty) {
+        .filter(_ == "label")
+      if (indexedColumns.isEmpty) {
         Thread.sleep(250)
         attempts += 1
       }
     }
-
     Assert.assertTrue(
-      s"show_indexes must surface the built index, got $columnNames",
-      columnNames.contains("label")
+      s"add_index with the defaulted ALGORITHM must register the index, got $indexedColumns",
+      indexedColumns.contains("label")
     )
   }
 }

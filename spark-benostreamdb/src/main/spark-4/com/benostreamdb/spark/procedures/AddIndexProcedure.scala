@@ -17,7 +17,11 @@ class AddIndexProcedure extends UnboundProcedure with BoundProcedure {
     ProcedureParameter.in("column", DataTypes.StringType).build(),
     // hnsw | hnsw_pq | hnsw_tq4 | hnsw_tq8 | bm25 | bloom | bitmap |
     // composite_bitmap | csr_graph | json_path (see the SQL manual).
-    ProcedureParameter.in("algorithm", DataTypes.StringType).defaultValue("vector").build()
+    //
+    // `defaultValue` is parsed as a SQL expression, so a VARCHAR default must be a
+    // quoted literal. Unquoted `"vector"` fails analysis on Spark 4.0.1 with
+    // INVALID_DEFAULT_VALUE.UNRESOLVED_EXPRESSION.
+    ProcedureParameter.in("algorithm", DataTypes.StringType).defaultValue("'vector'").build()
   )
       
   override def call(inputArgs: InternalRow): java.util.Iterator[Scan] = {

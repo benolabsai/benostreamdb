@@ -87,6 +87,14 @@
   engine), matching `trino-testing`.
 
 ### Fixed
+- **Spark `CALL` now works for every procedure** — two connector-side bugs, no
+  JNI/Rust change: a VARCHAR parameter default must be a *quoted* SQL literal
+  (`defaultValue("'vector'")`), because Spark parses the default as an expression
+  and rejected unquoted values with `INVALID_DEFAULT_VALUE.UNRESOLVED_EXPRESSION`;
+  and a procedure's result `Scan` must be a `LocalScan`, or Spark aborts with
+  "Only local scans are temporarily supported as procedure output". Verified with a
+  warehouse-backed `CALL add_index(...)` + `CALL show_indexes(...)` test on Spark
+  4.0.1, 4.1.2 and 4.2.0.
 - **Duplicate rows from file-split scans** — a data file reachable through more
   than one manifest entry (carried-over `EXISTING` entries) was emitted as two
   splits, so a fan-out consumer read its rows twice. `list_scan_splits` now

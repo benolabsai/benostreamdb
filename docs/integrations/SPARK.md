@@ -319,6 +319,15 @@ DELETE FROM benostream.default.users WHERE age < 0;
 
 The full MERGE matrix (UPDATE / DELETE / INSERT clauses, plus standalone UPDATE/DELETE) is verified end-to-end on Spark 3.5.9 and 4.2.0 with whole-stage codegen enabled. Declare the primary key with `CALL benostream.system.set_primary_key('db.tbl', 'id')` (or the `primary_key` table property); when unset, the first column is used. A table with **no** key and no columns cannot service `UPDATE`/`DELETE`; the connector records no predicates for those rows instead of failing the task.
 
+> **Known limitation — task retries are not idempotent.** Rows are appended inside
+> the task's `DataWriter.commit()` (`BatchWrite.commit` is a no-op), so if a task
+> appends successfully and is then retried — the classic "commit acknowledged but
+> lost" case — its rows are appended twice. Spark's default `task.maxFailures=4`
+> allows that retry. Until appends move to the driver-side `BatchWrite.commit`
+> (where only successful attempts' messages are replayed), declare a primary key so
+> duplicates can be upserted away, and keep an eye on task-retry counts in the
+> Spark UI.
+
 **Bounded memory.** The delta writer buffers at most
 `spark.benostream.write.batchSize` (default `10000`) rows/keys before flushing:
 

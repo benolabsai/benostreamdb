@@ -15,7 +15,9 @@ class DropIndexProcedure extends UnboundProcedure with BoundProcedure {
   override def parameters(): Array[ProcedureParameter] = Array(
     ProcedureParameter.in("table", DataTypes.StringType).build(),
     ProcedureParameter.in("column", DataTypes.StringType).build(),
-    ProcedureParameter.in("index_type", DataTypes.StringType).defaultValue("vector").build()
+    // Quoted: Spark parses a procedure default as a SQL expression, so a VARCHAR
+    // default must be a literal.
+    ProcedureParameter.in("index_type", DataTypes.StringType).defaultValue("'vector'").build()
   )
       
   override def call(inputArgs: InternalRow): java.util.Iterator[Scan] = {

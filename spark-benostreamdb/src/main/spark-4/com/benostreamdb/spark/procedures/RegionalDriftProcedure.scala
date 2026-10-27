@@ -30,7 +30,9 @@ class RegionalDriftProcedure extends UnboundProcedure with BoundProcedure {
     ProcedureParameter.in("hops", DataTypes.IntegerType).defaultValue("2").build(),
     ProcedureParameter.in("n_depth", DataTypes.IntegerType).defaultValue("2").build(),
     ProcedureParameter.in("k_followups", DataTypes.IntegerType).defaultValue("3").build(),
-    ProcedureParameter.in("mode", DataTypes.StringType).defaultValue("auto").build()
+    // Quoted: Spark parses a procedure default as a SQL expression, so a VARCHAR
+    // default must be a literal. The integer defaults above are literals already.
+    ProcedureParameter.in("mode", DataTypes.StringType).defaultValue("'auto'").build()
   )
 
   override def call(inputArgs: InternalRow): java.util.Iterator[Scan] = {

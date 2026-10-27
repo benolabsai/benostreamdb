@@ -41,6 +41,18 @@ async fn table_with_two_files() -> Result<(tempfile::TempDir, Table)> {
 async fn scan_splits_are_one_per_data_file() -> Result<()> {
     let (_dir, table) = table_with_two_files().await?;
 
+    // The manifest itself must not list a file twice: if it does, every reader
+    // (SQL included) duplicates that file's rows.
+    let files = table.list_data_files_async().await?;
+    let mut file_paths: Vec<&str> = files.iter().map(|f| f.file_path.as_str()).collect();
+    file_paths.sort_unstable();
+    file_paths.dedup();
+    assert_eq!(
+        files.len(),
+        file_paths.len(),
+        "manifest must not repeat a data file"
+    );
+
     let splits = table.list_scan_splits().await?;
 
     assert_eq!(splits.len(), 2, "one split per committed data file");

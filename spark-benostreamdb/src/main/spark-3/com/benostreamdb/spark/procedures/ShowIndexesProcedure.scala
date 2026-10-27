@@ -7,7 +7,8 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.unsafe.types.UTF8String
 
-import scala.jdk.CollectionConverters._
+// Scala 2.12 (Spark 3.5) only has `scala.collection.JavaConverters`.
+import scala.collection.JavaConverters._
 
 /**
  * `show_indexes(table)`: lists the indexes on a BenoStreamDB table.
