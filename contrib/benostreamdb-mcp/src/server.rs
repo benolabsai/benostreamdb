@@ -3835,6 +3835,107 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    async fn test_handle_rpc_line_request_returns_response() {
+        let server = McpServer::new();
+        let line = r#"{"jsonrpc":"2.0","id":7,"method":"initialize","params":{}}"#;
+        let response = server
+            .handle_rpc_line(line)
+            .await
+            .expect("a request must produce a response");
+        assert_eq!(response.jsonrpc, "2.0");
+        assert_eq!(response.id, json!(7));
+        assert!(response.result.is_some(), "initialize must return a result");
+        assert!(response.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_line_notification_returns_none() {
+        let server = McpServer::new();
+        let line = r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#;
+        assert!(
+            server.handle_rpc_line(line).await.is_none(),
+            "notifications must not produce a response"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_rpc_line_malformed_returns_parse_error() {
+        let server = McpServer::new();
+        let response = server
+            .handle_rpc_line("{not json")
+            .await
+            .expect("a parse error still replies");
+        assert_eq!(response.error.as_ref().map(|e| e.code), Some(-32700));
+    }
+
+    fn sse_state() -> (SseState, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("session-1".to_string(), sender);
+        let state = SseState {
+            server: std::sync::Arc::new(McpServer::new()),
+            sessions: std::sync::Arc::new(std::sync::Mutex::new(sessions)),
+        };
+        (state, receiver)
+    }
+
+    #[tokio::test]
+    async fn test_sse_message_delivers_response_on_the_session_stream() {
+        use axum::extract::{Query, State};
+
+        let (state, mut receiver) = sse_state();
+        let status = sse_message(
+            State(state),
+            Query(std::collections::HashMap::from([(
+                "sessionId".to_string(),
+                "session-1".to_string(),
+            )])),
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string(),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+
+        let payload = receiver
+            .recv()
+            .await
+            .expect("response must be pushed onto the SSE stream");
+        let parsed: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed["id"], json!(1));
+        assert!(parsed["result"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_sse_message_rejects_unknown_session() {
+        use axum::extract::{Query, State};
+
+        let (state, _receiver) = sse_state();
+        let status = sse_message(
+            State(state),
+            Query(std::collections::HashMap::from([(
+                "sessionId".to_string(),
+                "missing".to_string(),
+            )])),
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string(),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_sse_message_requires_a_session_id() {
+        use axum::extract::{Query, State};
+
+        let (state, _receiver) = sse_state();
+        let status = sse_message(
+            State(state),
+            Query(std::collections::HashMap::new()),
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string(),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn test_mcp_initialize() {
         let server = McpServer::new();
         let res = server

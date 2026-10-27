@@ -1,12 +1,4 @@
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic
-Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
+## [0.14.0]
 
 ### Added
 - **Parallel scans (Spark + Trino)** — new native `list_scan_splits` /
@@ -39,6 +31,25 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   pushes the search table functions down.
 - **`connector_inputs` fuzz target** — fuzzes connector-supplied SQL predicates
   (`filter`) and query-vector JSON through `FilterExpr::parse_sql`.
+- **Zero-copy reads through Apache Iceberg** — table metadata, manifests,
+  manifest lists, and data/delete files are now spec-compliant, so Trino's
+  Iceberg connector (`iceberg.system.register_table`), PyIceberg, and Spark read
+  BenoStreamDB tables in place with no export or copy. This covers vector
+  columns, position deletes, and the Parquet field ids external readers require.
+  See `docs/integrations/ICEBERG.md`.
+- **Trino 484 support** alongside 482–483 through a two-band build
+  (`trino.band=d|e`), with band-neutral SPI bases and one-method band shells.
+- **`graph_rag_search` table function** — two-table retrieval that joins a
+  document table to `graph_neighbors` in one statement, backed by the new
+  `Table::sql_multi` / `openQueryMulti` primitive.
+- **`list_indexes` and `regional_drift_search` table functions**, matching the
+  Spark connector (which previously exposed DRIFT as a result-discarding
+  procedure).
+- **Full procedure parity with Spark** — eight procedures under `system`,
+  including `drop_index`, `compact`, `optimize`, and primary-key maintenance,
+  all forwarding to the same native entry points.
+- **Scalar functions** `l2_distance`, `vector_distance`, `sparse_dot_product`,
+  `hybrid_score`, and `reciprocal_rank_fusion` via `Plugin.getFunctions()`.
 
 ### Changed
 - **`hybrid_search` honours `filter`** — Trino no longer rejects a non-empty
@@ -64,6 +75,16 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   replacing `table.split(".").last`.
 - **dbt `datetime` columns map to `timestamp`** instead of raising
   `NotImplementedException`.
+- **Docs repositioned around the lakehouse surface** — README and QUICKSTART now
+  lead with Trino, Spark, dbt, and Arrow Flight SQL setup instead of the
+  embedded-engine-only story.
+- **Connector releases build with the `java` Cargo feature** and fail the build
+  if the native library exports no JNI symbols; CI now builds and tests Trino
+  482/484 and Spark 3.5/4.0 explicitly.
+- **Release workflow** — removed the post-publish rollback job; artifacts are
+  verified before publishing rather than rolled back afterwards.
+- **Trino tests run on JUnit 6.1.3** (`junit-bom`, Surefire 3.6.0, vintage
+  engine), matching `trino-testing`.
 
 ### Fixed
 - **Bounded memory in Spark MERGE/DELETE** — the delta writer buffers at most
@@ -88,43 +109,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - **Python `distance`/`_distance` alias respects projections** — the
   backward-compat alias is added only when the caller did not pass `columns=`,
   so an explicit projection returns exactly the requested columns.
-
-## [0.14.0]
-
-### Added
-- **Zero-copy reads through Apache Iceberg** — table metadata, manifests,
-  manifest lists, and data/delete files are now spec-compliant, so Trino's
-  Iceberg connector (`iceberg.system.register_table`), PyIceberg, and Spark read
-  BenoStreamDB tables in place with no export or copy. This covers vector
-  columns, position deletes, and the Parquet field ids external readers require.
-  See `docs/integrations/ICEBERG.md`.
-- **Trino 484 support** alongside 482–483 through a two-band build
-  (`trino.band=d|e`), with band-neutral SPI bases and one-method band shells.
-- **`graph_rag_search` table function** — two-table retrieval that joins a
-  document table to `graph_neighbors` in one statement, backed by the new
-  `Table::sql_multi` / `openQueryMulti` primitive.
-- **`list_indexes` and `regional_drift_search` table functions**, matching the
-  Spark connector (which previously exposed DRIFT as a result-discarding
-  procedure).
-- **Full procedure parity with Spark** — eight procedures under `system`,
-  including `drop_index`, `compact`, `optimize`, and primary-key maintenance,
-  all forwarding to the same native entry points.
-- **Scalar functions** `l2_distance`, `vector_distance`, `sparse_dot_product`,
-  `hybrid_score`, and `reciprocal_rank_fusion` via `Plugin.getFunctions()`.
-
-### Changed
-- **Docs repositioned around the lakehouse surface** — README and QUICKSTART now
-  lead with Trino, Spark, dbt, and Arrow Flight SQL setup instead of the
-  embedded-engine-only story.
-- **Connector releases build with the `java` Cargo feature** and fail the build
-  if the native library exports no JNI symbols; CI now builds and tests Trino
-  482/484 and Spark 3.5/4.0 explicitly.
-- **Release workflow** — removed the post-publish rollback job; artifacts are
-  verified before publishing rather than rolled back afterwards.
-- **Trino tests run on JUnit 6.1.3** (`junit-bom`, Surefire 3.6.0, vintage
-  engine), matching `trino-testing`.
-
-### Fixed
 - **MERGE, compaction, and TRUNCATE now publish a metadata snapshot.** They
   previously committed manifests only, so external Iceberg readers never saw
   those operations. Snapshots carry the spec's `summary.operation` (`append`,
@@ -228,7 +212,16 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   across GPUs, and an unavailable explicit device raises instead of silently
   running elsewhere. New `Device.initialized` reports whether a device resolved
   to a real backend.
-- **Non-deterministic IVF k-means clustering and CPU-dependent list count causing vector search recall test failures** — `simple_kmeans` in `src/core/index/ivf.rs` sampled initial centroids using unseeded `rand::thread_rng()`, and `n_lists` for small collections ($N < 1000$) scaled with `num_cpus.min(4)`, producing different cluster topologies on 2-vCPU CI runners versus multi-core workstations. Added `simple_kmeans_with_seed`, defaulting to deterministic PRNG seed `0x00C0_FFEE_1337` (configurable via `BSDB_KMEANS_SEED` and `BSDB_HNSW_SEED`), exposed `seed` in `Device.kmeans(..., seed=...)`, and normalized small collection cluster counts to a constant `4`.
+- **Non-deterministic IVF k-means clustering and CPU-dependent list count
+  causing vector search recall test failures** — `simple_kmeans` in
+  `src/core/index/ivf.rs` sampled initial centroids using unseeded
+  `rand::thread_rng()`, and `n_lists` for small collections (`N < 1000`) scaled
+  with `num_cpus.min(4)`, producing different cluster topologies on 2-vCPU CI
+  runners versus multi-core workstations. Added `simple_kmeans_with_seed`,
+  defaulting to deterministic PRNG seed `0x00C0_FFEE_1337` (configurable via
+  `BSDB_KMEANS_SEED` and `BSDB_HNSW_SEED`), exposed `seed` in
+  `Device.kmeans(..., seed=...)`, and normalized small collection cluster counts
+  to a constant `4`.
 - **Disk-cache key collisions across stores, runs, and CI steps** (long-standing;
   present since the on-disk index cache was introduced) — `DiskCache` hashed only
   the relative object path into the host-global `/tmp/hdb_cache`, so an entry

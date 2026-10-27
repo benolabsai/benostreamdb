@@ -1180,3 +1180,79 @@ fn xdbc_type_info_data() -> Result<arrow_flight::sql::metadata::XdbcTypeInfoData
     }
     builder.build().map_err(|e| Status::internal(e.to_string()))
 }
+
+#[cfg(test)]
+mod stream_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+    use futures::StreamExt;
+    use std::sync::Arc;
+
+    fn schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new("n", DataType::Int32, false)]))
+    }
+
+    fn batch(schema: &Arc<Schema>, rows: usize) -> RecordBatch {
+        let values: Vec<i32> = (0..rows as i32).collect();
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(values))])
+            .expect("sample batch")
+    }
+
+    fn stream_of(
+        schema: Arc<Schema>,
+        batches: Vec<RecordBatch>,
+    ) -> datafusion::physical_plan::SendableRecordBatchStream {
+        Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::iter(batches.into_iter().map(Ok)),
+        ))
+    }
+
+    #[tokio::test]
+    async fn rows_within_the_cap_stream_cleanly() {
+        let schema = schema();
+        let batches = vec![batch(&schema, 3)];
+        let mut stream =
+            stream_batches_as_flight_data(schema.clone(), stream_of(schema, batches), 10);
+
+        let mut messages = 0;
+        while let Some(item) = stream.next().await {
+            item.expect("no error while under the row cap");
+            messages += 1;
+        }
+        assert!(
+            messages >= 2,
+            "expect the schema message plus at least one data message, got {messages}"
+        );
+    }
+
+    #[tokio::test]
+    async fn exceeding_the_cap_maps_to_resource_exhausted() {
+        let schema = schema();
+        let batches = vec![batch(&schema, 5)];
+        // Cap below the batch size: the guard must fail the stream mid-flight
+        // instead of buffering the whole result and rejecting it up front.
+        let mut stream =
+            stream_batches_as_flight_data(schema.clone(), stream_of(schema, batches), 2);
+
+        let mut failure = None;
+        while let Some(item) = stream.next().await {
+            if let Err(status) = item {
+                failure = Some(status);
+                break;
+            }
+        }
+
+        let status = failure.expect("stream must fail once the cap is exceeded");
+        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+        assert!(
+            status.message().contains("row limit"),
+            "unexpected message: {}",
+            status.message()
+        );
+    }
+}

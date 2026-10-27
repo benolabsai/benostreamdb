@@ -119,11 +119,15 @@ object BenoStreamScanBuilder {
 
   private[spark] val mapper = new com.fasterxml.jackson.databind.ObjectMapper()
 
-  private[spark] def splitFanoutEnabled(): Boolean =
-    Option(org.apache.spark.sql.SparkSession.getActiveSession)
+  private[spark] def splitFanoutEnabled(): Boolean = {
+    // `RuntimeConfig` has no typed getLong in every supported Spark version, and
+    // a non-numeric value must not fail the scan.
+    val raw = Option(org.apache.spark.sql.SparkSession.getActiveSession)
       .flatten
-      .map(_.conf.getLong(SplitMaxSizeConf, DefaultSplitMaxSizeBytes))
-      .getOrElse(DefaultSplitMaxSizeBytes) > 0L
+      .map(_.conf.get(SplitMaxSizeConf, DefaultSplitMaxSizeBytes.toString))
+      .getOrElse(DefaultSplitMaxSizeBytes.toString)
+    scala.util.Try(raw.trim.toLong).getOrElse(DefaultSplitMaxSizeBytes) > 0L
+  }
 }
 
 // ---- Multi-partition scan: one partition per data file ----

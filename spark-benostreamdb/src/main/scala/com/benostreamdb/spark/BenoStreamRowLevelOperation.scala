@@ -115,11 +115,11 @@ object BenoStreamDeltaWriter {
   val BatchSizeConf: String = "spark.benostream.write.batchSize"
 
   /** Resolve the flush size: write option → table property → Spark conf → default. */
-  def resolveFlushSize(info: LogicalWriteInfo, properties: Map[String, String]): Int = {
+  def resolveFlushSize(info: LogicalWriteInfo, properties: java.util.Map[String, String]): Int = {
     def parse(raw: String): Option[Int] = scala.util.Try(raw.trim.toInt).toOption.filter(_ > 0)
     Option(info.options().get(BatchSizeKey))
       .flatMap(parse)
-      .orElse(properties.get(BatchSizeKey).flatMap(parse))
+      .orElse(Option(properties.get(BatchSizeKey)).flatMap(parse))
       .orElse(
         org.apache.spark.sql.SparkSession.getActiveSession
           .flatMap(s => parse(s.conf.get(BatchSizeConf, ""))))
@@ -198,7 +198,9 @@ class BenoStreamDeltaWriter(
 
     val predicates = scala.collection.mutable.ArrayBuffer.empty[String]
     predicates ++= nullKeyPredicates
-    deleteKeys.grouped(keysPerChunk).foreach(chunk => predicates += renderPredicate(chunk))
+    deleteKeys.iterator
+      .grouped(keysPerChunk)
+      .foreach(chunk => predicates += renderPredicate(chunk.map(_.toSeq).toSeq))
     nullKeyPredicates.clear()
     deleteKeys.clear()
 

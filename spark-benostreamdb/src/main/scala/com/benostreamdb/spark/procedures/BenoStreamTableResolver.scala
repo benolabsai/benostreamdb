@@ -84,6 +84,7 @@ object BenoStreamTableResolver {
         s"BenoStreamDB warehouse is not configured; set $DefaultWarehouseKey or $WarehouseConfKey"))
   }
 
+  /** Trim, and drop *all* trailing slashes so a joined path never doubles them. */
   private def normalize(warehouse: String): String =
-    Option(warehouse).map(_.trim).map(_.stripSuffix("/")).getOrElse("")
+    Option(warehouse).map(_.trim).getOrElse("").replaceAll("/+$", "")
 }

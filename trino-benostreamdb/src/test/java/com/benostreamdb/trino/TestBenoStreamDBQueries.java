@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
+import io.trino.testing.MaterializedRow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -388,16 +389,109 @@ public class TestBenoStreamDBQueries {
     }
 
     @Test
-    void hybridSearchRejectsFilterForNow() {
+    void hybridSearchHonoursFilter() {
         runner.execute(
                 "CREATE TABLE benostreamdb.default.filtered "
                         + "(id bigint, title varchar, embedding array(real))");
+        runner.execute(
+                "INSERT INTO benostreamdb.default.filtered VALUES "
+                        + "(1, 'graph rag', CAST(ARRAY[1.0, 0.0] AS array(real))), "
+                        + "(2, 'graph database', CAST(ARRAY[0.9, 0.1] AS array(real))), "
+                        + "(3, 'vector search', CAST(ARRAY[0.0, 1.0] AS array(real)))");
+        runner.execute(
+                "CALL benostreamdb.system.add_index('default.filtered', 'embedding', 'hnsw')");
+        runner.execute("CALL benostreamdb.system.add_index('default.filtered', 'title', 'bm25')");
+        runner.execute("CALL benostreamdb.system.build_index('default.filtered')");
+
+        // The predicate must be applied to both retrieval paths, so only id = 2
+        // can survive the fusion.
+        MaterializedResult filtered = runner.execute(
+                "SELECT id, rrf_score FROM TABLE(system.hybrid_search("
+                        + "table_name => 'default.filtered', text_column => 'title', "
+                        + "query_text => 'graph', vector_column => 'embedding', "
+                        + "query_vector => '[1.0, 0.0]', k => 5, filter => 'id = 2'))");
+        assertTrue(filtered.getRowCount() >= 1, "the matching row must be returned");
+        for (MaterializedRow row : filtered.getMaterializedRows()) {
+            assertEquals(2L, ((Number) row.getField(0)).longValue(), "filtered row escaped the predicate");
+        }
+
+        // A predicate that matches nothing must return no rows rather than the
+        // unfiltered neighbours.
+        MaterializedResult empty = runner.execute(
+                "SELECT id FROM TABLE(system.hybrid_search("
+                        + "table_name => 'default.filtered', text_column => 'title', "
+                        + "query_text => 'graph', vector_column => 'embedding', "
+                        + "query_vector => '[1.0, 0.0]', k => 5, filter => 'id > 100'))");
+        assertEquals(0, empty.getRowCount(), "impossible filter must not fall back to unfiltered rows");
+    }
+
+    @Test
+    void vectorSearchHonoursMetric() {
+        runner.execute(
+                "CREATE TABLE benostreamdb.default.metrics "
+                        + "(id bigint, embedding array(real))");
+        runner.execute(
+                "INSERT INTO benostreamdb.default.metrics VALUES "
+                        + "(1, CAST(ARRAY[1.0, 0.0] AS array(real))), "
+                        + "(2, CAST(ARRAY[0.0, 1.0] AS array(real)))");
+
+        MaterializedResult l2 = runner.execute(
+                "SELECT id, distance FROM TABLE(system.vector_search("
+                        + "table_name => 'default.metrics', column => 'embedding', "
+                        + "query => '[1.0, 0.0]', k => 2, metric => 'l2'))");
+        assertEquals(2, l2.getRowCount());
+        assertEquals(1L, ((Number) l2.getMaterializedRows().get(0).getField(0)).longValue());
+        assertEquals(0.0, ((Number) l2.getMaterializedRows().get(0).getField(1)).doubleValue(), 1e-6);
+
         org.junit.jupiter.api.Assertions.assertThrows(
                 io.trino.testing.QueryFailedException.class,
                 () -> runner.execute(
-                        "SELECT id FROM TABLE(system.hybrid_search("
-                                + "table_name => 'default.filtered', text_column => 'title', "
-                                + "query_text => 'graph', vector_column => 'embedding', "
-                                + "query_vector => '[1.0]', k => 1, filter => 'id > 0'))"));
+                        "SELECT id FROM TABLE(system.vector_search("
+                                + "table_name => 'default.metrics', column => 'embedding', "
+                                + "query => '[1.0, 0.0]', k => 1, metric => 'levenshtein'))"));
+    }
+
+    @Test
+    void listIndexesReturnsOneRowPerIndex() {
+        runner.execute(
+                "CREATE TABLE benostreamdb.default.listed "
+                        + "(id bigint, title varchar, embedding array(real))");
+        runner.execute(
+                "INSERT INTO benostreamdb.default.listed VALUES "
+                        + "(1, 'graph rag', CAST(ARRAY[1.0, 0.0] AS array(real)))");
+        runner.execute("CALL benostreamdb.system.add_index('default.listed', 'embedding', 'hnsw')");
+        runner.execute("CALL benostreamdb.system.add_index('default.listed', 'title', 'bm25')");
+        runner.execute("CALL benostreamdb.system.build_index('default.listed')");
+
+        MaterializedResult indexes = runner.execute(
+                "SELECT column_name, index_category, algorithm, index_id, format_version "
+                        + "FROM TABLE(system.list_indexes(table_name => 'default.listed'))");
+        assertTrue(indexes.getRowCount() >= 1, "built indexes must be listed");
+        // The five columns are the connector's contract with Spark's
+        // `show_indexes`; a shape change must fail here.
+        assertEquals(5, indexes.getTypes().size());
+        assertEquals("varchar", indexes.getTypes().get(0).getDisplayName());
+        assertEquals("bigint", indexes.getTypes().get(4).getDisplayName());
+    }
+
+    @Test
+    void vectorTransformScalarFunctions() {
+        MaterializedResult result = runner.execute(
+                "SELECT vector_dims(CAST(ARRAY[1.0, 2.0, 3.0] AS array(double))) AS dims, "
+                        + "vector_norm(CAST(ARRAY[3.0, 4.0] AS array(double))) AS norm, "
+                        + "l2_normalize(CAST(ARRAY[3.0, 4.0] AS array(double))) AS unit, "
+                        + "subvector(CAST(ARRAY[10.0, 20.0, 30.0] AS array(double)), 2, 2) AS slice, "
+                        + "vector_add(CAST(ARRAY[1.0, 2.0] AS array(double)), "
+                        + "CAST(ARRAY[3.0, 4.0] AS array(double))) AS sum, "
+                        + "vector_sub(CAST(ARRAY[1.0, 2.0] AS array(double)), "
+                        + "CAST(ARRAY[3.0, 4.0] AS array(double))) AS diff");
+
+        MaterializedRow row = result.getMaterializedRows().get(0);
+        assertEquals(3L, ((Number) row.getField(0)).longValue());
+        assertEquals(5.0, ((Number) row.getField(1)).doubleValue(), 1e-9);
+        assertEquals(java.util.List.of(0.6, 0.8), row.getField(2));
+        assertEquals(java.util.List.of(20.0, 30.0), row.getField(3));
+        assertEquals(java.util.List.of(4.0, 6.0), row.getField(4));
+        assertEquals(java.util.List.of(-2.0, -2.0), row.getField(5));
     }
 }

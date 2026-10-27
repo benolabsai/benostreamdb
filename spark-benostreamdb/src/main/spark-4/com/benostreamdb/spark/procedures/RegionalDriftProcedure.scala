@@ -52,9 +52,12 @@ class RegionalDriftProcedure extends UnboundProcedure with BoundProcedure {
     )
 
     val rows = nodes.map(node => new GenericInternalRow(Array[Any](node)): InternalRow)
-    java.util.Collections.singletonList(
-      new BenoStreamProcedureScan(RegionalDriftProcedure.OutputSchema, rows)
-    ).iterator()
+    // `Iterator` is invariant, so the list must be typed as `Scan` rather than
+    // as the concrete scan class.
+    val scans: java.util.List[Scan] =
+      java.util.Collections.singletonList[Scan](
+        new BenoStreamProcedureScan(RegionalDriftProcedure.OutputSchema, rows))
+    scans.iterator()
   }
 }
 

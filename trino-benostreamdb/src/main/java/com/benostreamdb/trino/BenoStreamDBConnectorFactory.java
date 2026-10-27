@@ -32,17 +32,24 @@ public class BenoStreamDBConnectorFactory implements ConnectorFactory {
     public Connector create(String catalogName, Map<String, String> config, ConnectorContext context) {
         String gpuDevice = config.getOrDefault("benostream.gpu-device", "auto");
         String warehouse = config.getOrDefault("benostream.warehouse", BenoStreamDBTableUri.DEFAULT_WAREHOUSE);
-        return new BenoStreamDBConnector(warehouse, gpuDevice, new BenoStreamProcedures(warehouse));
+        // Opt-in: one split per Parquet file for plain, unfiltered scans.
+        boolean fileGranularity =
+                Boolean.parseBoolean(config.getOrDefault("benostream.split.file-granularity", "false"));
+        return new BenoStreamDBConnector(
+                warehouse, gpuDevice, fileGranularity, new BenoStreamProcedures(warehouse));
     }
 
     private static class BenoStreamDBConnector implements Connector {
         private final String warehouse;
         private final String gpuDevice;
+        private final boolean fileGranularity;
         private final BenoStreamProcedures procedures;
 
-        public BenoStreamDBConnector(String warehouse, String gpuDevice, BenoStreamProcedures procedures) {
+        public BenoStreamDBConnector(
+                String warehouse, String gpuDevice, boolean fileGranularity, BenoStreamProcedures procedures) {
             this.warehouse = warehouse;
             this.gpuDevice = gpuDevice;
+            this.fileGranularity = fileGranularity;
             this.procedures = procedures;
         }
 
@@ -150,9 +157,6 @@ public class BenoStreamDBConnectorFactory implements ConnectorFactory {
 
         @Override
         public ConnectorSplitManager getSplitManager() {
-            // Opt-in: one split per Parquet file for plain, unfiltered scans.
-            boolean fileGranularity =
-                    Boolean.parseBoolean(config.getOrDefault("benostream.split.file-granularity", "false"));
             return new BenoStreamDBSplitManager(warehouse, gpuDevice, fileGranularity);
         }
 

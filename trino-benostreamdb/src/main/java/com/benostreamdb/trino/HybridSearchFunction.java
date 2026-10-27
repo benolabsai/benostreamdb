@@ -23,6 +23,7 @@ import io.trino.spi.type.VarcharType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * {@code system.hybrid_search(table, text_column, query_text, vector_column,

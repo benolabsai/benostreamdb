@@ -36,9 +36,14 @@ class ShowIndexesProcedure extends UnboundProcedure with BoundProcedure {
     val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
     val indexesJson = jniBridge.listIndexes(tableUri)
 
-    java.util.Collections.singletonList(
-      new BenoStreamProcedureScan(ShowIndexesProcedure.OutputSchema, ShowIndexesProcedure.rows(indexesJson))
-    ).iterator()
+    // `Iterator` is invariant, so the list must be typed as `Scan` rather than
+    // as the concrete scan class.
+    val scans: java.util.List[Scan] =
+      java.util.Collections.singletonList[Scan](
+        new BenoStreamProcedureScan(
+          ShowIndexesProcedure.OutputSchema,
+          ShowIndexesProcedure.rows(indexesJson)))
+    scans.iterator()
   }
 }
 
