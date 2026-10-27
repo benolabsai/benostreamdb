@@ -21,8 +21,12 @@ class BenoStreamJNIBridge private () {
   @native def getPrimaryKey(tableUri: String): String
   @native def createTable(tableUri: String, schemaJson: String): Boolean
   @native def appendBatch(tableUri: String, inArrayPtr: Long, inSchemaPtr: Long): Boolean
+  @native def stageBatch(tableUri: String, token: String, inArrayPtr: Long, inSchemaPtr: Long): Boolean
+  @native def commitStaged(tableUri: String, token: String): Boolean
+  @native def discardStaged(token: String): Boolean
   @native def mergeRows(tableUri: String, keyColumns: String, inArrayPtr: Long, inSchemaPtr: Long): Boolean
   @native def deleteRows(tableUri: String, filter: String): Boolean
+  @native def deleteRowsBatch(tableUri: String, predicatesJson: String): Boolean
   @native def openQuery(tableUri: String, sql: String): Long
   @native def readQueryBatch(handle: Long, outArrayPtr: Long, outSchemaPtr: Long): Long
   @native def closeQuery(handle: Long): Unit

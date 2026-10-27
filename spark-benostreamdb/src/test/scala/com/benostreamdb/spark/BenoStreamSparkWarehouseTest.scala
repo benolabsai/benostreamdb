@@ -2,6 +2,8 @@ package com.benostreamdb.spark
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.types.{LongType, StringType, StructType}
+import org.apache.spark.unsafe.types.UTF8String
 import org.junit.{After, Assert, Before, Test}
 import org.junit.Assume
 
@@ -199,6 +201,83 @@ class BenoStreamSparkWarehouseTest {
     Assert.assertTrue(
       s"add_index with the defaulted ALGORITHM must register the index, got $indexedColumns",
       indexedColumns.contains("label")
+    )
+  }
+
+  /**
+   * MERGE exercises the row-level write path, which now also buffers in the task
+   * and applies deletes + inserts in the driver-side commit.
+   */
+  @Test
+  def mergeAppliesDeletesAndInsertsExactlyOnce(): Unit = {
+    Assume.assumeTrue(
+      "row-level operations need a primary key and the Spark 4 catalog",
+      procedureCatalogHasTables
+    )
+    spark.sql("CREATE TABLE benostream.default.merge_t (id bigint, label string)")
+    spark.sql("INSERT INTO benostream.default.merge_t VALUES (1, 'a'), (2, 'b')")
+    spark.sql("CALL benostream.system.set_primary_key('default.merge_t', 'id')")
+    spark.sql(
+      "CREATE OR REPLACE TEMP VIEW merge_src AS "
+        + "SELECT * FROM VALUES (2, 'B'), (3, 'c') AS v(id, label)")
+
+    spark.sql(
+      "MERGE INTO benostream.default.merge_t t USING merge_src s ON t.id = s.id "
+        + "WHEN MATCHED THEN UPDATE SET label = s.label "
+        + "WHEN NOT MATCHED THEN INSERT (id, label) VALUES (s.id, s.label)")
+
+    val rows = spark
+      .table("benostream.default.merge_t")
+      .orderBy("id")
+      .collect()
+      .map(row => (row.getLong(0), row.getString(1)))
+      .toSeq
+    // The updated row replaced the old one (no duplicate) and the new row landed.
+    Assert.assertEquals(Seq((1L, "a"), (2L, "B"), (3L, "c")), rows)
+  }
+
+  /**
+   * The driver-side commit contract, exercised directly.
+   *
+   * Two staged batches must land in **one** snapshot (Spark's `BatchWrite.commit`
+   * is a job-wide commit, not a per-batch one), and committing the same token
+   * twice — which Spark does when it retries `commit` — must not append again.
+   */
+  @Test
+  def stagedAppendCommitsOnceAndIsRetrySafe(): Unit = {
+    spark.sql("CREATE TABLE benostream.default.staged_t (id bigint, label string)")
+    val uri = warehouse.toUri.toString + "/default/staged_t"
+    val schema = new StructType().add("id", LongType).add("label", StringType)
+    def rows(ids: Seq[Long]): Seq[InternalRow] =
+      ids.map(id => InternalRow(id, UTF8String.fromString(s"v$id")))
+
+    val token = java.util.UUID.randomUUID().toString
+    BenoStreamArrowIpc.stage(uri, token, BenoStreamArrowIpc.encode(rows(Seq(1L, 2L)), schema))
+    BenoStreamArrowIpc.stage(uri, token, BenoStreamArrowIpc.encode(rows(Seq(3L)), schema))
+    BenoStreamArrowIpc.commitStaged(uri, token, "cpu")
+    BenoStreamArrowIpc.commitStaged(uri, token, "cpu")
+
+    Assert.assertEquals(
+      "a retried commit must not append the staged rows twice",
+      Seq(1L, 2L, 3L),
+      idsOf("staged_t")
+    )
+
+    val tableDir = java.nio.file.Paths.get(java.net.URI.create(uri))
+    val parquetFiles = {
+      val stream = Files.list(tableDir)
+      try {
+        val out = new scala.collection.mutable.ArrayBuffer[String]()
+        stream.forEach(p => if (p.toString.endsWith(".parquet")) out += p.toString)
+        out.toSeq
+      } finally {
+        stream.close()
+      }
+    }
+    Assert.assertEquals(
+      s"both staged batches must share one commit (one data file), got $parquetFiles",
+      1,
+      parquetFiles.size
     )
   }
 }

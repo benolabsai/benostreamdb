@@ -1388,6 +1388,247 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_deleteR
     }
 }
 
+// -----------------------------------------------------------------------------
+// Driver-side staged writes
+//
+// Spark tasks never mutate the table: they encode their rows as Arrow IPC and
+// the *driver* replays them (`BatchWrite.commit`). The batches are buffered here
+// under a per-write token so the commit is:
+//
+//  * one snapshot — `write_async` sees the whole write instead of one batch, so
+//    a 20-partition INSERT produces one manifest commit, not 20;
+//  * idempotent — the buffer is drained *before* the write, so a repeated
+//    `commit` (Spark retries it on failure, and a task retry after a lost
+//    acknowledgement is exactly the duplicate-row case) finds nothing to apply.
+// -----------------------------------------------------------------------------
+
+/// Batches accepted from a driver, keyed by the write's token.
+struct StagedAppends {
+    uri: String,
+    batches: Vec<arrow::record_batch::RecordBatch>,
+}
+
+fn staged_appends() -> &'static std::sync::Mutex<std::collections::HashMap<String, StagedAppends>> {
+    static STAGED: LazyLock<std::sync::Mutex<std::collections::HashMap<String, StagedAppends>>> =
+        LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    &STAGED
+}
+
+/// Lock the staging map, recovering from poisoning.
+///
+/// The map only ever holds whole `RecordBatch`es, so a panic elsewhere while it
+/// was locked cannot leave it half-mutated; failing the write instead of
+/// recovering would turn an unrelated panic into permanent data loss.
+fn lock_staged_appends(
+) -> std::sync::MutexGuard<'static, std::collections::HashMap<String, StagedAppends>> {
+    match staged_appends().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Buffer one Arrow batch for `token`; the write is committed by
+/// [`commit_staged_impl`]. Returns 1 on success.
+fn stage_append_impl(
+    env: &mut JNIEnv,
+    table_uri: JString,
+    token: JString,
+    in_array_ptr: jlong,
+    in_schema_ptr: jlong,
+) -> jboolean {
+    let uri: String = match env.get_string(&table_uri) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    let token_str: String = match env.get_string(&token) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    if uri.is_empty() || token_str.is_empty() {
+        return 0;
+    }
+    let batch = match unsafe { import_batch(in_array_ptr, in_schema_ptr) } {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("FFI: stageAppendBatch import failed: {}", e);
+            return 0;
+        }
+    };
+    let mut map = lock_staged_appends();
+    match map.get_mut(&token_str) {
+        Some(slot) => {
+            if slot.uri != uri {
+                tracing::error!(
+                    "FFI: stageAppendBatch token {} reused for a different table ({} vs {})",
+                    token_str,
+                    slot.uri,
+                    uri
+                );
+                return 0;
+            }
+            slot.batches.push(batch);
+        }
+        None => {
+            map.insert(
+                token_str,
+                StagedAppends {
+                    uri,
+                    batches: vec![batch],
+                },
+            );
+        }
+    }
+    1
+}
+
+/// Apply everything staged for `token` as a single commit. Returns 1 on success.
+///
+/// A token with nothing staged is *success*: that is the second call of a
+/// retried commit, and it must not append the data again.
+fn commit_staged_impl(env: &mut JNIEnv, table_uri: JString, token: JString) -> jboolean {
+    let uri: String = match env.get_string(&table_uri) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    let token_str: String = match env.get_string(&token) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    if uri.is_empty() || token_str.is_empty() {
+        return 0;
+    }
+    let staged = {
+        let mut map = lock_staged_appends();
+        match map.remove(&token_str) {
+            Some(slot) => slot,
+            None => {
+                tracing::info!(
+                    "FFI: commitStaged token {} has nothing staged (already committed)",
+                    token_str
+                );
+                return 1;
+            }
+        }
+    };
+    if staged.uri != uri {
+        tracing::error!(
+            "FFI: commitStaged token {} belongs to {} but was committed against {}",
+            token_str,
+            staged.uri,
+            uri
+        );
+        return 0;
+    }
+    if staged.batches.is_empty() {
+        return 1;
+    }
+    let rows: usize = staged.batches.iter().map(|b| b.num_rows()).sum();
+    let res = RUNTIME.block_on(async move {
+        let table = Table::new_async(uri).await?;
+        table.write_async(staged.batches).await?;
+        table.commit_async().await?;
+        Ok::<(), anyhow::Error>(())
+    });
+    match res {
+        Ok(()) => {
+            tracing::info!("FFI: committed {} staged rows in one snapshot", rows);
+            1
+        }
+        Err(e) => {
+            tracing::error!("FFI: commitStaged failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Drop a token's staged batches without writing them (failed/aborted write).
+fn discard_staged_impl(env: &mut JNIEnv, token: JString) -> jboolean {
+    let token_str: String = match env.get_string(&token) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    if token_str.is_empty() {
+        return 0;
+    }
+    let mut map = lock_staged_appends();
+    map.remove(&token_str);
+    1
+}
+
+/// Maximum rendered length of one `(p1) OR (p2) OR ...` delete predicate.
+///
+/// The engine parses the predicate into an AST; a single 10 MB chain of ORs
+/// recurses deep enough to exhaust the stack, so longer predicate lists are
+/// applied in several commits instead of failing the write.
+const MAX_DELETE_PREDICATE_CHARS: usize = 200_000;
+
+/// Apply a JSON array of delete predicates, OR-combined per commit.
+///
+/// One MERGE with 10k changed keys renders (at most) ten `pk IN (...)` chunks;
+/// OR-ing them into one predicate makes the whole MERGE a single delete commit
+/// instead of ten.
+fn delete_rows_batch_impl(
+    env: &mut JNIEnv,
+    table_uri: JString,
+    predicates_json: JString,
+) -> jboolean {
+    let uri: String = match env.get_string(&table_uri) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    let raw: String = match env.get_string(&predicates_json) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    if uri.is_empty() {
+        return 0;
+    }
+    let predicates: Vec<String> = serde_json::from_str::<Vec<String>>(&raw)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| !p.trim().is_empty())
+        .collect();
+    if predicates.is_empty() {
+        return 1;
+    }
+
+    let mut groups: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for predicate in predicates {
+        let rendered = format!("({})", predicate);
+        if !current.is_empty() {
+            if current.len() + rendered.len() + 4 > MAX_DELETE_PREDICATE_CHARS {
+                groups.push(std::mem::take(&mut current));
+            } else {
+                current.push_str(" OR ");
+            }
+        }
+        current.push_str(&rendered);
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    let group_count = groups.len();
+    let res = RUNTIME.block_on(async move {
+        let table = Table::new_async(uri).await?;
+        for group in groups {
+            table.delete_async(&group).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    });
+    match res {
+        Ok(()) => {
+            tracing::info!("FFI: applied deletes in {} commit(s)", group_count);
+            1
+        }
+        Err(e) => {
+            tracing::error!("FFI: deleteRowsBatch failed: {}", e);
+            0
+        }
+    }
+}
+
 // The schema JSON helpers live in `crate::core::jni_util` so they can be fuzzed
 // without the `java` feature (and therefore without a JVM).
 use crate::core::jni_util::{schema_from_json, schema_to_json};
@@ -1704,9 +1945,6 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_buildIn
     }
 }
 
-/// Trino: run vector + BM25 retrieval, fuse with RRF, and stream the hydrated
-/// rows. The fused score is returned as `rrf_score`.
-#[no_mangle]
 // -----------------------------------------------------------------------------
 // Index and primary-key maintenance (canonical Trino entry points)
 // -----------------------------------------------------------------------------
@@ -1885,6 +2123,8 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_listInd
     list_indexes_impl(env, table_uri)
 }
 
+/// Trino: run vector + BM25 retrieval, fuse with RRF, and stream the hydrated
+/// rows. The fused score is returned as `rrf_score`.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_hybridSearch(
     mut env: JNIEnv,
@@ -1922,7 +2162,7 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_hybridS
     let filter_sql: Option<String> = env
         .get_string(&filter)
         .ok()
-        .map(|s| String::from(s))
+        .map(String::from)
         .filter(|s| !s.trim().is_empty());
 
     if uri.is_empty() || text_col.is_empty() || vec_col.is_empty() || vec_json.is_empty() {
@@ -2248,6 +2488,51 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_delet
     filter: JString,
 ) -> jboolean {
     Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_deleteRows(env, class, table_uri, filter)
+}
+
+/// Spark: buffer one driver-replayed batch under `token`.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_stageBatch(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    token: JString,
+    in_array_ptr: jlong,
+    in_schema_ptr: jlong,
+) -> jboolean {
+    stage_append_impl(&mut env, table_uri, token, in_array_ptr, in_schema_ptr)
+}
+
+/// Spark: commit everything staged for `token` as a single snapshot.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_commitStaged(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    token: JString,
+) -> jboolean {
+    commit_staged_impl(&mut env, table_uri, token)
+}
+
+/// Spark: drop a token's staged batches without writing them.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_discardStaged(
+    mut env: JNIEnv,
+    _class: JClass,
+    token: JString,
+) -> jboolean {
+    discard_staged_impl(&mut env, token)
+}
+
+/// Spark: apply a JSON array of delete predicates (OR-combined per commit).
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_deleteRowsBatch(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    predicates_json: JString,
+) -> jboolean {
+    delete_rows_batch_impl(&mut env, table_uri, predicates_json)
 }
 
 #[no_mangle]

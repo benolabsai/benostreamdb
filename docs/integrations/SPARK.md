@@ -319,25 +319,59 @@ DELETE FROM benostream.default.users WHERE age < 0;
 
 The full MERGE matrix (UPDATE / DELETE / INSERT clauses, plus standalone UPDATE/DELETE) is verified end-to-end on Spark 3.5.9 and 4.2.0 with whole-stage codegen enabled. Declare the primary key with `CALL benostream.system.set_primary_key('db.tbl', 'id')` (or the `primary_key` table property); when unset, the first column is used. A table with **no** key and no columns cannot service `UPDATE`/`DELETE`; the connector records no predicates for those rows instead of failing the task.
 
-> **Known limitation — task retries are not idempotent.** Rows are appended inside
-> the task's `DataWriter.commit()` (`BatchWrite.commit` is a no-op), so if a task
-> appends successfully and is then retried — the classic "commit acknowledged but
-> lost" case — its rows are appended twice. Spark's default `task.maxFailures=4`
-> allows that retry. Until appends move to the driver-side `BatchWrite.commit`
-> (where only successful attempts' messages are replayed), declare a primary key so
-> duplicates can be upserted away, and keep an eye on task-retry counts in the
-> Spark UI.
+**Exactly-once writes (two-phase driver commit).** Spark calls
+`DataWriter.commit()` inside the task and `BatchWrite.commit(messages)` once on
+the driver. Only the driver call is a valid commit point: a task can succeed and
+then be retried, and Spark replays the messages of successful attempts only. So:
 
-**Bounded memory.** The delta writer buffers at most
-`spark.benostream.write.batchSize` (default `10000`) rows/keys before flushing:
+1. the task **encodes** its rows as Arrow IPC and returns them in
+   `BenoStreamCommitMessage` — it never touches the table;
+2. the driver decodes them into a per-write staging buffer (keyed by a token
+   minted when the writer factory is built) and commits that buffer in **one**
+   `write_async` + `commit_async` — a single snapshot for the whole job, not one
+   per partition or per encoded batch;
+3. the buffer is drained *before* it is written, so Spark retrying `commit`
+   (which it does on failure) appends nothing the second time.
+
+MERGE uses the same commit point: the driver applies every rendered delete
+predicate as one OR-combined `deleteRows` commit, then the staged inserts, in that
+order — an UPDATE reuses the key, so inserting first would let the delete reap the
+new row.
+
+Conformance with Iceberg's Spark driver (`iceberg-spark-runtime`), verified against
+the 1.11.0 jar:
+
+| Contract | Iceberg | This connector |
+| --- | --- | --- |
+| `BatchWrite.createBatchWriterFactory` | `SparkWrite$BaseBatchWrite` | `BenoStreamBatchWrite` |
+| `DataWriter` writes into the engine | no — writes Parquet data files | no — encodes Arrow IPC |
+| `WriterCommitMessage` payload | `SparkWrite$TaskCommit` → `DataFile[] files()` (metadata only) | `BenoStreamCommitMessage` → encoded rows |
+| `BatchWrite.commit(messages)` | `SparkWrite$BatchAppend`: one snapshot (`AppendFiles`) | one `write_async` + `commit_async` snapshot |
+| `BatchWrite.abort(messages)` | removes staged files | drops the staging buffer |
+| Row-level (`SupportsDelta`) | `SparkPositionDeltaWrite$DeltaTaskCommit` → `dataFiles()`, `deleteFiles()`, … | `BenoStreamDeltaCommitMessage` → predicates + encoded rows |
+| Retry safety | file names are unique per attempt; uncommitted files are orphans removed by `RemoveOrphanFiles` | the buffer is drained before writing, so a replay is a no-op |
+
+The one remaining difference is the last column of that table: Iceberg's tasks
+write *data files* and the commit message carries their **paths**, so only metadata
+crosses the driver. Here the encoded rows cross it, which bounds a single write by
+the driver's heap. Matching Iceberg exactly needs a staged-file API on the engine —
+write data files (and their indexes) now, commit only their manifest entries later.
+`flush_internal_async` already contains both halves; exposing them separately also
+has to settle three things that are currently decided at commit time: schema
+evolution (the task's evolved schema must travel with the entries), `_row_id`
+reservation for `format_version = 3` (two tasks staging concurrently would allocate
+overlapping ids), and index building (today it is a post-commit background attach;
+in a file-based protocol it must happen in the task, before the entry is returned).
+
+**Bounded task memory.** Each task buffers its own rows and encodes them in
+`spark.benostream.write.batchSize` (default `10000`) row chunks:
 
 * Deletes accumulate rendered key literals, not one growing SQL string. They are
   applied as `pk IN (...)` predicates of 1,000 keys (single-column key) or
   `(a = .. AND b = ..) OR ...` chunks of 500 (compound key); rows containing a
   `NULL` key get their own `pk IS NULL`-style predicate. This keeps a 10k-row
   `DELETE` clear of the engine's AST recursion limit and of task OOM.
-* Inserts are appended one Arrow batch per `write.batchSize` rows, so the task
-  never holds an unbounded `ArrayBuffer`.
+* Inserts are encoded in chunks of `write.batchSize` rows.
 
 Configure it per write (`writeTo(...).option("write.batchSize", "5000")`), per
 table (`TBLPROPERTIES ('write.batchSize' = '5000')`), or session-wide via

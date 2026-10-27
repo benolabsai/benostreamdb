@@ -1,9 +1,5 @@
 package com.benostreamdb.spark
 
-import com.benostreamdb.spark.jni.BenoStreamJNIBridge
-import org.apache.arrow.c.{ArrowArray, ArrowSchema, Data}
-import org.apache.arrow.memory.RootAllocator
-import org.apache.arrow.vector.VectorSchemaRoot
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.expressions.{Expressions, NamedReference}
 import org.apache.spark.sql.connector.read.ScanBuilder
@@ -77,6 +73,17 @@ class BenoStreamDeltaWrite(
     new BenoStreamDeltaBatchWrite(uri, dataSchema, pkColumns, gpuDevice, flushSize)
 }
 
+/**
+ * One task's row-level work: the rendered delete predicates plus its inserts,
+ * encoded as Arrow IPC. Nothing is applied until the driver commits, so a retried
+ * task cannot delete or insert twice.
+ *
+ * `Vector`, not `Seq`: on Scala 2.12 `Iterator.toSeq` yields a lazy `Stream`
+ * whose tail captures the iterator, which Spark cannot serialize.
+ */
+case class BenoStreamDeltaCommitMessage(predicates: Vector[String], chunks: Vector[Array[Byte]])
+    extends WriterCommitMessage
+
 class BenoStreamDeltaBatchWrite(
     uri: String,
     dataSchema: StructType,
@@ -84,10 +91,39 @@ class BenoStreamDeltaBatchWrite(
     gpuDevice: String,
     flushSize: Int)
     extends DeltaBatchWrite {
+
+  /** Identifies this write attempt's staging buffer (driver-generated). */
+  private val token: String = java.util.UUID.randomUUID().toString
+
   override def createBatchWriterFactory(info: PhysicalWriteInfo): DeltaWriterFactory =
     new BenoStreamDeltaWriterFactory(uri, dataSchema, pkColumns, gpuDevice, flushSize)
-  override def commit(messages: Array[WriterCommitMessage]): Unit = ()
-  override def abort(messages: Array[WriterCommitMessage]): Unit = ()
+
+  /**
+   * Driver-side commit: all deletes in one commit, then one snapshot of inserts.
+   *
+   * Deletes go first (an UPDATE reuses the key, so appending first would let the
+   * delete reap the freshly inserted row). Both phases are driven from the
+   * driver, and the staging buffer is drained before it is written, so a retried
+   * task or a retried commit cannot apply the work twice.
+   */
+  override def commit(messages: Array[WriterCommitMessage]): Unit = {
+    com.benostreamdb.spark.gpu.GpuContextResolver.bindTaskGpuContext(gpuDevice)
+    val predicates = messages.iterator
+      .collect { case message: BenoStreamDeltaCommitMessage => message.predicates }
+      .flatten
+      .toVector
+    BenoStreamArrowIpc.deleteRows(uri, predicates)
+    messages.foreach {
+      case message: BenoStreamDeltaCommitMessage =>
+        message.chunks.foreach(chunk => BenoStreamArrowIpc.stage(uri, token, chunk))
+      case _ => ()
+    }
+    BenoStreamArrowIpc.commitStaged(uri, token, gpuDevice)
+  }
+
+  /** Nothing was written before the commit, so there is nothing to undo. */
+  override def abort(messages: Array[WriterCommitMessage]): Unit =
+    BenoStreamArrowIpc.discard(token)
 }
 
 class BenoStreamDeltaWriterFactory(
@@ -128,20 +164,22 @@ object BenoStreamDeltaWriter {
 }
 
 /**
- * Buffers row-level operations and applies them in bounded chunks.
+ * Buffers row-level operations; the driver applies them in bounded chunks.
  *
  * Deletes accumulate *rendered primary-key literals*, not one giant SQL string:
  * a 10k-row DELETE used to build a multi-megabyte `pk = .. OR pk = ..` predicate
  * that either hit the engine's AST recursion limit or exhausted memory. Keys are
- * now flushed as (a) `pk IN (lit, ..)` batches of
+ * rendered as (a) `pk IN (lit, ..)` batches of
  * [[BenoStreamDeltaWriter.MaxKeysPerInList]] for single-column keys, or
  * (b) `(a = .. AND b = ..) OR ...` chunks of
  * [[BenoStreamDeltaWriter.MaxCompoundKeysPerChunk]] for compound keys. Rows whose
  * key contains a NULL cannot join an `IN` list and get their own
  * `pk IS NULL`-style predicate.
  *
- * Inserts are flushed through one `appendBatch` call per `flushSize` rows so the
- * task never holds an unbounded `ArrayBuffer[InternalRow]`.
+ * Nothing is mutated from the task: the delete predicates and the inserts travel
+ * to the driver in the commit message, so a retried task attempt cannot delete or
+ * insert twice. Inserts are encoded in `flushSize`-row chunks to bound the
+ * transient encode buffer.
  */
 class BenoStreamDeltaWriter(
     uri: String,
@@ -153,7 +191,6 @@ class BenoStreamDeltaWriter(
 
   import BenoStreamDeltaWriter._
 
-  private val bridge = BenoStreamJNIBridge.getInstance()
   private val pkTypes = pkColumns.map(c => dataSchema(c).dataType)
 
   /** Rendered PK literals per pending delete, in `pkColumns` order. */
@@ -189,12 +226,18 @@ class BenoStreamDeltaWriter(
     } else {
       deleteKeys += keys
     }
-    if (deleteKeys.length + nullKeyPredicates.length >= effectiveFlushSize) flushDeletes()
+    // No engine call and no flush here: buffering the whole partition is what
+    // makes the driver-side commit exactly-once.
   }
 
-  /** Render the buffered keys as chunked predicates and apply them. */
-  private def flushDeletes(): Unit = {
-    if (nullKeyPredicates.isEmpty && deleteKeys.isEmpty) return
+  /**
+   * Render the buffered keys as chunked predicates.
+   *
+   * Pure string work: the engine call happens in the driver-side commit so a
+   * retried task attempt cannot delete the same rows twice.
+   */
+  private def renderDeletePredicates(): Seq[String] = {
+    if (nullKeyPredicates.isEmpty && deleteKeys.isEmpty) return Seq.empty
 
     val predicates = scala.collection.mutable.ArrayBuffer.empty[String]
     predicates ++= nullKeyPredicates
@@ -203,11 +246,7 @@ class BenoStreamDeltaWriter(
       .foreach(chunk => predicates += renderPredicate(chunk.map(_.toSeq).toSeq))
     nullKeyPredicates.clear()
     deleteKeys.clear()
-
-    com.benostreamdb.spark.gpu.GpuContextResolver.bindTaskGpuContext(gpuDevice)
-    predicates.foreach { predicate =>
-      if (!bridge.deleteRows(uri, predicate)) throw new RuntimeException(s"deleteRows failed for $uri")
-    }
+    predicates.toSeq
   }
 
   private def renderPredicate(chunk: Seq[Seq[String]]): String =
@@ -219,44 +258,28 @@ class BenoStreamDeltaWriter(
         .mkString(" OR ")
     }
 
-  /** Append the buffered rows as one Arrow batch, then release them. */
-  private def flushInserts(): Unit = {
-    if (inserts.isEmpty) return
-    val allocator = new RootAllocator()
-    try {
-      val root: VectorSchemaRoot = BenoStreamArrowWriter.toVectorSchemaRoot(inserts.toSeq, dataSchema, allocator)
-      val array = ArrowArray.allocateNew(allocator)
-      val schema = ArrowSchema.allocateNew(allocator)
-      try {
-        Data.exportVectorSchemaRoot(allocator, root, null, array, schema)
-        com.benostreamdb.spark.gpu.GpuContextResolver.bindTaskGpuContext(gpuDevice)
-        if (!bridge.appendBatch(uri, array.memoryAddress(), schema.memoryAddress()))
-          throw new RuntimeException(s"appendBatch failed for $uri")
-      } finally { array.close(); schema.close(); root.close() }
-    } finally allocator.close()
-    inserts.clear()
-  }
-
   override def delete(metadata: InternalRow, id: InternalRow): Unit =
     recordDelete(if (id != null && id.numFields >= pkColumns.length) id else metadata)
 
   override def update(metadata: InternalRow, id: InternalRow, row: InternalRow): Unit = {
     recordDelete(if (id != null && id.numFields >= pkColumns.length) id else metadata)
     inserts += row.copy()
-    if (inserts.length >= effectiveFlushSize) flushInserts()
   }
 
-  override def insert(row: InternalRow): Unit = {
+  override def insert(row: InternalRow): Unit =
     inserts += row.copy()
-    if (inserts.length >= effectiveFlushSize) flushInserts()
-  }
 
   override def commit(): WriterCommitMessage = {
     // DELETE before INSERT: an UPDATE reuses the key, so appending first would
-    // let the delete reap the freshly inserted row.
-    flushDeletes()
-    flushInserts()
-    BenoStreamCommitMessage
+    // let the delete reap the freshly inserted row. Both are applied by the
+    // driver in `BenoStreamDeltaBatchWrite.commit`.
+    val predicates = renderDeletePredicates().toVector
+    val chunks = inserts
+      .grouped(effectiveFlushSize)
+      .map(chunk => BenoStreamArrowIpc.encode(chunk.toSeq, dataSchema))
+      .toVector
+    inserts.clear()
+    BenoStreamDeltaCommitMessage(predicates, chunks)
   }
 
   override def abort(): Unit = {

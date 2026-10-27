@@ -87,6 +87,22 @@
   engine), matching `trino-testing`.
 
 ### Fixed
+- **Spark writes are exactly-once and produce one snapshot per job** — Spark only
+  guarantees that a task attempt's work is committed once if the *driver* commits
+  it (`BatchWrite.commit`), so tasks no longer append: they encode their rows as
+  Arrow IPC and the driver replays them through a per-write staging buffer in the
+  native layer, which writes and commits everything in a single
+  `write_async` + `commit_async`. Consequences: a task that appends successfully
+  and is then retried cannot duplicate its rows; a 20-partition `INSERT` creates
+  one manifest commit instead of 20; a retried `BatchWrite.commit` is a no-op
+  because the buffer is drained before the write. MERGE applies all delete
+  predicates as one OR-combined `deleteRows` commit, then the staged inserts.
+  Commit messages are `Vector[Array[Byte]]` — on Scala 2.12 `Iterator.toSeq`
+  returns a lazy `Stream` whose tail captures the iterator, which Spark rejected
+  with `not serializable result: scala.collection.Iterator$$anon$10`. New test
+  `stagedAppendCommitsOnceAndIsRetrySafe` asserts one data file for two staged
+  batches and no duplicate rows after a repeated commit; the MERGE test asserts
+  the updated row is replaced, not duplicated.
 - **Spark `CALL` now works for every procedure** — two connector-side bugs, no
   JNI/Rust change: a VARCHAR parameter default must be a *quoted* SQL literal
   (`defaultValue("'vector'")`), because Spark parses the default as an expression
@@ -105,7 +121,7 @@
   `spark.benostream.write.batchSize` (default 10,000) keys/rows. Deletes are
   applied as `pk IN (...)` batches (1,000 keys) or compound-key chunks (500),
   with `IS NULL` predicates handled separately, instead of one multi-megabyte
-  `pk = .. OR pk = ..` string; inserts flush one Arrow batch per `batchSize`.
+  `pk = .. OR pk = ..` string; inserts are encoded in `batchSize`-row chunks.
   Tables without a primary key no longer index an empty key list.
 - **Trino MERGE deletions are batched** — row ids are collected as literals and
   applied as `key IN (...)` predicates of 1,000 keys (rendered predicate capped
