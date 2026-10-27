@@ -164,31 +164,54 @@ impl Table {
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, entries, _) = manifest_manager.load_latest_full().await?;
 
-        Ok(entries
-            .into_iter()
-            .map(|entry| {
-                // Same absolute-path rule as `list_data_files`.
-                let file_path = if entry.file_path.contains("://") {
-                    entry.file_path.clone()
-                } else {
-                    let base = self.uri.trim_end_matches('/');
-                    let relative = entry.file_path.trim_start_matches('/');
-                    format!("{}/{}", base, relative)
-                };
-                Split {
-                    file_path,
-                    start_offset: 0,
-                    length: entry.file_size_bytes.max(0) as u64,
-                    row_group_ids: Vec::new(),
-                    index_file_path: entry
-                        .index_files
-                        .first()
-                        .map(|index| index.file_path.clone()),
-                    can_use_indexes: !entry.index_files.is_empty(),
-                    has_deletes: !entry.delete_files.is_empty(),
+        // A file can be reachable through more than one manifest entry
+        // (carried-over `EXISTING` entries). Emitting it twice would duplicate
+        // its rows for a connector that reads each split raw, so collapse by
+        // path and keep the strongest signals (any index metadata, any delete
+        // file).
+        let mut by_path: std::collections::BTreeMap<String, Split> =
+            std::collections::BTreeMap::new();
+        for entry in entries {
+            // Same absolute-path rule as `list_data_files`.
+            let file_path = if entry.file_path.contains("://") {
+                entry.file_path.clone()
+            } else {
+                let base = self.uri.trim_end_matches('/');
+                let relative = entry.file_path.trim_start_matches('/');
+                format!("{}/{}", base, relative)
+            };
+            let index_file_path = entry
+                .index_files
+                .first()
+                .map(|index| index.file_path.clone());
+            let has_index_files = !entry.index_files.is_empty();
+            let has_deletes = !entry.delete_files.is_empty();
+
+            match by_path.get_mut(&file_path) {
+                Some(existing) => {
+                    existing.has_deletes |= has_deletes;
+                    existing.can_use_indexes |= has_index_files;
+                    if existing.index_file_path.is_none() {
+                        existing.index_file_path = index_file_path;
+                    }
                 }
-            })
-            .collect())
+                None => {
+                    by_path.insert(
+                        file_path.clone(),
+                        Split {
+                            file_path,
+                            start_offset: 0,
+                            length: entry.file_size_bytes.max(0) as u64,
+                            row_group_ids: Vec::new(),
+                            index_file_path,
+                            can_use_indexes: has_index_files,
+                            has_deletes,
+                        },
+                    );
+                }
+            }
+        }
+        Ok(by_path.into_values().collect())
     }
 
     /// List all data files in the table (Async)

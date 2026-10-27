@@ -87,6 +87,12 @@
   engine), matching `trino-testing`.
 
 ### Fixed
+- **Duplicate rows from file-split scans** — a data file reachable through more
+  than one manifest entry (carried-over `EXISTING` entries) was emitted as two
+  splits, so a fan-out consumer read its rows twice. `list_scan_splits` now
+  collapses by path and keeps the strongest signals (index metadata and delete
+  files). Caught by the new Spark warehouse test (`4` rows read back as
+  `1,2,2,3,4`).
 - **Bounded memory in Spark MERGE/DELETE** — the delta writer buffers at most
   `spark.benostream.write.batchSize` (default 10,000) keys/rows. Deletes are
   applied as `pk IN (...)` batches (1,000 keys) or compound-key chunks (500),

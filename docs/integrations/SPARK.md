@@ -15,6 +15,12 @@ There is **no Iceberg runtime dependency** for Spark 4.x builds. (Spark 3.5 pred
 
 ---
 
+> **Running the connector's own tests:** `mvn test` loads the JNI library, so
+> build it first (`cargo build --features java` — the surefire `argLine` points
+> `java.library.path` at `../target/debug`) and use **JDK 17**. JDK 23+ removed
+> `Subject.getSubject`, which Spark still calls, so the Spark suites fail on a
+> newer JDK for reasons unrelated to this connector.
+
 ## Building the Connector
 
 The connector source resides in `spark-benostreamdb`. Use Maven to build the profile corresponding to your Spark version:

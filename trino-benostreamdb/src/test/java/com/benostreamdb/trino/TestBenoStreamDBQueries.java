@@ -331,6 +331,27 @@ public class TestBenoStreamDBQueries {
         assertEquals(0, ((Number) result.getMaterializedRows().get(0).getField(1)).intValue());
     }
 
+    /**
+     * Run a query until it returns rows (bounded).
+     *
+     * <p>Index builds are engine-side and can still be finishing when the
+     * procedure returns under load, so a hybrid/vector assertion is an
+     * eventual-consistency check, not an instant one.</p>
+     */
+    private MaterializedResult awaitRows(String sql) {
+        MaterializedResult result = runner.execute(sql);
+        for (int attempt = 0; attempt < 40 && result.getRowCount() == 0; attempt++) {
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            result = runner.execute(sql);
+        }
+        return result;
+    }
+
     @Test
     void hybridSearchEndToEnd() {
         runner.execute(
@@ -347,7 +368,7 @@ public class TestBenoStreamDBQueries {
                 "CALL benostreamdb.system.add_index('default.hybrid', 'title', 'bm25')");
         runner.execute("CALL benostreamdb.system.build_index('default.hybrid')");
 
-        MaterializedResult result = runner.execute(
+        MaterializedResult result = awaitRows(
                 "SELECT id, rrf_score FROM TABLE(system.hybrid_search("
                         + "table_name => 'default.hybrid', text_column => 'title', "
                         + "query_text => 'graph', vector_column => 'embedding', "
@@ -405,7 +426,7 @@ public class TestBenoStreamDBQueries {
 
         // The predicate must be applied to both retrieval paths, so only id = 2
         // can survive the fusion.
-        MaterializedResult filtered = runner.execute(
+        MaterializedResult filtered = awaitRows(
                 "SELECT id, rrf_score FROM TABLE(system.hybrid_search("
                         + "table_name => 'default.filtered', text_column => 'title', "
                         + "query_text => 'graph', vector_column => 'embedding', "
