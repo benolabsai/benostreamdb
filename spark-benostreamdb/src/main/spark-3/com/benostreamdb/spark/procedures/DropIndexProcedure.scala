@@ -29,7 +29,7 @@ class DropIndexProcedure extends Procedure {
     val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
     val gpuDevice = org.apache.spark.sql.SparkSession.active.conf.get("spark.benostream.gpu.device", "auto")
     jniBridge.setGpuContext(gpuDevice)
-    val tableIdentifier = table.split("\\.").last
+    val tableIdentifier = BenoStreamTableResolver.resolveFromSession(table)
     jniBridge.dropIndex(tableIdentifier, column, indexType)
     
     val row = new GenericInternalRow(3)

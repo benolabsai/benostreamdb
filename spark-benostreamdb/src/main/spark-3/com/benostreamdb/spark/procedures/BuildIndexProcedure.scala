@@ -25,7 +25,7 @@ class BuildIndexProcedure extends Procedure {
     val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
     val gpuDevice = org.apache.spark.sql.SparkSession.active.conf.get("spark.benostream.gpu.device", "auto")
     jniBridge.setGpuContext(gpuDevice)
-    jniBridge.buildIndex(table.split("\\.").last, "all")
+    jniBridge.buildIndex(BenoStreamTableResolver.resolveFromSession(table), "all")
     
     val row = new GenericInternalRow(2)
     row.update(0, UTF8String.fromString(table))

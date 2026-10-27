@@ -39,7 +39,11 @@ fn sample_batch() -> RecordBatch {
 
     RecordBatch::try_new(
         schema,
-        vec![Arc::new(ids), Arc::new(titles), Arc::new(embedding.finish())],
+        vec![
+            Arc::new(ids),
+            Arc::new(titles),
+            Arc::new(embedding.finish()),
+        ],
     )
     .expect("sample batch")
 }
@@ -90,7 +94,98 @@ async fn hybrid_search_batches_fuses_vector_and_keyword() -> Result<()> {
         .index_of("rrf_score")
         .expect("rrf_score column should be present");
     let scores = batches[0].column(score_index);
-    assert!(scores.len() >= 1, "rrf_score should have a value per row");
+    assert!(!scores.is_empty(), "rrf_score should have a value per row");
+
+    Ok(())
+}
+
+async fn table_with_indexes() -> Result<(tempfile::TempDir, Table)> {
+    let dir = tempfile::tempdir()?;
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+
+    let table = Table::new_async(uri).await?;
+    table.write_async(vec![sample_batch()]).await?;
+    table.commit_async().await?;
+    table
+        .add_index("embedding".to_string(), IndexAlgorithm::hnsw())
+        .await?;
+    table
+        .add_index(
+            "title".to_string(),
+            IndexAlgorithm::Bm25 {
+                k1: 1.2,
+                b: 0.75,
+                tokenizer: "standard".to_string(),
+            },
+        )
+        .await?;
+    table.rebuild_index("embedding".to_string()).await?;
+    table.rebuild_index("title".to_string()).await?;
+    Ok((dir, table))
+}
+
+#[tokio::test]
+async fn hybrid_search_filter_is_pushed_down() -> Result<()> {
+    let (_dir, table) = table_with_indexes().await?;
+
+    let batches = table
+        .hybrid_search_batches_filtered(
+            "title",
+            "graph",
+            "embedding",
+            vec![1.0, 0.0],
+            3,
+            60.0,
+            Some("id = 2"),
+        )
+        .await?;
+
+    let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert!(rows >= 1, "filter should keep the matching row, got {rows}");
+
+    // Every surviving row must satisfy the predicate: the filter is applied
+    // during candidate generation, not as a post-filter that could return
+    // fewer rows than k.
+    for batch in &batches {
+        let ids = batch
+            .column_by_name("id")
+            .expect("hydrated rows carry the payload columns")
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("id is Int64");
+        for row in 0..ids.len() {
+            assert_eq!(ids.value(row), 2, "filtered row escaped the predicate");
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn hybrid_search_rejects_malformed_filter_without_panicking() -> Result<()> {
+    let (_dir, table) = table_with_indexes().await?;
+
+    // Connector-supplied predicates are untrusted input: malformed SQL must come
+    // back as an error, never as a panic (this is also covered by the
+    // `connector_inputs` fuzz target).
+    for predicate in ["id =", "))(", "id = = 2", "SELECT", "id IN ("] {
+        let result = table
+            .hybrid_search_batches_filtered(
+                "title",
+                "graph",
+                "embedding",
+                vec![1.0, 0.0],
+                3,
+                60.0,
+                Some(predicate),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "malformed filter {predicate:?} should be rejected, got {:?}",
+            result.map(|batches| batches.iter().map(|b| b.num_rows()).sum::<usize>())
+        );
+    }
 
     Ok(())
 }

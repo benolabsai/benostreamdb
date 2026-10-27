@@ -32,7 +32,7 @@ class AddIndexProcedure extends Procedure {
     val gpuDevice = org.apache.spark.sql.SparkSession.active.conf.get("spark.benostream.gpu.device", "auto")
     jniBridge.setGpuContext(gpuDevice)
     // For standalone parsing
-    val tableIdentifier = table.split("\\.").last
+    val tableIdentifier = BenoStreamTableResolver.resolveFromSession(table)
     jniBridge.addIndex(tableIdentifier, column, algorithm)
     
     val row = new GenericInternalRow(3)

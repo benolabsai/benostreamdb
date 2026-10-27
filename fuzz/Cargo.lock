@@ -1205,10 +1205,12 @@ dependencies = [
 name = "benostreamdb-fuzz"
 version = "0.0.0"
 dependencies = [
+ "arrow",
  "benostreamdb",
  "benostreamdb-search",
  "libfuzzer-sys",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

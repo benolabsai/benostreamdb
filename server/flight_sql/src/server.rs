@@ -55,6 +55,50 @@ fn flight_read_only() -> bool {
         .unwrap_or(false)
 }
 
+/// Marker used to translate the streaming row cap into `RESOURCE_EXHAUSTED`.
+const ROW_LIMIT_MARKER: &str = "Query exceeded row limit of";
+
+/// Encode a DataFusion result stream as Arrow Flight data.
+///
+/// The plan already carries a `LIMIT max_rows + 1`; the guard below rejects the
+/// extra row so a runaway query is reported as `RESOURCE_EXHAUSTED` instead of
+/// being buffered. Because this is a lazy stream, dropping it (client
+/// cancellation) drops the physical plan's stream and stops execution.
+fn stream_batches_as_flight_data(
+    schema: std::sync::Arc<arrow::datatypes::Schema>,
+    batch_stream: datafusion::physical_plan::SendableRecordBatchStream,
+    max_rows: usize,
+) -> BoxStream<'static, Result<FlightData, Status>> {
+    use futures::StreamExt;
+
+    let mut emitted = 0usize;
+    let guarded = batch_stream.map(move |item| {
+        let batch =
+            item.map_err(|e| arrow_flight::error::FlightError::ExternalError(Box::new(e)))?;
+        emitted += batch.num_rows();
+        if emitted > max_rows {
+            return Err(arrow_flight::error::FlightError::ExternalError(Box::new(
+                std::io::Error::other(format!("{} {}", ROW_LIMIT_MARKER, max_rows)),
+            )));
+        }
+        Ok(batch)
+    });
+
+    Box::pin(
+        arrow_flight::encode::FlightDataEncoderBuilder::new()
+            .with_schema(schema)
+            .build(guarded)
+            .map_err(|e| {
+                let message = e.to_string();
+                if message.contains(ROW_LIMIT_MARKER) {
+                    Status::resource_exhausted(message)
+                } else {
+                    Status::internal(message)
+                }
+            }),
+    )
+}
+
 impl Default for TransactionState {
     fn default() -> Self {
         Self {
@@ -601,28 +645,26 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             .parse::<usize>()
             .unwrap_or(100000);
 
+        // `saturating_add`: a pathological BSDB_FLIGHT_MAX_ROWS value must not
+        // overflow the plan limit.
         df = df
-            .limit(0, Some(max_rows + 1))
+            .limit(0, Some(max_rows.saturating_add(1)))
             .map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
-        let batches = df
-            .collect()
+        // Stream instead of `collect()`: a large result no longer has to fit in
+        // memory before the first page is sent. Dropping the returned stream
+        // (client cancellation) drops the DataFusion physical stream, which
+        // stops execution.
+        let batch_stream = df
+            .execute_stream()
             .await
-            .map_err(|e| Status::internal(format!("Error collecting batches: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Error executing query: {}", e)))?;
 
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        if total_rows > max_rows {
-            return Err(Status::resource_exhausted(format!(
-                "Query exceeded row limit of {}",
-                max_rows
-            )));
-        }
-
-        let flight_data_stream = arrow_flight::utils::batches_to_flight_data(&schema, batches)
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        let output_stream = futures::stream::iter(flight_data_stream.into_iter().map(Ok));
-        Ok(Response::new(Box::pin(output_stream)))
+        Ok(Response::new(stream_batches_as_flight_data(
+            schema,
+            batch_stream,
+            max_rows,
+        )))
     }
 
     async fn do_get_prepared_statement(
@@ -644,25 +686,20 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             .unwrap_or(100000);
 
         df = df
-            .limit(0, Some(max_rows + 1))
+            .limit(0, Some(max_rows.saturating_add(1)))
             .map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
-        let batches = df
-            .collect()
+        // Same streaming path as `do_get_statement`.
+        let batch_stream = df
+            .execute_stream()
             .await
-            .map_err(|e| Status::internal(format!("Error collecting batches: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Error executing query: {}", e)))?;
 
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        if total_rows > max_rows {
-            return Err(Status::resource_exhausted(format!(
-                "Query exceeded row limit of {}",
-                max_rows
-            )));
-        }
-        let flight_data_stream = arrow_flight::utils::batches_to_flight_data(&schema, batches)
-            .map_err(|e| Status::internal(e.to_string()))?;
-        let output_stream = futures::stream::iter(flight_data_stream.into_iter().map(Ok));
-        Ok(Response::new(Box::pin(output_stream)))
+        Ok(Response::new(stream_batches_as_flight_data(
+            schema,
+            batch_stream,
+            max_rows,
+        )))
     }
 
     async fn do_get_catalogs(

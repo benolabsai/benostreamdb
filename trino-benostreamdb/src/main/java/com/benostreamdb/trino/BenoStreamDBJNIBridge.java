@@ -80,7 +80,8 @@ public class BenoStreamDBJNIBridge {
             long outSchemaPtr);
 
     // Hybrid search: run vector + BM25 retrieval, fuse with RRF, and stream the
-    // hydrated rows with an `rrf_score` column.
+    // hydrated rows with an `rrf_score` column. `filter` is a SQL WHERE clause
+    // applied to both retrieval paths (null/empty = no filter).
     public static native long hybridSearch(
             String tableUri,
             String textColumn,
@@ -88,7 +89,8 @@ public class BenoStreamDBJNIBridge {
             String vectorColumn,
             String queryVector,
             long k,
-            long rrfK);
+            long rrfK,
+            String filter);
 
     // SQL query pushdown: run a query through the engine's session (full index
     // and vector-search pushdown) and stream the result batches.

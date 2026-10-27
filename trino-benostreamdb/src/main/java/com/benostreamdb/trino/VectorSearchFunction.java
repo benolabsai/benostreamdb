@@ -76,6 +76,12 @@ public final class VectorSearchFunction implements ConnectorTableFunction {
                         .name("FILTER")
                         .type(VarcharType.VARCHAR)
                         .defaultValue(Slices.utf8Slice(""))
+                        .build(),
+                // cosine (default) | l2 | dot | l1 | hamming | jaccard
+                ScalarArgumentSpecification.builder()
+                        .name("METRIC")
+                        .type(VarcharType.VARCHAR)
+                        .defaultValue(Slices.utf8Slice(VectorSearchHandle.DEFAULT_METRIC))
                         .build());
     }
 
@@ -95,6 +101,10 @@ public final class VectorSearchFunction implements ConnectorTableFunction {
         String query = stringArgument(arguments, "QUERY");
         long k = longArgument(arguments, "K");
         String filter = stringArgument(arguments, "FILTER");
+        String metric = stringArgument(arguments, "METRIC");
+        if (metric == null || metric.isBlank()) {
+            metric = VectorSearchHandle.DEFAULT_METRIC;
+        }
 
         if (table == null || table.isBlank()) {
             throw userError("table is required");
@@ -124,7 +134,8 @@ public final class VectorSearchFunction implements ConnectorTableFunction {
         types.add(DoubleType.DOUBLE);
 
         Optional<String> filterArgument = Optional.ofNullable(filter).filter(value -> !value.isBlank());
-        VectorSearchHandle handle = new VectorSearchHandle(table, column, query, k, filterArgument);
+        VectorSearchHandle handle =
+                new VectorSearchHandle(table, column, query, k, filterArgument, metric);
 
         // Validate the vector, k, identifiers, and filter before planning.
         VectorSearchSql.build(handle);

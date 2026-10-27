@@ -2,6 +2,7 @@ package com.benostreamdb.trino;
 
 import io.airlift.slice.Slice;
 import io.trino.spi.block.Block;
+import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.function.Description;
 import io.trino.spi.function.ScalarFunction;
 import io.trino.spi.function.SqlType;
@@ -140,6 +141,65 @@ public final class BenoStreamScalarFunctions {
     }
 
     // -------------------------------------------------------------------------
+    // Vector transformation parity with Spark (`vector_dims`, `vector_norm`,
+    // `l2_normalize`, `subvector`, `vector_add`, `vector_sub`).
+    //
+    // All of these are total functions: degenerate input (empty vectors,
+    // mismatched lengths, zero norms, out-of-range slices, NULL elements) maps to
+    // a defined result instead of an exception, so a connector-supplied vector
+    // can never fail a query at execution time.
+    // -------------------------------------------------------------------------
+
+    @ScalarFunction("vector_dims")
+    @Description("Number of dimensions in a vector")
+    @SqlType("bigint")
+    public static long vectorDimsSql(@SqlType("array(double)") Block vector) {
+        return vector.getPositionCount();
+    }
+
+    @ScalarFunction("vector_norm")
+    @Description("Euclidean (L2) norm of a vector")
+    @SqlType("double")
+    public static double vectorNormSql(@SqlType("array(double)") Block vector) {
+        return vectorNorm(doubles(vector));
+    }
+
+    @ScalarFunction("l2_normalize")
+    @Description("Unit-length copy of a vector; the zero vector normalizes to zeros")
+    @SqlType("array(double)")
+    public static Block l2NormalizeSql(@SqlType("array(double)") Block vector) {
+        return doubleBlock(l2Normalize(doubles(vector)));
+    }
+
+    @ScalarFunction("subvector")
+    @Description("Slice of a vector; `offset` is 1-based, out-of-range bounds are clamped")
+    @SqlType("array(double)")
+    public static Block subvectorSql(
+            @SqlType("array(double)") Block vector,
+            @SqlType("bigint") long offset,
+            @SqlType("bigint") long length) {
+        return doubleBlock(subvector(doubles(vector), offset, length));
+    }
+
+    @ScalarFunction("vector_add")
+    @Description("Element-wise sum; stops at the shorter vector")
+    @SqlType("array(double)")
+    public static Block vectorAddSql(
+            @SqlType("array(double)") Block left,
+            @SqlType("array(double)") Block right) {
+        return doubleBlock(vectorAdd(doubles(left), doubles(right)));
+    }
+
+    @ScalarFunction("vector_sub")
+    @Description("Element-wise difference; stops at the shorter vector")
+    @SqlType("array(double)")
+    public static Block vectorSubSql(
+            @SqlType("array(double)") Block left,
+            @SqlType("array(double)") Block right) {
+        return doubleBlock(vectorSub(doubles(left), doubles(right)));
+    }
+
+    // -------------------------------------------------------------------------
     // Shared arithmetic
     // -------------------------------------------------------------------------
 
@@ -187,10 +247,74 @@ public final class BenoStreamScalarFunctions {
         return dot;
     }
 
+    public static double vectorNorm(List<Double> vector) {
+        double sum = 0;
+        for (double value : vector) {
+            sum += value * value;
+        }
+        return Math.sqrt(sum);
+    }
+
+    public static List<Double> l2Normalize(List<Double> vector) {
+        double norm = vectorNorm(vector);
+        List<Double> normalized = new ArrayList<>(vector.size());
+        if (norm == 0.0 || !Double.isFinite(norm)) {
+            for (int i = 0; i < vector.size(); i++) {
+                normalized.add(0.0);
+            }
+            return normalized;
+        }
+        for (double value : vector) {
+            normalized.add(value / norm);
+        }
+        return normalized;
+    }
+
+    /** 1-based `offset`, SQL `slice` semantics; bounds are clamped, never thrown. */
+    public static List<Double> subvector(List<Double> vector, long offset, long length) {
+        int size = vector.size();
+        if (size == 0 || length <= 0) {
+            return new ArrayList<>();
+        }
+        long start = Math.max(offset, 1L) - 1L;
+        if (start >= size) {
+            return new ArrayList<>();
+        }
+        long end = Math.min(start + length, size);
+        return new ArrayList<>(vector.subList((int) start, (int) end));
+    }
+
+    public static List<Double> vectorAdd(List<Double> left, List<Double> right) {
+        int length = Math.min(left.size(), right.size());
+        List<Double> sum = new ArrayList<>(length);
+        for (int i = 0; i < length; i++) {
+            sum.add(left.get(i) + right.get(i));
+        }
+        return sum;
+    }
+
+    public static List<Double> vectorSub(List<Double> left, List<Double> right) {
+        int length = Math.min(left.size(), right.size());
+        List<Double> difference = new ArrayList<>(length);
+        for (int i = 0; i < length; i++) {
+            difference.add(left.get(i) - right.get(i));
+        }
+        return difference;
+    }
+
+    private static Block doubleBlock(List<Double> values) {
+        BlockBuilder builder = DoubleType.DOUBLE.createBlockBuilder(null, values.size());
+        for (double value : values) {
+            DoubleType.DOUBLE.writeDouble(builder, value);
+        }
+        return builder.build();
+    }
+
+    /** NULL elements are read as 0.0 so a partially-null vector stays total. */
     private static List<Double> doubles(Block block) {
         List<Double> values = new ArrayList<>(block.getPositionCount());
         for (int i = 0; i < block.getPositionCount(); i++) {
-            values.add(DoubleType.DOUBLE.getDouble(block, i));
+            values.add(block.isNull(i) ? 0.0 : DoubleType.DOUBLE.getDouble(block, i));
         }
         return values;
     }

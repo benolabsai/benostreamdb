@@ -61,6 +61,62 @@ benostreamdb_profile:
       uri: "s3://my-lakehouse-bucket/warehouse"
 ```
 
+### Remote runs: `dbt-trino` (no warehouse mount)
+
+`dbt-benostreamdb` is an **embedded** adapter — it opens the warehouse in-process,
+so the path/URI must be reachable from wherever `dbt` runs. For Airflow, Cloud
+Run, or CI, point `dbt-trino` at a Trino coordinator that has the
+`trino-benostreamdb` plugin installed:
+
+```yaml
+benostreamdb_remote:
+  target: prod
+  outputs:
+    prod:
+      type: trino
+      method: none          # or ldap / jwt, per your coordinator
+      host: trino.internal
+      port: 8080
+      catalog: benostream   # must match connector.name=benostream in etc/catalog
+      schema: default
+      threads: 8
+```
+
+This is the supported remote path: the connector already pushes
+`system.vector_search`, `system.hybrid_search` (including its `filter`
+argument), `system.list_indexes`, and `system.regional_drift_search` down to the
+engine, so remote dbt models keep the same search semantics as embedded runs.
+Keep the embedded adapter for local development and for Python-API features such
+as index building.
+
+### Which one to use
+
+| | `dbt-benostreamdb` (embedded) | `dbt-trino` + `trino-benostreamdb` |
+|---|---|---|
+| Infrastructure | none — `pip install` + a warehouse path | Trino coordinator + JVM + plugin + catalog file |
+| Where the warehouse must live | reachable from the dbt process (mounted path / object store creds) | coordinator only |
+| Concurrency / auth / isolation | single process | Trino's (users, resource groups, queues) |
+| Search functions | Python API and SQL macros | `system.*` table functions, pushed down |
+| Python-API features (index builds, embeddings, graph helpers) | yes | no |
+| Best for | laptops, CI, single-node lakehouse, notebooks | Airflow, Cloud Run, multi-team clusters |
+
+The embedded adapter exists precisely so that "run dbt against BenoStreamDB"
+does not require standing up a Trino cluster — that is the dependency it removes,
+and it is why both paths are kept: the engine is the same, only the transport
+differs. Keep the adapter thin (a SQL adapter over the engine's session) and do
+not grow transport-only features in it; anything that needs a cluster belongs on
+the Trino path.
+
+---
+
+## Type mapping
+
+`datetime` columns map to `timestamp` (previously this raised
+`NotImplementedException`), next to the existing
+`text → varchar`, `number → double`, `boolean → boolean`, `date → date`, and
+`time → time` mappings. Trino exposes the same columns as `TIMESTAMP`, so a model
+built embedded also runs unchanged through `dbt-trino`.
+
 ---
 
 ## Supported Materializations

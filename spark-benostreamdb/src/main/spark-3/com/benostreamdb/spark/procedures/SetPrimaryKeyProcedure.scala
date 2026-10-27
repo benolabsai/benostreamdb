@@ -27,7 +27,7 @@ class SetPrimaryKeyProcedure extends Procedure {
     val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
     val gpuDevice = org.apache.spark.sql.SparkSession.active.conf.get("spark.benostream.gpu.device", "auto")
     jniBridge.setGpuContext(gpuDevice)
-    jniBridge.setPrimaryKey(table.split("\\.").last, columns)
+    jniBridge.setPrimaryKey(BenoStreamTableResolver.resolveFromSession(table), columns)
     
     val row = new GenericInternalRow(3)
     row.update(0, UTF8String.fromString(table))

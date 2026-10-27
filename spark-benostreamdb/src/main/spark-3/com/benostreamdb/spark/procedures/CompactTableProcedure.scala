@@ -24,7 +24,7 @@ class CompactTableProcedure extends Procedure {
     val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
     val gpuDevice = org.apache.spark.sql.SparkSession.active.conf.get("spark.benostream.gpu.device", "auto")
     jniBridge.setGpuContext(gpuDevice)
-    val tableIdentifier = table.split("\\.").last
+    val tableIdentifier = BenoStreamTableResolver.resolveFromSession(table)
     jniBridge.compactTable(tableIdentifier)
     
     val row = new GenericInternalRow(2)

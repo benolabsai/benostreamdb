@@ -15,7 +15,11 @@ fn format_datatype(dt: &DataType) -> String {
     match dt {
         DataType::List(field) => format!("List({})", format_datatype(field.data_type())),
         DataType::FixedSizeList(field, size) => {
-            format!("FixedSizeList({}, {})", format_datatype(field.data_type()), size)
+            format!(
+                "FixedSizeList({}, {})",
+                format_datatype(field.data_type()),
+                size
+            )
         }
         DataType::Struct(fields) => {
             let mut s = String::from("Struct(");

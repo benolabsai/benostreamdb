@@ -7,7 +7,6 @@ from typing import Optional, List, Any
 from dbt.adapters.base.relation import BaseRelation, RelationType
 from dbt.adapters.sql import SQLAdapter
 from dbt.adapters.events.logging import AdapterLogger
-import dbt.exceptions
 import pandas as pd
 
 from .connections import BenoStreamDBConnectionManager
@@ -32,9 +31,9 @@ class BenoStreamDBAdapter(SQLAdapter):
         return "date"
 
     def convert_datetime_type(self, column=None):
-        raise dbt.exceptions.NotImplementedException(
-            "`datetime` is not implemented for this adapter!"
-        )
+        # The engine's SQL surface (and the Trino connector over it) exposes
+        # TIMESTAMP for both `timestamp` and `timestamptz` columns.
+        return "timestamp"
 
     def convert_number_type(self, column=None):
         return "double"

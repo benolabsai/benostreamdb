@@ -135,13 +135,29 @@ FROM TABLE(system.vector_search(
     table_name => 'default.docs',
     column     => 'embedding',
     query      => '[1.0, 0.0, 0.0]',
-    k          => 10));
+    k          => 10,
+    metric     => 'cosine'));          -- optional, default 'cosine'
 ```
 
 The query vector is a JSON-style string literal. Trino's planner rewrites that
 literal into a `FixedSizeList`, which is what the KNN optimizer recognises —
 `ARRAY[1.0, 0.0, 0.0]` is not usable here. The engine runs the KNN search and
 adds a `distance` column.
+
+`METRIC` selects the distance UDF used for both the projected `distance` and the
+`ORDER BY`:
+
+| `metric` | Engine UDF |
+|----------|------------|
+| `cosine` (default), `cosine_distance` | `dist_cosine` |
+| `l2`, `euclidean`, `l2_distance` | `dist_l2` |
+| `dot`, `ip`, `inner_product`, `dot_product` | `dist_ip` |
+| `l1`, `manhattan`, `l1_distance` | `dist_l1` |
+| `hamming`, `hamming_distance` | `dist_hamming` |
+| `jaccard`, `jaccard_distance` | `dist_jaccard` |
+
+An unknown metric is rejected at analysis time (user error), never interpolated
+into the SQL string.
 
 ### Hybrid search (vector + BM25, fused with RRF)
 
@@ -154,11 +170,23 @@ FROM TABLE(system.hybrid_search(
     vector_column => 'embedding',
     query_vector  => '[1.0, 0.0, 0.0]',
     k             => 10,
-    rrf_k         => 60));
+    rrf_k         => 60,
+    filter        => 'category = ''science'''));
 ```
 
-`filter` is accepted but currently rejected when non-empty; filtering inside a
-fused search is not wired yet.
+`filter` is a SQL `WHERE` clause applied to **both** retrieval paths before
+fusion: the engine resolves it to a row-id bitmap for indexed columns and
+evaluates it against the hydrated rows otherwise, so a filtered hybrid query
+never silently returns unfiltered neighbours. A malformed predicate is reported
+as a user error; the parser is fuzzed (`fuzz/fuzz_targets/connector_inputs.rs`)
+so it can never bring the coordinator down.
+
+### Writes and MERGE
+
+Deletions produced by `MERGE` are applied as batched predicates
+(`key IN (v1, ..., v1000)`) instead of one `deleteRows` JNI call per row, and the
+rendered predicate is capped at 64 KiB. A 5,000-row `MERGE` therefore costs a
+handful of JNI transitions instead of 5,000 engine commits.
 
 ### Graph traversal
 
@@ -280,7 +308,8 @@ These are deliberate and documented rather than hidden:
 
 ## Scalar functions
 
-Seven functions are available SQL-wide, matching the Spark connector's UDFs:
+Distance, fusion, and vector-transformation functions are available SQL-wide,
+matching the Spark connector's UDFs:
 
 | Function | Source | Signature |
 |----------|--------|-----------|
@@ -292,6 +321,12 @@ Seven functions are available SQL-wide, matching the Spark connector's UDFs:
 | `sparse_dot_product` | this plugin | `(array(bigint), array(double), array(bigint), array(double)) -> double` |
 | `hybrid_score` | this plugin | `(double, double, double) -> double` |
 | `reciprocal_rank_fusion` | this plugin | `(array(integer), integer) -> double` |
+| `vector_dims` | this plugin | `(array(double)) -> bigint` |
+| `vector_norm` | this plugin | `(array(double)) -> double` |
+| `l2_normalize` | this plugin | `(array(double)) -> array(double)` |
+| `subvector` | this plugin | `(array(double), bigint, bigint) -> array(double)` |
+| `vector_add` | this plugin | `(array(double), array(double)) -> array(double)` |
+| `vector_sub` | this plugin | `(array(double), array(double)) -> array(double)` |
 
 ```sql
 SELECT l2_distance(embedding, CAST(ARRAY[1.0, 0.0, 0.0] AS array(double))) AS d,
@@ -302,6 +337,16 @@ FROM benostreamdb.default.docs;
 
 `vector_distance` accepts `cosine`, `l2`/`euclidean`, and `dot`; `dot` is
 negated so that lower is closer, matching the engine.
+
+The vector transformations are **total functions** — connector- or
+query-supplied input can never make a query fail at execution time:
+
+- `l2_normalize` returns zeros for the zero vector instead of dividing by zero.
+- `subvector(vector, offset, length)` uses 1-based `offset` with SQL `slice`
+  semantics; negative or out-of-range bounds are clamped and an empty vector is
+  returned rather than an error.
+- `vector_add` / `vector_sub` stop at the shorter input.
+- `vector_norm`/`l2_normalize` treat `NULL` elements as `0.0`.
 
 ## Testing
 

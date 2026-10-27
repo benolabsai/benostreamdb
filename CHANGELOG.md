@@ -6,6 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`vector_search(..., metric => ...)` in the Trino connector** — the table
+  function gained a sixth argument (`cosine` default, plus `l2`/`euclidean`,
+  `dot`/`inner_product`, `l1`/`manhattan`, `hamming`, `jaccard`). It drives both
+  the projected `distance` and the `ORDER BY`, and unknown values are rejected at
+  analysis time rather than interpolated into SQL.
+- **Six vector-transformation scalar functions in Trino** — `vector_dims`,
+  `vector_norm`, `l2_normalize`, `subvector`, `vector_add`, `vector_sub`,
+  matching the Spark UDFs. All are total: zero vectors normalize to zeros,
+  out-of-range slices clamp, mismatched lengths stop at the shorter input, and
+  `NULL` elements read as `0.0`.
+- **Remote dbt via `dbt-trino`** — documented as the supported non-embedded path
+  (no Flight/gRPC transport inside the adapter); the Trino connector already
+  pushes the search table functions down.
+- **`connector_inputs` fuzz target** — fuzzes connector-supplied SQL predicates
+  (`filter`) and query-vector JSON through `FilterExpr::parse_sql`.
+
+### Changed
+- **`hybrid_search` honours `filter`** — Trino no longer rejects a non-empty
+  filter. The predicate travels through the new `hybridSearch(..., filter)` JNI
+  entry point and is applied to *both* retrieval paths before RRF: a row-id
+  bitmap intersects the KNN candidates and drops excluded documents before
+  BM25 truncation, and a residual evaluation covers columns without a scalar
+  index. Malformed predicates surface as errors (covered by integration tests
+  and a fuzz target) instead of panicking.
+- **Flight SQL streams results** — `do_get_statement` and
+  `do_get_prepared_statement` use `execute_stream()` +
+  `FlightDataEncoderBuilder` instead of `collect()`, so the first page leaves
+  before the result is buffered; dropping the stream cancels execution. The
+  `BSDB_FLIGHT_MAX_ROWS` cap is enforced during streaming and mapped to
+  `RESOURCE_EXHAUSTED`.
+- **Spark stored procedures return rows** — `show_indexes` yields
+  `(column_name, index_category, algorithm, index_id, format_version)` and
+  `regional_drift_search` yields `node_id` on Spark 4.x too (previously the JNI
+  result was discarded and an empty iterator returned).
+- **Spark procedure table arguments keep their namespace** — a shared
+  `BenoStreamTableResolver` maps `users` → `<warehouse>/default/users`,
+  `schema.table` → `<warehouse>/schema/table`, and passes explicit URIs through,
+  replacing `table.split(".").last`.
+- **dbt `datetime` columns map to `timestamp`** instead of raising
+  `NotImplementedException`.
+
+### Fixed
+- **Bounded memory in Spark MERGE/DELETE** — the delta writer buffers at most
+  `spark.benostream.write.batchSize` (default 10,000) keys/rows. Deletes are
+  applied as `pk IN (...)` batches (1,000 keys) or compound-key chunks (500),
+  with `IS NULL` predicates handled separately, instead of one multi-megabyte
+  `pk = .. OR pk = ..` string; inserts flush one Arrow batch per `batchSize`.
+  Tables without a primary key no longer index an empty key list.
+- **Trino MERGE deletions are batched** — row ids are collected as literals and
+  applied as `key IN (...)` predicates of 1,000 keys (rendered predicate capped
+  at 64 KiB) instead of one `deleteRows` JNI call per deleted row.
+- **CI: `ubuntu-latest` migration** — the Ubuntu 26.04 runner image no longer
+  carries the CUDA 13.0 packages (`cuda-13-0`), so the Rust test job pins
+  `ubuntu-24.04`. All `ci.yml` jobs are pinned for reproducible toolchains.
+- **Dependency audit** — `skiplist` bumped to 1.3 (RUSTSEC-2026-0408/-0409),
+  `zstd-sys` to 2.1.2 (RUSTSEC-2026-0410); the remaining `zstd` 0.13 /
+  `zstd-safe` 7.x advisories are documented as unreachable in
+  `docs/DEPENDENCY_RISK.md` (no `with_context` reuse, no `seekable` feature, no
+  write-mode stream decoder).
+- **Formatting and lint gates** — `cargo fmt` drift in four files and two
+  `clippy::unnecessary_to_owned` sites in `src/core/iceberg/writer.rs` cleared.
+- **Python `distance`/`_distance` alias respects projections** — the
+  backward-compat alias is added only when the caller did not pass `columns=`,
+  so an explicit projection returns exactly the requested columns.
+
 ## [0.14.0]
 
 ### Added

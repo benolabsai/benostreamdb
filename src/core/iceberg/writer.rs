@@ -64,8 +64,8 @@ fn attach_manifest_metadata<W: std::io::Write>(
     writer.add_user_metadata("schema".to_string(), schema_json)?;
     writer.add_user_metadata("partition-spec".to_string(), spec_json)?;
     writer.add_user_metadata("partition-spec-id".to_string(), spec.spec_id.to_string())?;
-    writer.add_user_metadata("format-version".to_string(), "2".to_string())?;
-    writer.add_user_metadata("content".to_string(), content.to_string())?;
+    writer.add_user_metadata("format-version".to_string(), "2")?;
+    writer.add_user_metadata("content".to_string(), content)?;
     Ok(())
 }
 

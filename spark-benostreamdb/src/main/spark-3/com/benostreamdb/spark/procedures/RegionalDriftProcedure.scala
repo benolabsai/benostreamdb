@@ -35,9 +35,10 @@ class RegionalDriftProcedure extends Procedure {
     val mode = if (inputArgs.isNullAt(7)) "auto" else inputArgs.getString(7)
 
     val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
-    
+    val tableUri = BenoStreamTableResolver.resolveFromSession(table)
+
     val nodes = jniBridge.runRegionalDriftSearch(
-      table, query, seedsArray, topK, hops, nDepth, kFollowups, mode
+      tableUri, query, seedsArray, topK, hops, nDepth, kFollowups, mode
     )
     
     nodes.map { n =>

@@ -58,7 +58,8 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
                     handle.getVectorColumn(),
                     handle.getQueryVector(),
                     handle.getK(),
-                    handle.getRrfK());
+                    handle.getRrfK(),
+                    handle.getFilter().orElse(null));
         } else if (split.getTablesJson().isPresent()) {
             // Multi-table statement: the aliases travel in the split, so the
             // engine registers each one before planning.

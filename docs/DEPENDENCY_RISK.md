@@ -74,6 +74,19 @@ assessment, a migration path, and a review date.
 | Status | Accepted, tracked. |
 | Next review | Each DataFusion bump; re-run `cargo tree -i paste`. |
 
+### RUSTSEC-2026-0391 / -0398 / -0403 — `zstd` 0.13.3 and `zstd-safe` 7.2.4
+
+| Field | Value |
+|---|---|
+| Crate / version | `zstd` 0.13.3 (0391) and `zstd-safe` 7.2.4 (0398, 0403). `zstd-sys` was already bumped to the patched `2.1.2+zstd.1.5.7`, clearing RUSTSEC-2026-0410. |
+| Kind | Vulnerability (memory disclosure / UB) |
+| Chain | **Transitive**: `arrow-ipc 57.3.1`, `parquet 57.3.1`, `datafusion 52.5.0`, `datafusion-datasource 52.5.0` and `compression-codecs 0.4.38` all require `zstd ^0.13` / `zstd-safe ^7.2`. Only `arrow-ipc` **60.0.0** accepts `zstd ^0.14`, i.e. the fix rides on the Arrow 60 / DataFusion 54 migration. |
+| Reachability | **Not reachable in this configuration.** <br>• **0391** needs the `with_context` stream encoders/decoders to be reused across logically separate streams (e.g. per-user contexts). We never call them: the only direct `zstd` call sites are [`zstd::decode_all`](../src/core/puffin.rs) in the Puffin blob reader, and the parquet/datafusion paths use the bulk API.<br>• **0398** lives behind `zstd-safe`'s `seekable` feature, which is **not enabled** (`cargo tree -e features -i zstd-safe` shows `arrays,legacy,std,zdict_builder` only).<br>• **0403** requires the `zstd::stream::write::Decoder` push path with a corrupt legacy (v0.4–v0.7) frame; the advisory states `zstd::stream::read::Decoder`, `zstd::decode_all` and the bulk API are unaffected, and those are the only paths in the graph. |
+| Fix status | Blocked upstream: no 0.13.x / 7.x backport exists. `cargo update -p zstd -p zstd-safe` resolves to the vulnerable versions. |
+| Migration path | Bump the data stack to `arrow`/`parquet` 60 + `datafusion` 54, which moves `zstd` to 0.14 and `zstd-safe` to 8.x. Do **not** add a second `zstd 0.14` copy for our own direct use: it would duplicate the C library without removing the vulnerable copies transitively used by parquet/Arrow. Remove the three ignores once `cargo tree -i zstd` reports 0.14.3+. |
+| Status | Accepted, tracked. |
+| Next review | Each Arrow/DataFusion bump; re-run `cargo tree -i zstd` and `cargo tree -e features -i zstd-safe`. |
+
 ## Other allow-listed advisories
 
 The remaining entries in `audit.toml` / `deny.toml` are reviewed transitive

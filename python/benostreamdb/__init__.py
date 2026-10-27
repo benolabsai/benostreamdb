@@ -3587,10 +3587,14 @@ class Table:
         # it (the Rust `to_pandas` performed the identical call internally).
         arrow_table = self._inner.to_arrow(filter, vf, columns, device=device)
         df = arrow_table.to_pandas(**filtered_kwargs)
-        if "distance" in df.columns and "_distance" not in df.columns:
-            df["_distance"] = df["distance"]
-        elif "_distance" in df.columns and "distance" not in df.columns:
-            df["distance"] = df["_distance"]
+        # Backward-compat alias between `distance` and `_distance`. Only applied
+        # to unprojected reads: an explicit `columns=` projection must return
+        # exactly the requested columns (see tests/python/test_vector_io.py).
+        if columns is None:
+            if "distance" in df.columns and "_distance" not in df.columns:
+                df["_distance"] = df["distance"]
+            elif "_distance" in df.columns and "distance" not in df.columns:
+                df["distance"] = df["_distance"]
         return df
 
     def to_arrow(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):

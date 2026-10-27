@@ -37,4 +37,12 @@ ignore = [
     # pinned by the AWS SDK's rustls-0.21 client and sqlx-core 0.8.6.
     # Mirrors `deny.toml`; see docs/DEPENDENCY_RISK.md.
     "RUSTSEC-2026-0382",
+    # zstd 0.13 / zstd-safe 7.x: fixes are semver-major (0.14.3 / 8.2.0) and the
+    # Arrow 57 / DataFusion 52 / parquet 57 stack pins the old line. Unreachable
+    # in our configuration (no with_context reuse, no `seekable` feature, no
+    # write-mode stream decoder). Mirrors `deny.toml`; see
+    # docs/DEPENDENCY_RISK.md.
+    "RUSTSEC-2026-0391",
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0403",
 ]

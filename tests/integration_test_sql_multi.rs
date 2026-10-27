@@ -24,7 +24,11 @@ fn docs_batch() -> RecordBatch {
         schema,
         vec![
             Arc::new(Int64Array::from(vec![1, 2, 3])),
-            Arc::new(StringArray::from(vec!["graph rag", "vector search", "graph database"])),
+            Arc::new(StringArray::from(vec![
+                "graph rag",
+                "vector search",
+                "graph database",
+            ])),
         ],
     )
     .expect("docs batch")

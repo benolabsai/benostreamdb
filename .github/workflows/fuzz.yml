@@ -34,6 +34,8 @@ jobs:
           - target: parse_sparse
           - target: parse_binary
           - target: sql_rewriters
+          # Connector-supplied predicates and query-vector JSON (Trino/Spark).
+          - target: connector_inputs
           # The Qdrant target is the only one that needs the search gateway.
           - target: qdrant_request_body
             features: "--features qdrant"

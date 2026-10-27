@@ -12,6 +12,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # NOTE: every job below pins `ubuntu-24.04` instead of `ubuntu-latest`. The
+  # `ubuntu-latest` label began migrating to Ubuntu 26.04 on 2026-10-19, and the
+  # NVIDIA CUDA apt repo for 26.04 only publishes `cuda-13-3` / `cuda-13-4`
+  # (mirrored at ubuntu2404), so `Jimver/cuda-toolkit` fails with
+  # "E: Unable to locate package cuda-13-0". Pinning also keeps the toolchain,
+  # libpython and Vulkan packages reproducible across runner-image rollouts.
+  # Revisit when the CUDA packages we need are published for 26.04.
   # Limit parallel compilation/linking jobs to avoid running out of memory/disk space on the runner
   CARGO_BUILD_JOBS: 2
   # Reduce disk usage by disabling incremental compilation and heavy debug info
@@ -27,7 +34,7 @@ jobs:
   #########################
   lint:
     name: Rust Lint & Format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Maximize build space
         run: |
@@ -74,7 +81,7 @@ jobs:
   #########################
   version-check:
     name: Version single-source check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -115,7 +122,7 @@ jobs:
   #########################
   test:
     name: Rust Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Maximize build space
         run: |
@@ -193,7 +200,7 @@ jobs:
   #########################
   pytest:
     name: Python Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Maximize build space
@@ -243,7 +250,7 @@ jobs:
   #########################
   audit:
     name: Cargo Audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -265,7 +272,7 @@ jobs:
   # grow relative to scripts/no_panic_baseline.txt. See NO_PANIC_POLICY.md.
   no-panic:
     name: No-Panic Ratchet
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Maximize build space
         run: |
@@ -299,7 +306,7 @@ jobs:
   #########################
   ecosystem:
     name: Ecosystem Integrations
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -363,7 +370,7 @@ jobs:
   #########################
   connectors:
     name: ${{ matrix.connector }} — ${{ matrix.label }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -423,7 +430,7 @@ jobs:
   #########################
   workflow-lint:
     name: Workflow Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Run actionlint

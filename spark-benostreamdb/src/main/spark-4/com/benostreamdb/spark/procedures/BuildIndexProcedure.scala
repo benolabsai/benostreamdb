@@ -24,7 +24,7 @@ class BuildIndexProcedure extends UnboundProcedure with BoundProcedure {
     val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
     val gpuDevice = org.apache.spark.sql.SparkSession.active.conf.get("spark.benostream.gpu.device", "auto")
     jniBridge.setGpuContext(gpuDevice)
-    jniBridge.buildIndex(table.split("\\.").last, "all")
+    jniBridge.buildIndex(BenoStreamTableResolver.resolveFromSession(table), "all")
     
     java.util.Collections.emptyIterator()
   }

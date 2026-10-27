@@ -1768,6 +1768,7 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_hybridS
     query_vector: JString,
     k: jlong,
     rrf_k: jlong,
+    filter: JString,
 ) -> jlong {
     let uri: String = env
         .get_string(&table_uri)
@@ -1789,6 +1790,12 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_hybridS
         .get_string(&query_vector)
         .map(|s| s.into())
         .unwrap_or_default();
+    // Optional scalar pre-filter; empty means "no filter".
+    let filter_sql: Option<String> = env
+        .get_string(&filter)
+        .ok()
+        .map(|s| String::from(s))
+        .filter(|s| !s.trim().is_empty());
 
     if uri.is_empty() || text_col.is_empty() || vec_col.is_empty() || vec_json.is_empty() {
         tracing::error!(
@@ -1808,7 +1815,15 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_hybridS
     let res = RUNTIME.block_on(async {
         let table = Table::new_async(uri).await?;
         table
-            .hybrid_search_batches(&text_col, &query, &vec_col, vector, limit, rrf)
+            .hybrid_search_batches_filtered(
+                &text_col,
+                &query,
+                &vec_col,
+                vector,
+                limit,
+                rrf,
+                filter_sql.as_deref(),
+            )
             .await
     });
     match res {

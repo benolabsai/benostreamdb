@@ -566,7 +566,7 @@ impl Table {
                 let scored_results = coordinator
                     .execute_hybrid(
                         self,
-                        filter_str,
+                        Some(e),
                         first_vs_param,
                         Some(keyword_params),
                         k,
@@ -1315,6 +1315,19 @@ impl Table {
         &self,
         params: VectorSearchParams,
     ) -> Result<Vec<ScoredResult>> {
+        self.execute_vector_search_as_scored_filtered(params, None)
+            .await
+    }
+
+    /// Vector retrieval with an optional scalar pre-filter.
+    ///
+    /// The predicate is pushed into the reader, which resolves it to a row-id
+    /// bitmap and intersects it with the KNN candidates.
+    pub async fn execute_vector_search_as_scored_filtered(
+        &self,
+        params: VectorSearchParams,
+        filter: Option<FilterExpr>,
+    ) -> Result<Vec<ScoredResult>> {
         let start_time = std::time::Instant::now();
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_, all_entries, _) = manifest_manager.load_latest_full().await?;
@@ -1326,6 +1339,7 @@ impl Table {
             params.metric,
             params.use_mmap,
         )
+        .with_filter(filter)
         .with_ef_search(params.ef_search)
         .with_config(self.query_config.clone());
 
@@ -1347,6 +1361,19 @@ impl Table {
     pub async fn execute_keyword_search_as_scored(
         &self,
         params: KeywordSearchParams,
+    ) -> Result<Vec<ScoredResult>> {
+        self.execute_keyword_search_as_scored_filtered(params, None)
+            .await
+    }
+
+    /// BM25 retrieval with an optional scalar pre-filter.
+    ///
+    /// The reader turns the predicate into a row-id bitmap and drops excluded
+    /// documents before the per-segment top-k is truncated.
+    pub async fn execute_keyword_search_as_scored_filtered(
+        &self,
+        params: KeywordSearchParams,
+        filter: Option<FilterExpr>,
     ) -> Result<Vec<ScoredResult>> {
         let start_time = std::time::Instant::now();
         let manifest = self.manifest().await?;
@@ -1377,7 +1404,7 @@ impl Table {
                     1000,
                     &params.params(),
                     params.analyzer.as_deref(),
-                    None,
+                    filter.as_ref(),
                 )
                 .await?;
 
@@ -1545,21 +1572,52 @@ impl Table {
         k: usize,
         rrf_k: f32,
     ) -> Result<Vec<RecordBatch>> {
+        self.hybrid_search_batches_filtered(
+            text_column,
+            query_text,
+            vector_column,
+            query_vector,
+            k,
+            rrf_k,
+            None,
+        )
+        .await
+    }
+
+    /// Hybrid retrieval with an optional scalar predicate.
+    ///
+    /// The predicate is parsed once and handed to both retrieval paths, which
+    /// push it into candidate generation (row-id bitmap intersect for the vector
+    /// path, bitmap retain before the BM25 heap truncation). This is what makes
+    /// `filter` work on the Trino/Spark `hybrid_search` surfaces instead of
+    /// being rejected or silently ignored.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn hybrid_search_batches_filtered(
+        &self,
+        text_column: &str,
+        query_text: &str,
+        vector_column: &str,
+        query_vector: Vec<f32>,
+        k: usize,
+        rrf_k: f32,
+        filter: Option<&str>,
+    ) -> Result<Vec<RecordBatch>> {
         if k == 0 {
             return Ok(Vec::new());
         }
+        let filter_expr = match filter.map(str::trim).filter(|sql| !sql.is_empty()) {
+            Some(sql) => Some(FilterExpr::parse_sql(sql, self.arrow_schema()).await?),
+            None => None,
+        };
         let per_path = k.saturating_mul(2);
-        let vector_params = VectorSearchParams::new(
-            vector_column,
-            VectorValue::Float32(query_vector),
-            per_path,
-        );
+        let vector_params =
+            VectorSearchParams::new(vector_column, VectorValue::Float32(query_vector), per_path);
         let keyword_params = KeywordSearchParams::new(text_column, query_text);
         let coordinator = HybridSearchCoordinator::new();
         let fused = coordinator
             .execute_hybrid(
                 self,
-                None,
+                filter_expr.as_ref(),
                 Some(vector_params),
                 Some(keyword_params),
                 k,
@@ -1584,6 +1642,23 @@ impl Table {
                 let schema = Arc::new(Schema::new(fields));
                 *batch = RecordBatch::try_new(schema, batch.columns().to_vec())?;
             }
+        }
+        // Residual predicate.
+        //
+        // Candidate generation already intersects an indexed column's row-id
+        // bitmap, but a column without a scalar/inverted index yields no bitmap
+        // at all — the predicate would then be a silent no-op. Evaluate it
+        // against the hydrated rows so `filter` is always honoured.
+        if let Some(expr) = filter_expr.as_ref() {
+            let planner = QueryPlanner::new();
+            let mut filtered = Vec::with_capacity(batches.len());
+            for batch in batches {
+                let kept = planner.filter_expr(&batch, expr)?;
+                if kept.num_rows() > 0 {
+                    filtered.push(kept);
+                }
+            }
+            batches = filtered;
         }
         Ok(batches)
     }

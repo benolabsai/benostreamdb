@@ -36,13 +36,26 @@ import java.util.concurrent.CompletableFuture;
  * {@link BenoStreamDBMetadata#getMergeRowIdColumnHandle}).</p>
  */
 public class BenoStreamDBMergeSink implements ConnectorMergeSink {
+    /**
+     * Keys per {@code key IN (...)} predicate. A MERGE that touches 5,000 rows
+     * used to issue 5,000 sequential JNI calls, each with its own engine
+     * transaction; the same 5,000 rows now cost 5 calls.
+     */
+    private static final int MAX_KEYS_PER_IN_LIST = 1000;
+
+    /**
+     * Upper bound on the rendered predicate length. Identifier-heavy keys can
+     * still grow the string, so the flush loop also respects this budget.
+     */
+    private static final int MAX_PREDICATE_CHARS = 64 * 1024;
+
     private final BenoStreamDBMergeTableHandle handle;
     private final String warehouse;
     private final String gpuDevice;
     private final BufferAllocator allocator = new RootAllocator();
     private final List<Page> insertPages = new ArrayList<>();
-    /** Fully-formed delete predicates ({@code key = literal}) for the row ids. */
-    private final List<String> deletePredicates = new ArrayList<>();
+    /** Rendered SQL literals of the merge row ids pending deletion. */
+    private final List<String> deleteKeyLiterals = new ArrayList<>();
 
     public BenoStreamDBMergeSink(BenoStreamDBMergeTableHandle handle, String warehouse, String gpuDevice) {
         this.handle = handle;
@@ -69,11 +82,10 @@ public class BenoStreamDBMergeSink implements ConnectorMergeSink {
             // primary key, so non-numeric keys are quoted correctly.
             BenoStreamDBColumnHandle rowIdColumn = handle.getRowIdColumn();
             Type rowIdType = rowIdColumn.getColumnType();
-            String keyColumn = rowIdColumn.getRowIdSourceColumn();
             Block rowIdBlock = deletions.getBlock(deletions.getChannelCount() - 1);
             for (int p = 0; p < deletions.getPositionCount(); p++) {
                 if (!rowIdBlock.isNull(p)) {
-                    deletePredicates.add(keyColumn + " = " + sqlLiteral(rowIdType, rowIdBlock, p));
+                    deleteKeyLiterals.add(sqlLiteral(rowIdType, rowIdBlock, p));
                 }
             }
         });
@@ -87,11 +99,7 @@ public class BenoStreamDBMergeSink implements ConnectorMergeSink {
         // DELETE before INSERT: the merge row id is the target's key column, so
         // an UPDATE (delete-old + insert-new) reuses the same key. Inserting
         // first would let the delete reap the freshly inserted row.
-        for (String predicate : deletePredicates) {
-            if (!BenoStreamDBJNIBridge.deleteRows(tableUri, predicate)) {
-                throw new RuntimeException("BenoStreamDB deleteRows failed for " + tableUri + " (" + predicate + ")");
-            }
-        }
+        deleteRows(tableUri);
 
         if (!insertPages.isEmpty()) {
             try (VectorSchemaRoot root =
@@ -109,14 +117,49 @@ public class BenoStreamDBMergeSink implements ConnectorMergeSink {
         }
 
         insertPages.clear();
-        deletePredicates.clear();
+        deleteKeyLiterals.clear();
         return CompletableFuture.completedFuture(List.of());
     }
 
     @Override
     public void abort() {
         insertPages.clear();
-        deletePredicates.clear();
+        deleteKeyLiterals.clear();
+    }
+
+    /**
+     * Apply the buffered row-id deletions as a bounded number of
+     * {@code key IN (...)} predicates instead of one JNI call per row.
+     */
+    private void deleteRows(String tableUri) {
+        if (deleteKeyLiterals.isEmpty()) {
+            return;
+        }
+        String keyColumn = handle.getRowIdColumn().getRowIdSourceColumn();
+
+        int start = 0;
+        while (start < deleteKeyLiterals.size()) {
+            int end = Math.min(start + MAX_KEYS_PER_IN_LIST, deleteKeyLiterals.size());
+            // Respect the predicate length budget as well as the key-count cap.
+            while (end > start + 1 && renderedLength(keyColumn, deleteKeyLiterals, start, end) > MAX_PREDICATE_CHARS) {
+                end = start + Math.max(1, (end - start) / 2);
+            }
+            String predicate = keyColumn + " IN (" + String.join(", ", deleteKeyLiterals.subList(start, end)) + ")";
+            if (!BenoStreamDBJNIBridge.deleteRows(tableUri, predicate)) {
+                throw new RuntimeException("BenoStreamDB deleteRows failed for " + tableUri + " (" + predicate + ")");
+            }
+            start = end;
+        }
+        deleteKeyLiterals.clear();
+    }
+
+    /** Approximate rendered length of {@code column IN (literals[start:end])}. */
+    private static int renderedLength(String keyColumn, List<String> literals, int start, int end) {
+        int length = keyColumn.length() + " IN ()".length();
+        for (int i = start; i < end; i++) {
+            length += literals.get(i).length() + 2; // literal + ", "
+        }
+        return length;
     }
 
     /** Render a block value as a SQL literal for the engine's filter parser. */

@@ -44,6 +44,50 @@ public class VectorSearchSqlTest {
         assertEquals(3, VectorSearchSql.parseVector("[0.1, 0.2, 0.3]").size());
     }
 
+    @Test
+    public void defaultsToCosineDistance() {
+        VectorSearchHandle handle = new VectorSearchHandle(
+                "default.docs", "embedding", "[1.0, 0.0]", 3, Optional.empty());
+
+        assertEquals(VectorSearchHandle.DEFAULT_METRIC, handle.getMetric());
+        assertTrue(VectorSearchSql.build(handle).contains("dist_cosine(embedding,"));
+    }
+
+    @Test
+    public void honoursEachMetric() {
+        assertTrue(sqlFor("l2").contains("dist_l2(embedding,"));
+        assertTrue(sqlFor("euclidean").contains("dist_l2(embedding,"));
+        assertTrue(sqlFor("dot").contains("dist_ip(embedding,"));
+        assertTrue(sqlFor("inner_product").contains("dist_ip(embedding,"));
+        assertTrue(sqlFor("l1").contains("dist_l1(embedding,"));
+        assertTrue(sqlFor("manhattan").contains("dist_l1(embedding,"));
+        assertTrue(sqlFor("hamming").contains("dist_hamming(embedding,"));
+        assertTrue(sqlFor("jaccard").contains("dist_jaccard(embedding,"));
+    }
+
+    @Test
+    public void metricDrivesBothSelectAndOrderBy() {
+        String sql = sqlFor("l2");
+
+        assertTrue(sql.contains("dist_l2(embedding, '[0.1, 0.2]') AS distance"));
+        assertTrue(sql.contains("ORDER BY dist_l2(embedding, '[0.1, 0.2]')"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void rejectsUnknownMetric() {
+        sqlFor("levenshtein");
+    }
+
+    private static String sqlFor(String metric) {
+        return VectorSearchSql.build(new VectorSearchHandle(
+                "default.docs",
+                "embedding",
+                "[0.1, 0.2]",
+                5,
+                Optional.empty(),
+                metric));
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void rejectsNonNumericVector() {
         VectorSearchSql.parseVector("[0.1, nope]");

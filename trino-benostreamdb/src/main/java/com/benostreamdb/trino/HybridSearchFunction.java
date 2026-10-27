@@ -128,9 +128,10 @@ public final class HybridSearchFunction implements ConnectorTableFunction {
         if (rrfK < 1 || rrfK > 10_000) {
             throw userError("rrf_k must be between 1 and 10000");
         }
-        if (filter != null && !filter.isBlank()) {
-            throw userError("filter is not supported for hybrid_search yet");
-        }
+        // A non-empty filter is pushed into the engine, which resolves it to a
+        // row-id bitmap and applies it to both retrieval paths before RRF.
+        Optional<String> filterArgument =
+                Optional.ofNullable(filter).map(String::trim).filter(value -> !value.isBlank());
 
         String[] schemaTable = BenoStreamDBTableUri.splitTable(table);
         BenoStreamDBMetadata metadata = new BenoStreamDBMetadata(warehouse);
@@ -170,7 +171,7 @@ public final class HybridSearchFunction implements ConnectorTableFunction {
                 queryVector,
                 k,
                 rrfK,
-                java.util.Optional.empty());
+                filterArgument);
 
         return TableFunctionAnalysis.builder()
                 .returnedType(Descriptor.descriptor(names, types))

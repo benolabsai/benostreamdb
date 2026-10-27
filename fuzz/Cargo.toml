@@ -15,6 +15,10 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
+# The `connector_inputs` target parses connector-supplied SQL predicates, which
+# needs the same Arrow schema type and a runtime as the engine itself.
+tokio = { version = "1", features = ["rt"] }
+arrow = { version = "57.2.0" }
 
 [dependencies.benostreamdb]
 path = ".."
@@ -68,6 +72,13 @@ required-features = ["qdrant"]
 [[bin]]
 name = "jni_bridge"
 path = "fuzz_targets/jni_bridge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "connector_inputs"
+path = "fuzz_targets/connector_inputs.rs"
 test = false
 doc = false
 bench = false

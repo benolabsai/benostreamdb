@@ -29,7 +29,7 @@ impl HybridSearchCoordinator {
     pub async fn execute_hybrid(
         &self,
         table: &crate::core::table::Table,
-        _filter: Option<&str>,
+        filter: Option<&crate::core::planner::FilterExpr>,
         vector_params: Option<VectorSearchParams>,
         keyword_params: Option<KeywordSearchParams>,
         limit: usize,
@@ -38,18 +38,31 @@ impl HybridSearchCoordinator {
         let mut search_handles = Vec::new();
 
         // 1. Vector Search Path
+        //
+        // The scalar predicate is applied *during* candidate generation (the
+        // reader resolves it to a row-id bitmap), so a filtered hybrid query
+        // still returns k rows instead of a post-filtered subset.
         if let Some(vp) = vector_params {
             let table_clone = table.clone();
-            let handle =
-                tokio::spawn(async move { table_clone.execute_vector_search_as_scored(vp).await });
+            let vector_filter = filter.cloned();
+            let handle = tokio::spawn(async move {
+                table_clone
+                    .execute_vector_search_as_scored_filtered(vp, vector_filter)
+                    .await
+            });
             search_handles.push(handle);
         }
 
-        // 2. Keyword Search Path (BM25)
+        // 2. Keyword Search Path (BM25): same bitmap pre-filter, applied before
+        // the BM25 heap is truncated.
         if let Some(kp) = keyword_params {
             let table_clone = table.clone();
-            let handle =
-                tokio::spawn(async move { table_clone.execute_keyword_search_as_scored(kp).await });
+            let keyword_filter = filter.cloned();
+            let handle = tokio::spawn(async move {
+                table_clone
+                    .execute_keyword_search_as_scored_filtered(kp, keyword_filter)
+                    .await
+            });
             search_handles.push(handle);
         }
 

@@ -54,6 +54,11 @@ import com.benostreamdb.spark.functions.BenoStreamFunctions
 BenoStreamFunctions.register(spark)
 ```
 
+Writes are chunked by `spark.benostream.write.batchSize` (default `10000`; also
+settable per write option or table property). See
+[Row-Level Operations](#5-row-level-operations-delete--update--merge) for how it
+bounds MERGE memory.
+
 ---
 
 ## Core Capabilities
@@ -233,7 +238,8 @@ CALL benostream.system.build_index('spark_catalog.default.users');
 -- Rebuild a specific index column (drops and re-creates it)
 CALL benostream.system.rebuild_index('spark_catalog.default.users', 'embedding');
 
--- List all configured and built indexes (JSON)
+-- List all configured and built indexes: one row per index with
+-- (column_name, index_category, algorithm, index_id, format_version)
 CALL benostream.system.show_indexes('spark_catalog.default.users');
 
 -- Drop an index
@@ -246,10 +252,30 @@ CALL benostream.system.compact('spark_catalog.default.users');
 CALL benostream.system.set_primary_key('spark_catalog.default.users', 'id');
 CALL benostream.system.drop_primary_key('spark_catalog.default.users', 'id');
 
--- Regional DRIFT graph search (top-k node ids)
+-- Regional DRIFT graph search: returns a node_id column (top-k node ids)
 CALL benostream.system.regional_drift_search(
   'spark_catalog.default.edges', 'vector query text', array(101L, 205L), 5, 2, 2, 3, 'auto');
 ```
+
+`show_indexes` and `regional_drift_search` return result sets on Spark 4.x as
+well as 3.5 (Spark 4's `BoundProcedure.call` hands back a `Scan`, which the
+connector fills from the already-computed JNI result).
+
+**Table argument resolution.** Every procedure resolves its `table` argument
+through `BenoStreamTableResolver`, so namespaces are preserved instead of being
+dropped:
+
+| Argument | Resolved URI |
+|----------|--------------|
+| `users` | `<catalog warehouse>/default/users` |
+| `sales.users` | `<catalog warehouse>/sales/users` |
+| `benostream.sales.users` | `<catalog warehouse>/sales/users` |
+| `s3://bucket/path/users` | unchanged (explicit URI) |
+
+The warehouse comes from `spark.sql.catalog.<name>.warehouse` (the `benostream`
+catalog is preferred when several are configured), falling back to
+`spark.benostream.warehouse`. Previously `table.split(".").last` discarded the
+namespace, so `benostream.default.users` and `users` were indistinguishable.
 
 On Spark 3.5 the same procedures are reachable through the Iceberg `ProcedureCatalog` shim. On Spark 4.2+ the catalog also implements `listProcedures`, so `SHOW PROCEDURES IN benostream.system` lists them.
 
@@ -277,7 +303,22 @@ UPDATE benostream.default.users SET age = 31 WHERE id = 7;
 DELETE FROM benostream.default.users WHERE age < 0;
 ```
 
-The full MERGE matrix (UPDATE / DELETE / INSERT clauses, plus standalone UPDATE/DELETE) is verified end-to-end on Spark 3.5.9 and 4.2.0 with whole-stage codegen enabled. Declare the primary key with `CALL benostream.system.set_primary_key('db.tbl', 'id')` (or the `primary_key` table property); when unset, the first column is used.
+The full MERGE matrix (UPDATE / DELETE / INSERT clauses, plus standalone UPDATE/DELETE) is verified end-to-end on Spark 3.5.9 and 4.2.0 with whole-stage codegen enabled. Declare the primary key with `CALL benostream.system.set_primary_key('db.tbl', 'id')` (or the `primary_key` table property); when unset, the first column is used. A table with **no** key and no columns cannot service `UPDATE`/`DELETE`; the connector records no predicates for those rows instead of failing the task.
+
+**Bounded memory.** The delta writer buffers at most
+`spark.benostream.write.batchSize` (default `10000`) rows/keys before flushing:
+
+* Deletes accumulate rendered key literals, not one growing SQL string. They are
+  applied as `pk IN (...)` predicates of 1,000 keys (single-column key) or
+  `(a = .. AND b = ..) OR ...` chunks of 500 (compound key); rows containing a
+  `NULL` key get their own `pk IS NULL`-style predicate. This keeps a 10k-row
+  `DELETE` clear of the engine's AST recursion limit and of task OOM.
+* Inserts are appended one Arrow batch per `write.batchSize` rows, so the task
+  never holds an unbounded `ArrayBuffer`.
+
+Configure it per write (`writeTo(...).option("write.batchSize", "5000")`), per
+table (`TBLPROPERTIES ('write.batchSize' = '5000')`), or session-wide via
+`spark.benostream.write.batchSize`.
 
 > Note: the engine does not currently honor Iceberg position-delete files (`commitPositionDeletes` is a placeholder), so deletes are applied as predicate removals at commit time rather than as delete-file overlays.
 

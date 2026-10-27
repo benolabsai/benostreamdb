@@ -1266,8 +1266,31 @@ impl HybridReader {
         k: usize,
         params: &Bm25Params,
         analyzer: Option<&str>,
-        _filter: Option<&FilterExpr>,
+        filter: Option<&FilterExpr>,
     ) -> Result<Vec<(usize, f32)>> {
+        // Scalar pre-filter: resolve the predicate to a row-id bitmap before
+        // scoring so filtered-out documents never enter the BM25 heap. Without
+        // this the caller would have to post-filter the top-k list, which
+        // silently returns fewer than k rows.
+        let allowed_bitmap = if let Some(expr) = filter {
+            let sub_filters = self.rewrite_composite_filters(expr.extract_and_conditions());
+            let mut combined: Option<RoaringBitmap> = None;
+            for sub_filter in &sub_filters {
+                if let Ok(Some(bitmap)) = self.get_scalar_filter_bitmap(sub_filter).await {
+                    match combined {
+                        Some(ref mut existing) => *existing &= bitmap,
+                        None => combined = Some(bitmap),
+                    }
+                    if combined.as_ref().is_some_and(|bitmap| bitmap.is_empty()) {
+                        return Ok(vec![]);
+                    }
+                }
+            }
+            combined
+        } else {
+            None
+        };
+
         // 1. Find Inverted Index
         tracing::info!(
             "keyword_search_index: Segment {} searching for inverted index on column '{}'",
@@ -1556,7 +1579,11 @@ impl HybridReader {
             }
         }
 
-        // 6. Sort by raw BM25 score descending (best first) and truncate.
+        // 6. Drop documents the scalar filter excluded, then sort by raw BM25
+        // score descending (best first) and truncate.
+        if let Some(bitmap) = &allowed_bitmap {
+            scores.retain(|row_id, _| bitmap.contains(*row_id));
+        }
         let mut results: Vec<(usize, f32)> = scores
             .into_iter()
             .map(|(rid, score)| (rid as usize, score))
