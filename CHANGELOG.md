@@ -113,6 +113,17 @@
   engine), matching `trino-testing`.
 
 ### Fixed
+- **Connector CI** — Trino band d's plugin dependency check failed on a `~/.m2`
+  entry restored from a repository ID the build no longer uses (`trino-spi:482`
+  "cached from a remote repository ID that is unavailable"), which made the check
+  treat every SPI artifact as non-SPI and reject `io.airlift:slice`; the job now
+  runs with `-Dmaven.legacyLocalRepo=true`, and `slice` is declared explicitly so
+  its version no longer floats with the band. The Spark 3.5 job runs on Java 17:
+  on Java 21 the Arrow 12 build it ships fails in `MemoryUtil` ("sun.misc.Unsafe
+  or java.nio.DirectByteBuffer.<init>(long, int) not available") and INSERTs die
+  as a task failure. `hybridSearchEndToEnd` now waits for a fused *score* rather
+  than just a row count — a search that races the index build returns rows whose
+  `rrf_score` is still zero.
 - **Documentation site build** — a public doc comment on `SchemaField::type_str`
   linked to the private `schema_field_to_json`, and `#![deny(warnings)]` promotes
   rustdoc's `private_intra_doc_links` to an error, so the Pages workflow failed

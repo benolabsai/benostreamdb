@@ -352,6 +352,28 @@ public class TestBenoStreamDBQueries {
         return result;
     }
 
+    /**
+     * Highest non-null `rrf_score` in the result (0 when there is none).
+     *
+     * <p>Index builds are engine-side and asynchronous, and a hybrid search that
+     * runs while the BM25/vector sidecars are still being attached returns rows
+     * with no fused score yet. Waiting for a row count alone is not enough: the
+     * count can be non-zero while every score is still zero.</p>
+     */
+    private static double maxScore(MaterializedResult result) {
+        double max = 0;
+        for (MaterializedRow row : result.getMaterializedRows()) {
+            if (row.getFieldCount() < 2) {
+                continue;
+            }
+            Object score = row.getField(1);
+            if (score instanceof Number) {
+                max = Math.max(max, ((Number) score).doubleValue());
+            }
+        }
+        return max;
+    }
+
     @Test
     void hybridSearchEndToEnd() {
         runner.execute(
@@ -368,13 +390,25 @@ public class TestBenoStreamDBQueries {
                 "CALL benostreamdb.system.add_index('default.hybrid', 'title', 'bm25')");
         runner.execute("CALL benostreamdb.system.build_index('default.hybrid')");
 
-        MaterializedResult result = awaitRows(
+        String sql =
                 "SELECT id, rrf_score FROM TABLE(system.hybrid_search("
                         + "table_name => 'default.hybrid', text_column => 'title', "
                         + "query_text => 'graph', vector_column => 'embedding', "
-                        + "query_vector => '[1.0, 0.0, 0.0]', k => 2))");
+                        + "query_vector => '[1.0, 0.0, 0.0]', k => 2))";
+        MaterializedResult result = runner.execute(sql);
+        for (int attempt = 0; attempt < 40 && maxScore(result) <= 0; attempt++) {
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            result = runner.execute(sql);
+        }
         assertTrue(result.getRowCount() >= 1);
-        assertTrue(((Number) result.getMaterializedRows().get(0).getField(1)).doubleValue() > 0);
+        assertTrue(
+                maxScore(result) > 0,
+                "expected a fused score, got " + result.getMaterializedRows());
     }
 
     @Test

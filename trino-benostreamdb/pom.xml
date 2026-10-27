@@ -34,6 +34,14 @@
         <!-- Trino 482+ SPI is compiled for Java 23; build with JDK 23+. -->
         <java.release>23</java.release>
         <skipTests>false</skipTests>
+        <!-- `ConnectorMergeSink.finish` is declared as
+             `CompletableFuture<Collection<Slice>>`, so airlift's Slice is on the
+             SPI surface. trino-spi only brings it in transitively (as `provided`),
+             which the plugin dependency check rejects: "must not have scope
+             'provided'. It is not part of the SPI and will not be available at
+             runtime." Declaring it explicitly keeps the check green; at runtime
+             Trino serves the class from the parent loader. -->
+        <airlift.slice.version>2.9</airlift.slice.version>
     </properties>
 
     <dependencyManagement>
@@ -59,6 +67,12 @@
             <groupId>io.trino</groupId>
             <artifactId>trino-spi</artifactId>
             <version>${trino.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>slice</artifactId>
+            <version>${airlift.slice.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>

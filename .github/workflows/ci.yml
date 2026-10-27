@@ -385,7 +385,7 @@ jobs:
           - connector: trino
             label: "482 (band d)"
             java: "25"
-            mvn-args: "-Dtrino.version=482 -Dtrino.band=d"
+            mvn-args: "-Dtrino.version=482 -Dtrino.band=d -Dmaven.legacyLocalRepo=true"
           - connector: trino
             label: "484 (band e)"
             java: "25"
@@ -396,7 +396,11 @@ jobs:
             mvn-args: ""
           - connector: spark
             label: "3.5"
-            java: "21"
+            # Spark 3.5 is supported/tested on Java 17. On Java 21 the Arrow 12
+            # build it ships fails in `MemoryUtil` with "sun.misc.Unsafe or
+            # java.nio.DirectByteBuffer.<init>(long, int) not available", which
+            # surfaces as a task failure during INSERT. 4.0 runs on 21.
+            java: "17"
             mvn-args: "-P spark-3.5"
     steps:
       - uses: actions/checkout@v5
