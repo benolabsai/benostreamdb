@@ -189,6 +189,14 @@ impl ManifestManager {
                     }
                 }
             }
+            // Delete files already present in the parent snapshot are EXISTING in
+            // this snapshot's delete manifest, not ADDED again.
+            let previous_delete_paths: std::collections::HashSet<String> = current_manifest
+                .delete_files
+                .iter()
+                .map(|delete| delete.file_path.clone())
+                .collect();
+
             // 2. Decide if we need a ManifestList (Scalability)
             // BenoStreamDB v0.4: Always use Tiered Manifests (ManifestList -> ManifestFile)
             // chunked by 8MB to ensure 100% Iceberg Spec compatibility.
@@ -225,7 +233,6 @@ impl ManifestManager {
 
                     let chunks = writer.write_manifest_chunks(
                         &qualified_new,
-                        &global_delete_files,
                         &table_spec,
                         &table_schema,
                         new_ver_i64,
@@ -273,8 +280,56 @@ impl ManifestManager {
                         new_manifest_files.push(res?);
                     }
 
-                    // Reference the unchanged previous manifest files + the new ones.
-                    let mut manifest_files = prev_manifest_files;
+                    // Delete files live in their own manifest: Iceberg requires a
+                    // manifest to contain a single content type, and external
+                    // readers reject or ignore data/delete mixed manifests.
+                    if let Some((bytes, added_deletes, existing_deletes)) = writer
+                        .write_delete_manifest(
+                            &global_delete_files,
+                            &previous_delete_paths,
+                            &table_spec,
+                            &table_schema,
+                            new_ver_i64,
+                            new_ver_i64,
+                        )?
+                    {
+                        let uuid = uuid::Uuid::new_v4();
+                        let path = self.manifest_dir.child(format!("{}-d0.avro", uuid));
+                        let manifest_path_abs = format!(
+                            "{}/{}",
+                            root_uri.trim_end_matches('/'),
+                            path.to_string().trim_start_matches('/')
+                        );
+                        let manifest_length = bytes.len() as i64;
+                        let partition_spec_id = table_spec.spec_id;
+                        self.store.put(&path, bytes.into()).await?;
+                        new_manifest_files.push(ManifestListEntry {
+                            manifest_path: manifest_path_abs,
+                            manifest_length,
+                            partition_spec_id,
+                            content: 1, // Deletes
+                            sequence_number: new_ver_i64,
+                            min_sequence_number: new_ver_i64,
+                            added_snapshot_id: new_ver_i64,
+                            added_files_count: added_deletes as i32,
+                            existing_files_count: existing_deletes as i32,
+                            deleted_files_count: 0,
+                            added_rows_count: 0,
+                            existing_rows_count: 0,
+                            deleted_rows_count: 0,
+                            partition_stats: HashMap::new(),
+                        });
+                    }
+
+                    // Reference the unchanged previous data manifests + the new
+                    // ones. Previous *delete* manifests are dropped: the delete
+                    // manifest written for this snapshot is authoritative, and
+                    // carrying an older one forward would list the same delete
+                    // file twice.
+                    let mut manifest_files: Vec<ManifestListEntry> = prev_manifest_files
+                        .into_iter()
+                        .filter(|manifest| manifest.content == 0)
+                        .collect();
                     manifest_files.extend(new_manifest_files);
 
                     let list_uuid = uuid::Uuid::new_v4();
@@ -335,7 +390,6 @@ impl ManifestManager {
 
                     let chunks = writer.write_manifest_chunks(
                         &qualified_entries,
-                        &global_delete_files,
                         &table_spec,
                         &table_schema,
                         new_ver_i64,
@@ -382,6 +436,46 @@ impl ManifestManager {
 
                     while let Some(res) = futures.next().await {
                         manifest_files.push(res?);
+                    }
+
+                    // Delete files live in their own manifest: Iceberg requires a
+                    // manifest to contain a single content type.
+                    if let Some((bytes, added_deletes, existing_deletes)) = writer
+                        .write_delete_manifest(
+                            &global_delete_files,
+                            &previous_delete_paths,
+                            &table_spec,
+                            &table_schema,
+                            new_ver_i64,
+                            new_ver_i64,
+                        )?
+                    {
+                        let uuid = uuid::Uuid::new_v4();
+                        let path = self.manifest_dir.child(format!("{}-d0.avro", uuid));
+                        let manifest_path_abs = format!(
+                            "{}/{}",
+                            root_uri.trim_end_matches('/'),
+                            path.to_string().trim_start_matches('/')
+                        );
+                        let manifest_length = bytes.len() as i64;
+                        let partition_spec_id = table_spec.spec_id;
+                        self.store.put(&path, bytes.into()).await?;
+                        manifest_files.push(ManifestListEntry {
+                            manifest_path: manifest_path_abs,
+                            manifest_length,
+                            partition_spec_id,
+                            content: 1, // Deletes
+                            sequence_number: new_ver_i64,
+                            min_sequence_number: new_ver_i64,
+                            added_snapshot_id: new_ver_i64,
+                            added_files_count: added_deletes as i32,
+                            existing_files_count: existing_deletes as i32,
+                            deleted_files_count: 0,
+                            added_rows_count: 0,
+                            existing_rows_count: 0,
+                            deleted_rows_count: 0,
+                            partition_stats: HashMap::new(),
+                        });
                     }
 
                     let list_uuid = uuid::Uuid::new_v4();

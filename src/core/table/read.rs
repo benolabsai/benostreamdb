@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use super::fluent::TableQuery;
 use crate::core::index::gpu::get_thread_gpu_context;
+use crate::core::index::VectorValue;
 use crate::core::manifest::{IndexAlgorithm, IndexFile, ManifestEntry, ManifestManager};
 use crate::core::planner::{FilterExpr, QueryFilter, QueryPlanner, VectorSearchParams};
 use crate::core::query::{QueryConfig, VectorSearchRequest};
@@ -69,6 +70,51 @@ impl Table {
         let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let provider = Arc::new(BenoStreamTableProvider::new(Arc::new(self.clone())));
         ctx.register_table("t", provider)?;
+        let df = ctx.sql(query).await?;
+        Ok(df.collect().await?)
+    }
+
+    /// Runs `query` with several tables registered under explicit aliases.
+    ///
+    /// <p>This is the multi-table counterpart of [`Table::sql`], which registers
+    /// exactly one table as `t`. Functions that need a document table and an
+    /// edge table in the same statement (for example a graph-expanded RAG
+    /// lookup) pass `[("t", docs_uri), ("e", edges_uri)]` and then reference
+    /// `t` and `'e'` in the query.</p>
+    #[tracing::instrument(skip(self, tables))]
+    pub async fn sql_multi(
+        &self,
+        tables: Vec<(String, String)>,
+        query: &str,
+    ) -> Result<Vec<RecordBatch>> {
+        use crate::core::sql::optimizer::VectorSearchConfig;
+        use crate::core::sql::BenoStreamTableProvider;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        if tables.is_empty() {
+            anyhow::bail!("sql_multi requires at least one table alias");
+        }
+
+        let mut session_config = SessionConfig::new();
+        if let Some(hints) = VectorSearchConfig::extract_sql_hints(query) {
+            let vs_config = VectorSearchConfig::from_sql_hints(&hints)?;
+            session_config.options_mut().extensions.insert(vs_config);
+        }
+
+        let mut ctx = SessionContext::new_with_config(session_config);
+        // Same function surface as `sql()`: without it, `graph_neighbors(...)`,
+        // the distance UDFs, and the vector operators are all unresolved.
+        crate::core::sql::udf::register_all_custom_udfs(&mut ctx);
+        crate::core::sql::graph_udf::register_graph_table_functions(&mut ctx);
+        crate::core::sql::subscribe_table_function::register_subscribe_table_functions(&mut ctx);
+        let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+
+        for (alias, uri) in tables {
+            let referenced = Table::new_async(uri).await?;
+            let provider = Arc::new(BenoStreamTableProvider::new(Arc::new(referenced)));
+            ctx.register_table(alias.as_str(), provider)?;
+        }
+
         let df = ctx.sql(query).await?;
         Ok(df.collect().await?)
     }
@@ -1482,6 +1528,64 @@ impl Table {
         }
 
         Ok(final_batches)
+    }
+
+    /// Run dense-vector and BM25 retrieval, fuse them with RRF, and return the
+    /// hydrated rows with the fused score in an `rrf_score` column.
+    ///
+    /// This is the shared core path behind the Python `hybrid_search` helper and
+    /// the SQL/connector surfaces. Ranking is delegated to
+    /// [`HybridSearchCoordinator`] so every surface uses the same RRF formula.
+    pub async fn hybrid_search_batches(
+        &self,
+        text_column: &str,
+        query_text: &str,
+        vector_column: &str,
+        query_vector: Vec<f32>,
+        k: usize,
+        rrf_k: f32,
+    ) -> Result<Vec<RecordBatch>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        let per_path = k.saturating_mul(2);
+        let vector_params = VectorSearchParams::new(
+            vector_column,
+            VectorValue::Float32(query_vector),
+            per_path,
+        );
+        let keyword_params = KeywordSearchParams::new(text_column, query_text);
+        let coordinator = HybridSearchCoordinator::new();
+        let fused = coordinator
+            .execute_hybrid(
+                self,
+                None,
+                Some(vector_params),
+                Some(keyword_params),
+                k,
+                Some(rrf_k),
+            )
+            .await?;
+        if fused.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut batches = self.fetch_results_by_id(fused, None).await?;
+        // `fetch_results_by_id` appends the fused score as `distance`; rename it
+        // so SQL callers see the same name as the Python API.
+        for batch in &mut batches {
+            if let Ok(index) = batch.schema().index_of("distance") {
+                let mut fields = batch.schema().fields().to_vec();
+                fields[index] = Arc::new(arrow::datatypes::Field::new(
+                    "rrf_score",
+                    arrow::datatypes::DataType::Float32,
+                    false,
+                ));
+                let schema = Arc::new(Schema::new(fields));
+                *batch = RecordBatch::try_new(schema, batch.columns().to_vec())?;
+            }
+        }
+        Ok(batches)
     }
 
     /// Verifies the data integrity of all segments in the table by comparing

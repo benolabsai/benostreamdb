@@ -93,13 +93,16 @@ impl Table {
 
         // Step 2: Commit with all paths in remove_paths and empty add_entries
         // This is a single atomic snapshot swap that points to an empty segment set.
-        manifest_manager
+        let new_manifest = manifest_manager
             .commit(
                 &[],
                 &remove_paths,
                 crate::core::manifest::CommitMetadata::default(),
             )
             .await?;
+        // Manifest commits are invisible to external readers until the snapshot
+        // is published in the table metadata.
+        self.publish_snapshot_async(&new_manifest, "delete").await?;
 
         // Step 3: Truncate WAL
         {

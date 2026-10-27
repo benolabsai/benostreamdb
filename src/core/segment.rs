@@ -35,6 +35,79 @@ fn indexing_pool() -> &'static ThreadPool {
     })
 }
 
+/// Attach Iceberg-compatible Parquet field ids to a batch schema.
+///
+/// The Iceberg spec requires `field_id` on every data-file column so readers
+/// map Parquet columns by id instead of by position. arrow-rs turns the
+/// `PARQUET:field_id` metadata key into the Parquet field id, so annotate the
+/// schema once per batch before writing.
+///
+/// Nested ids mirror [`crate::core::manifest::Schema::from_arrow`]: a child of
+/// a top-level column `id` is `id * 100 + position + 1`, which is exactly how
+/// the manifest schema derives its ids from the same Arrow schema.
+fn with_parquet_field_ids(schema: &arrow::datatypes::Schema) -> arrow::datatypes::Schema {
+    use arrow::datatypes::DataType;
+
+    fn annotate(field: &arrow::datatypes::Field, id: i32) -> arrow::datatypes::Field {
+        let mut metadata = field.metadata().clone();
+        metadata
+            .entry(parquet::arrow::PARQUET_FIELD_ID_META_KEY.to_string())
+            .or_insert_with(|| id.to_string());
+
+        let data_type = match field.data_type() {
+            DataType::Struct(children) => DataType::Struct(
+                children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, child)| annotate(child, id * 100 + i as i32 + 1))
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+            DataType::List(child) => DataType::List(Arc::new(annotate(child, id * 100 + 1))),
+            DataType::LargeList(child) => {
+                DataType::LargeList(Arc::new(annotate(child, id * 100 + 1)))
+            }
+            DataType::FixedSizeList(child, size) => {
+                DataType::FixedSizeList(Arc::new(annotate(child, id * 100 + 1)), *size)
+            }
+            DataType::Map(entries, sorted) => {
+                let entries = match entries.data_type() {
+                    DataType::Struct(children) => {
+                        let annotated = children
+                            .iter()
+                            .enumerate()
+                            .map(|(i, child)| annotate(child, id * 100 + i as i32 + 1))
+                            .collect::<Vec<_>>();
+                        Arc::new(
+                            arrow::datatypes::Field::new(
+                                entries.name().clone(),
+                                DataType::Struct(annotated.into()),
+                                entries.is_nullable(),
+                            )
+                            .with_metadata(entries.metadata().clone()),
+                        )
+                    }
+                    _ => entries.clone(),
+                };
+                DataType::Map(entries, *sorted)
+            }
+            other => other.clone(),
+        };
+
+        arrow::datatypes::Field::new(field.name().clone(), data_type, field.is_nullable())
+            .with_metadata(metadata)
+    }
+
+    arrow::datatypes::Schema::new(
+        schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, field)| annotate(field, i as i32 + 1))
+            .collect::<Vec<_>>(),
+    )
+}
+
 pub struct HybridSegmentWriter {
     pub(crate) config: SegmentConfig,
     // Store paths of created files for upload tracking
@@ -301,7 +374,12 @@ impl HybridSegmentWriter {
         }
 
         let props = props_builder.build();
-        let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))?;
+        // Data files must carry Iceberg field ids. The writer derives the
+        // Parquet schema (and therefore the ids) from this schema, while the
+        // batch's arrays are written positionally, so only the schema needs the
+        // annotation.
+        let data_schema = Arc::new(with_parquet_field_ids(batch.schema().as_ref()));
+        let mut writer = ArrowWriter::try_new(file, data_schema, Some(props))?;
 
         writer.write(batch)?;
         let metadata = writer.close()?; // Capture Zero-Copy metadata

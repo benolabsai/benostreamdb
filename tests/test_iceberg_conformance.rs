@@ -72,7 +72,9 @@ async fn find_data_manifest(store: &Arc<dyn ObjectStore>) -> anyhow::Result<ObjP
     while let Some(meta) = stream.next().await {
         let meta = meta?;
         let name = meta.location.filename().unwrap_or("").to_string();
-        if name.ends_with(".avro") && !name.starts_with("snap-") {
+        // Data manifests are `<uuid>-m<N>.avro`; delete manifests are
+        // `<uuid>-d<N>.avro` and must not be mistaken for them.
+        if name.ends_with(".avro") && name.contains("-m") && !name.starts_with("snap-") {
             return Ok(meta.location);
         }
     }

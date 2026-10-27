@@ -117,11 +117,15 @@ impl Table {
         }
 
         if !add_entries.is_empty() || !remove_paths.is_empty() {
-            self.block_on_io(manifest_manager.commit(
+            let new_manifest = self.block_on_io(manifest_manager.commit(
                 &add_entries,
                 &remove_paths,
                 crate::core::manifest::CommitMetadata::default(),
             ))??;
+            // Publish the snapshot or external Iceberg readers keep seeing the
+            // pre-merge state. A merge adds and removes files without being a
+            // pure append, so the spec's operation is `overwrite`.
+            self.block_on_io(self.publish_snapshot_async(&new_manifest, "overwrite"))??;
         }
         Ok(())
     }

@@ -14,6 +14,9 @@ use std::sync::Arc;
 fn format_datatype(dt: &DataType) -> String {
     match dt {
         DataType::List(field) => format!("List({})", format_datatype(field.data_type())),
+        DataType::FixedSizeList(field, size) => {
+            format!("FixedSizeList({}, {})", format_datatype(field.data_type()), size)
+        }
         DataType::Struct(fields) => {
             let mut s = String::from("Struct(");
             for (i, f) in fields.iter().enumerate() {
@@ -56,6 +59,17 @@ pub fn arrow_type_from_str(s: &str) -> DataType {
             arrow_type_from_str(inner),
             true,
         )));
+    }
+    if s.starts_with("FixedSizeList(") && s.ends_with(')') {
+        let inner = &s[14..s.len() - 1];
+        if let Some((element, size)) = inner.rsplit_once(", ") {
+            if let Ok(dimension) = size.parse::<i32>() {
+                return DataType::FixedSizeList(
+                    Arc::new(Field::new("item", arrow_type_from_str(element), true)),
+                    dimension,
+                );
+            }
+        }
     }
     if s.starts_with("Struct(") && s.ends_with(")") {
         let inner = &s[7..s.len() - 1];

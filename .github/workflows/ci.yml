@@ -346,6 +346,77 @@ jobs:
         run: pytest -v tests/test_cross_engine_compat.py
 
   #########################
+  # Language connectors (Spark and Trino)
+  #
+  # The `ecosystem` job above only exercises the Python cross-engine helpers; it
+  # never builds a JVM connector. This job builds the shared native library with
+  # the `java` feature (the JNI exports are feature-gated, so a plain
+  # `cargo build` produces a library with zero JNI symbols) and runs each
+  # connector's own suite.
+  #
+  # Two things drive the matrix:
+  #   * Trino publishes no LTS and no SPI compatibility, so each supported band
+  #     is compiled and fully tested against its own SPI. See
+  #     plans/trino_version_bands.md.
+  #   * Trino 482+ compiles to release 23, while Spark compiles to release 17,
+  #     so the toolchains differ per connector.
+  #########################
+  connectors:
+    name: ${{ matrix.connector }} — ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - connector: trino
+            label: "482 (band d)"
+            java: "25"
+            mvn-args: "-Dtrino.version=482 -Dtrino.band=d"
+          - connector: trino
+            label: "484 (band e)"
+            java: "25"
+            mvn-args: "-Dtrino.version=484 -Dtrino.band=e"
+          - connector: spark
+            label: "4.0"
+            java: "21"
+            mvn-args: ""
+          - connector: spark
+            label: "3.5"
+            java: "21"
+            mvn-args: "-P spark-3.5"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-v2"
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Build native library with JNI exports
+        # `--features java` is required: without it src/core/ffi.rs is not
+        # compiled and the bridge fails at the first native call.
+        run: cargo build --features java
+
+      - name: Run Trino connector tests
+        if: matrix.connector == 'trino'
+        working-directory: trino-benostreamdb
+        run: mvn -B test ${{ matrix.mvn-args }}
+
+      - name: Run Spark connector tests
+        if: matrix.connector == 'spark'
+        working-directory: spark-benostreamdb
+        run: mvn -B clean test ${{ matrix.mvn-args }}
+
+  #########################
   # Workflow lint — validate .github/workflows on every change so release- and
   # tag-only jobs (which are otherwise exercised only at release time) are at
   # least statically checked on every PR.

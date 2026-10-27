@@ -59,7 +59,7 @@ Three interlocking requirements emerged while testing the Spark connector:
   createTable/openQuery/readQueryBatch/closeQuery/list*/dropTable/closeSession).
 - **Trino has no generic pass-through query mechanism** and connectors cannot
   register arbitrary scalar UDFs; it *does* support connector **table
-  functions** (`ConnectorTableFunction`, SPI 468).
+  functions** (`ConnectorTableFunction`, SPI 482+).
 - **Spark 3.4+/4.x support DSv2 `FunctionCatalog` scalar functions**
   (`ScalarFunction`/`UnboundFunction`); set-returning catalog TVFs are **not**
   public API in either line (4.x `TableFunction` is row-level LATERAL only).
@@ -116,7 +116,8 @@ Once Iceberg is gone, the only real axis is **Scala**:
 - **Spark 4.0 / 4.1 / 4.2**: one Scala 2.13 artifact covers all of them (DSv2
   APIs are stable across 4.x; we no longer touch version-specific Iceberg).
   Add the `spark-4.2` profile (done) for compile/CI targeting.
-- **Trino**: single SPI 468 build.
+- **Trino**: two SPI builds, band `d` (482-483) and band `e` (484+); see
+  `trino_version_bands.md`.
 Net: 2 Spark artifacts (2.12, 2.13) + 1 Trino, not per-minor.
 
 ## Sequenced milestones

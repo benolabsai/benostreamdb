@@ -131,7 +131,9 @@ impl Compactor {
         })
     }
 
-    pub async fn rewrite_data_files(&self) -> Result<()> {
+    /// Rewrite small data files. Returns the final committed manifest (if any
+    /// bin was compacted) so the caller can publish it as a table snapshot.
+    pub async fn rewrite_data_files(&self) -> Result<Option<crate::core::manifest::Manifest>> {
         let _timer = COMPACTION_DURATION_SECONDS.start_timer();
         tracing::info!(
             "Starting compaction with strategy: {}",
@@ -143,7 +145,7 @@ impl Compactor {
         let partition_spec = manifest.partition_spec.clone();
         if all_entries.is_empty() {
             tracing::info!("Manifest is empty. Nothing to compact.");
-            return Ok(());
+            return Ok(None);
         }
 
         let mut candidates = Vec::new();
@@ -161,7 +163,7 @@ impl Compactor {
 
         if candidates.is_empty() {
             tracing::info!("No segments require compaction.");
-            return Ok(());
+            return Ok(None);
         }
 
         // WS2 crash boundary: compaction has selected candidates but has not
@@ -235,6 +237,7 @@ impl Compactor {
         // 4. Collect Results & Batch Commit
         let mut all_new_entries = Vec::new();
         let mut all_old_paths = Vec::new();
+        let mut last_commit = None;
 
         for res in results {
             match res {
@@ -275,9 +278,11 @@ impl Compactor {
             crate::core::fault_injection::check(
                 crate::core::fault_injection::CrashPoint::CompactionManifestSwap,
             )?;
-            self.manifest
-                .commit(&all_new_entries, &all_old_paths, commit_meta)
-                .await?;
+            last_commit = Some(
+                self.manifest
+                    .commit(&all_new_entries, &all_old_paths, commit_meta)
+                    .await?,
+            );
             metrics::counter!("bsdb_data_files_compacted").increment(all_old_paths.len() as u64);
 
             for old_path in &all_old_paths {
@@ -286,7 +291,7 @@ impl Compactor {
             crate::core::memory::trim_heap();
         }
 
-        Ok(())
+        Ok(last_commit)
     }
 
     /// Compacts a single bin and returns the (NewEntries, OldPaths) without committing.

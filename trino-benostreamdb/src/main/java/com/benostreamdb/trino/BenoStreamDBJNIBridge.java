@@ -40,14 +40,64 @@ public class BenoStreamDBJNIBridge {
 
     public static native String listTables(String warehouse, String schema);
 
+    // Index management: add/build/drop secondary indexes.
+    public static native boolean addIndex(String tableUri, String column, String algorithm);
+
+    public static native boolean buildIndex(String tableUri, String segmentId);
+
+    public static native boolean dropIndex(String tableUri, String column, String indexCategory);
+
+    // Index introspection: JSON array of index-file records.
+    public static native String listIndexes(String tableUri);
+
+    // Storage maintenance: rewrite the table's data files.
+    public static native boolean compactTable(String tableUri);
+
+    // Primary key maintenance: `columns` is comma-separated.
+    public static native boolean setPrimaryKey(String tableUri, String columns);
+
+    public static native boolean dropPrimaryKey(String tableUri, String columns);
+
     // DDL: create a schema (a directory under the warehouse) / drop a table.
     public static native boolean createSchema(String warehouse, String schema);
 
     public static native boolean dropTable(String tableUri);
 
+    // DRIFT graph traversal. Writes one Arrow batch with a `node_id` column to
+    // the supplied C data interface pointers; returns a negative status on
+    // failure. Spark's procedure calls the same entry point but discards the
+    // rows.
+    public static native int regionalDriftSearch(
+            String tableUri,
+            String query,
+            String seedsJson,
+            int topK,
+            int hops,
+            int nDepth,
+            int kFollowups,
+            String mode,
+            long outArrayPtr,
+            long outSchemaPtr);
+
+    // Hybrid search: run vector + BM25 retrieval, fuse with RRF, and stream the
+    // hydrated rows with an `rrf_score` column.
+    public static native long hybridSearch(
+            String tableUri,
+            String textColumn,
+            String queryText,
+            String vectorColumn,
+            String queryVector,
+            long k,
+            long rrfK);
+
     // SQL query pushdown: run a query through the engine's session (full index
     // and vector-search pushdown) and stream the result batches.
     public static native long openQuery(String tableUri, String sql);
+
+    // Multi-table variant: `tablesJson` maps alias -> table URI so one statement
+    // can reference several tables (graph_rag_search needs a document table and
+    // an edge table).
+    public static native long openQueryMulti(String tablesJson, String sql);
 
     public static native long readQueryBatch(long handle, long outArrayPtr, long outSchemaPtr);
 

@@ -8,13 +8,26 @@ import io.trino.spi.connector.ConnectorPageSink;
 import io.trino.spi.connector.ConnectorPageSinkId;
 import io.trino.spi.connector.ConnectorPageSinkProvider;
 import io.trino.spi.connector.ConnectorSession;
+import io.trino.spi.connector.ConnectorTableCredentials;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 
-public class BenoStreamDBPageSinkProvider implements ConnectorPageSinkProvider {
+import java.util.Optional;
+
+/**
+ * Band-neutral sink provider.
+ *
+ * <p>The two {@code createPageSink} overloads are byte-identical across the
+ * supported bands and live here. {@code createMergeSink} cannot: Trino 482-483
+ * take five arguments, while 484+ append a {@code MemoryContext}. The
+ * band-specific subclass supplies that one override and delegates to
+ * {@link #createMergeSinkFor(ConnectorMergeTableHandle)}.</p>
+ */
+public abstract class AbstractBenoStreamDBPageSinkProvider implements ConnectorPageSinkProvider {
+
     private final String warehouse;
     private final String gpuDevice;
 
-    public BenoStreamDBPageSinkProvider(String warehouse, String gpuDevice) {
+    protected AbstractBenoStreamDBPageSinkProvider(String warehouse, String gpuDevice) {
         this.warehouse = warehouse;
         this.gpuDevice = gpuDevice;
     }
@@ -24,6 +37,7 @@ public class BenoStreamDBPageSinkProvider implements ConnectorPageSinkProvider {
             ConnectorTransactionHandle transaction,
             ConnectorSession session,
             ConnectorOutputTableHandle outputTableHandle,
+            Optional<ConnectorTableCredentials> credentials,
             ConnectorPageSinkId pageSinkId) {
         BenoStreamDBOutputTableHandle out = (BenoStreamDBOutputTableHandle) outputTableHandle;
         BenoStreamDBInsertTableHandle insert = new BenoStreamDBInsertTableHandle(
@@ -36,16 +50,13 @@ public class BenoStreamDBPageSinkProvider implements ConnectorPageSinkProvider {
             ConnectorTransactionHandle transaction,
             ConnectorSession session,
             ConnectorInsertTableHandle insertTableHandle,
+            Optional<ConnectorTableCredentials> credentials,
             ConnectorPageSinkId pageSinkId) {
         return new BenoStreamDBPageSink((BenoStreamDBInsertTableHandle) insertTableHandle, warehouse, gpuDevice);
     }
 
-    @Override
-    public ConnectorMergeSink createMergeSink(
-            ConnectorTransactionHandle transaction,
-            ConnectorSession session,
-            ConnectorMergeTableHandle mergeHandle,
-            ConnectorPageSinkId pageSinkId) {
+    /** Shared body of the band-specific {@code createMergeSink} overrides. */
+    protected ConnectorMergeSink createMergeSinkFor(ConnectorMergeTableHandle mergeHandle) {
         return new BenoStreamDBMergeSink((BenoStreamDBMergeTableHandle) mergeHandle, warehouse, gpuDevice);
     }
 }

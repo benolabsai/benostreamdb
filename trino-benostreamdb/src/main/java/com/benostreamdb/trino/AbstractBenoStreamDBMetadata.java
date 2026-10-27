@@ -1,11 +1,17 @@
 package com.benostreamdb.trino;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.trino.spi.StandardErrorCode;
+import io.trino.spi.TrinoException;
 import io.trino.spi.connector.*;
+import io.trino.spi.function.table.ConnectorTableFunctionHandle;
+import io.trino.spi.function.table.Descriptor;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.statistics.ComputedStatistics;
 import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.BigintType;
 import io.trino.spi.type.BooleanType;
 import io.trino.spi.type.DateType;
@@ -23,17 +29,30 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-public class BenoStreamDBMetadata implements ConnectorMetadata {
+/**
+ * Band-neutral connector metadata.
+ *
+ * <p>Every SPI method whose signature is identical across the supported Trino
+ * bands lives here. The only member that cannot live here is
+ * {@code finishMerge}, because its return type changed between bands:
+ * Trino 482-483 declare {@code void finishMerge(...)}, while Trino 484+
+ * declares {@code Optional<ConnectorOutputMetadata> finishMerge(...)}. Java
+ * cannot overload on return type, so the band-specific subclass in
+ * {@code src/main/java-trino-<band>} supplies exactly that one method.</p>
+ *
+ * <p>See {@code plans/trino_version_bands.md} for the measured band boundaries.</p>
+ */
+public abstract class AbstractBenoStreamDBMetadata implements ConnectorMetadata {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final String warehouse;
 
-    public BenoStreamDBMetadata() {
+    protected AbstractBenoStreamDBMetadata() {
         this(BenoStreamDBTableUri.DEFAULT_WAREHOUSE);
     }
 
-    public BenoStreamDBMetadata(String warehouse) {
+    protected AbstractBenoStreamDBMetadata(String warehouse) {
         this.warehouse = warehouse;
     }
 
@@ -49,6 +68,37 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
         requireNative();
         if (!BenoStreamDBJNIBridge.createSchema(warehouse, schemaName)) {
             throw new RuntimeException("BenoStreamDB createSchema failed for " + schemaName);
+        }
+    }
+
+    @Override
+    public void createTable(
+            ConnectorSession session,
+            ConnectorTableMetadata tableMetadata,
+            SaveMode saveMode) {
+        requireNative();
+        SchemaTableName table = tableMetadata.getTable();
+        String uri = BenoStreamDBTableUri.of(warehouse, table.getSchemaName(), table.getTableName());
+        List<Map<String, Object>> fields = new ArrayList<>();
+        for (ColumnMetadata column : tableMetadata.getColumns()) {
+            Map<String, Object> field = new LinkedHashMap<>();
+            field.put("name", column.getName());
+            field.put("type", arrowTypeName(column.getType()));
+            field.put("nullable", column.isNullable());
+            fields.add(field);
+        }
+        try {
+            String json = MAPPER.writeValueAsString(fields);
+            if (!BenoStreamDBJNIBridge.createTable(uri, json)) {
+                throw new TrinoException(
+                        StandardErrorCode.GENERIC_INTERNAL_ERROR,
+                        "BenoStreamDB createTable failed for " + table);
+            }
+        } catch (JsonProcessingException e) {
+            throw new TrinoException(
+                    StandardErrorCode.GENERIC_INTERNAL_ERROR,
+                    "Failed to serialize table schema for " + table,
+                    e);
         }
     }
 
@@ -80,6 +130,31 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
 
     @Override
     public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle table) {
+        if (table instanceof RegionalDriftFunction.Handle driftHandle) {
+            List<ColumnMetadata> columns = new ArrayList<>();
+            for (Descriptor.Field field : RegionalDriftFunction.descriptor().getFields()) {
+                columns.add(new ColumnMetadata(
+                        field.getName().orElseThrow(),
+                        field.getType().orElseThrow()));
+            }
+            return new ConnectorTableMetadata(
+                    new SchemaTableName(driftHandle.getSchemaName(), driftHandle.getTableName()),
+                    columns);
+        }
+
+        if (table instanceof ListIndexesTableHandle listHandle) {
+            // Metadata-only function: columns come from the plan descriptor, not
+            // from the table's Parquet schema.
+            List<ColumnMetadata> columns = new ArrayList<>();
+            for (Descriptor.Field field : ListIndexesFunction.descriptor().getFields()) {
+                columns.add(new ColumnMetadata(
+                        field.getName().orElseThrow(),
+                        field.getType().orElseThrow()));
+            }
+            return new ConnectorTableMetadata(
+                    new SchemaTableName(listHandle.getSchemaName(), listHandle.getTableName()),
+                    columns);
+        }
         BenoStreamDBTableHandle handle = (BenoStreamDBTableHandle) table;
         return new ConnectorTableMetadata(
                 new SchemaTableName(handle.getSchemaName(), handle.getTableName()),
@@ -225,9 +300,18 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
         return RowChangeParadigm.DELETE_ROW_AND_INSERT_ROW;
     }
 
+    /**
+     * The 4-argument form is the one every supported band declares (482-483 and
+     * 484+ both carry it; the 3-argument overload was dropped before 482).
+     * Overriding it, like the Iceberg connector does, is what makes the planner
+     * emit the post-update row in the insert slot rather than the pre-update
+     * target row. The per-update-case assignments are accepted and ignored: the
+     * native engine upserts by key, so the full new row is already in the
+     * fragment.
+     */
     @Override
     public ConnectorMergeTableHandle beginMerge(ConnectorSession session, ConnectorTableHandle tableHandle,
-            RetryMode retryMode) {
+            Map<Integer, Collection<ColumnHandle>> updateCaseColumns, RetryMode retryMode) {
         BenoStreamDBTableHandle handle = (BenoStreamDBTableHandle) tableHandle;
         List<ColumnMetadata> columns = resolveColumns(handle.getSchemaName(), handle.getTableName());
         List<BenoStreamDBColumnHandle> cols = new ArrayList<>();
@@ -240,29 +324,122 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
         return new BenoStreamDBMergeTableHandle(handle, insert, rowId);
     }
 
-    /**
-     * Trino 468 calls this overload for MERGE and passes the per-update-case
-     * column assignments. The default delegates to the 3-arg form, but overriding
-     * it here (like the Iceberg connector) is required for the planner to emit
-     * the post-update row in the insert slot rather than the pre-update target
-     * row. We accept and ignore the assignments (the native engine upserts by key).
-     */
-    @Override
-    public ConnectorMergeTableHandle beginMerge(ConnectorSession session, ConnectorTableHandle tableHandle,
-            Map<Integer, Collection<ColumnHandle>> updateCaseColumns, RetryMode retryMode) {
-        return beginMerge(session, tableHandle, retryMode);
-    }
+    // finishMerge intentionally lives in the band-specific subclass: its return
+    // type differs between Trino 482-483 (void) and Trino 484+ (Optional).
 
-    @Override
-    public void finishMerge(ConnectorSession session, ConnectorMergeTableHandle mergeHandle,
-            List<ConnectorTableHandle> sourceTableHandles, Collection<Slice> fragments,
-            Collection<ComputedStatistics> computedStatistics) {
-        // The merge sink already applied the appends and deletes.
-    }
+    // -------------------------------------------------------------------------
+    // Scalar functions
+    // -------------------------------------------------------------------------
+
+    // The hooks below are intentionally NOT overridden. Instrumenting
+    // listFunctions showed Trino never calls it (probe count 0) for a catalog
+    // created through DistributedQueryRunner.createCatalog, so connector
+    // functions are never enumerated and no id or naming scheme can make them
+    // resolve. Trino 484 also already ships cosine_distance, euclidean_distance,
+    // hamming_distance and dot_product as built-ins, which is why those two
+    // names appeared to work. See plans/trino_version_bands.md
+    // ("Open: scalar functions") for the evidence trail.
 
     // -------------------------------------------------------------------------
     // Filter pushdown
     // -------------------------------------------------------------------------
+
+    @Override
+    public Optional<TableFunctionApplicationResult<ConnectorTableHandle>> applyTableFunction(
+            ConnectorSession session,
+            ConnectorTableFunctionHandle functionHandle) {
+        if (functionHandle instanceof GraphRagSearchFunction.Handle ragHandle) {
+            String docsUri = BenoStreamDBTableUri.of(
+                    warehouse, ragHandle.getSchemaName(), ragHandle.getTableName());
+            String edgeUri = BenoStreamDBTableUri.of(
+                    warehouse, ragHandle.getEdgeSchemaName(), ragHandle.getEdgeTableName());
+            List<ColumnHandle> columnHandles = new ArrayList<>();
+            for (ColumnMetadata column : resolveColumns(
+                    ragHandle.getSchemaName(), ragHandle.getTableName())) {
+                columnHandles.add(new BenoStreamDBColumnHandle(column.getName(), column.getType()));
+            }
+            columnHandles.add(new BenoStreamDBColumnHandle("hop", IntegerType.INTEGER));
+            BenoStreamDBTableHandle tableHandle = new BenoStreamDBTableHandle(
+                    ragHandle.getSchemaName(),
+                    ragHandle.getTableName(),
+                    Optional.empty(),
+                    Optional.of(GraphRagSql.build(ragHandle)),
+                    Optional.empty(),
+                    Optional.of(GraphRagSearchFunction.tablesJson(docsUri, edgeUri)));
+            return Optional.of(new TableFunctionApplicationResult<>(tableHandle, columnHandles));
+        }
+
+        if (functionHandle instanceof RegionalDriftFunction.Handle driftHandle) {
+            return Optional.of(new TableFunctionApplicationResult<>(driftHandle, List.of(
+                    new BenoStreamDBColumnHandle(RegionalDriftPageSource.NODE_ID, BigintType.BIGINT))));
+        }
+
+        if (functionHandle instanceof ListIndexesTableHandle) {
+            // Metadata-only function: the handle itself is the table handle, and
+            // the columns come from the same descriptor the analysis declared.
+            ListIndexesTableHandle handle = (ListIndexesTableHandle) functionHandle;
+            return Optional.of(new TableFunctionApplicationResult<>(handle, List.of(
+                    new BenoStreamDBColumnHandle(ListIndexesPageSource.COLUMN_NAME, VarcharType.VARCHAR),
+                    new BenoStreamDBColumnHandle(ListIndexesPageSource.INDEX_CATEGORY, VarcharType.VARCHAR),
+                    new BenoStreamDBColumnHandle(ListIndexesPageSource.ALGORITHM, VarcharType.VARCHAR),
+                    new BenoStreamDBColumnHandle(ListIndexesPageSource.INDEX_ID, VarcharType.VARCHAR),
+                    new BenoStreamDBColumnHandle(ListIndexesPageSource.FORMAT_VERSION, BigintType.BIGINT))));
+        }
+
+        if (!(functionHandle instanceof VectorSearchHandle)
+                && !(functionHandle instanceof GraphTableFunctionHandle)
+                && !(functionHandle instanceof HybridSearchHandle)) {
+            return Optional.empty();
+        }
+
+        if (functionHandle instanceof HybridSearchHandle) {
+            HybridSearchHandle handle = (HybridSearchHandle) functionHandle;
+            String[] schemaTable = BenoStreamDBTableUri.splitTable(handle.getTable());
+            List<ColumnMetadata> tableColumns = resolveColumns(schemaTable[0], schemaTable[1]);
+            List<ColumnHandle> columnHandles = new ArrayList<>();
+            for (ColumnMetadata column : tableColumns) {
+                columnHandles.add(new BenoStreamDBColumnHandle(column.getName(), column.getType()));
+            }
+            columnHandles.add(new BenoStreamDBColumnHandle("rrf_score", RealType.REAL));
+            BenoStreamDBTableHandle tableHandle = new BenoStreamDBTableHandle(
+                    schemaTable[0],
+                    schemaTable[1],
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.of(handle));
+            return Optional.of(new TableFunctionApplicationResult<>(tableHandle, columnHandles));
+        }
+
+        if (functionHandle instanceof GraphTableFunctionHandle) {
+            GraphTableFunctionHandle handle = (GraphTableFunctionHandle) functionHandle;
+            String[] schemaTable = BenoStreamDBTableUri.splitTable(handle.getTable());
+            List<ColumnHandle> columnHandles = new ArrayList<>(
+                    GraphSql.columns(GraphSql.Kind.fromName(handle.getFunction())));
+            BenoStreamDBTableHandle tableHandle = new BenoStreamDBTableHandle(
+                    schemaTable[0],
+                    schemaTable[1],
+                    Optional.empty(),
+                    Optional.of(GraphSql.build(handle)));
+            return Optional.of(new TableFunctionApplicationResult<>(tableHandle, columnHandles));
+        }
+
+        VectorSearchHandle handle = (VectorSearchHandle) functionHandle;
+        String[] schemaTable = BenoStreamDBTableUri.splitTable(handle.getTable());
+        List<ColumnMetadata> tableColumns = resolveColumns(schemaTable[0], schemaTable[1]);
+
+        List<ColumnHandle> columnHandles = new ArrayList<>();
+        for (ColumnMetadata column : tableColumns) {
+            columnHandles.add(new BenoStreamDBColumnHandle(column.getName(), column.getType()));
+        }
+        columnHandles.add(new BenoStreamDBColumnHandle("distance", DoubleType.DOUBLE));
+
+        BenoStreamDBTableHandle tableHandle = new BenoStreamDBTableHandle(
+                schemaTable[0],
+                schemaTable[1],
+                Optional.empty(),
+                Optional.of(VectorSearchSql.build(handle)));
+        return Optional.of(new TableFunctionApplicationResult<>(tableHandle, columnHandles));
+    }
 
     @Override
     public Optional<ConstraintApplicationResult<ConnectorTableHandle>> applyFilter(
@@ -271,6 +448,11 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
             Constraint constraint) {
 
         BenoStreamDBTableHandle handle = (BenoStreamDBTableHandle) table;
+        if (handle.getPushdownSql().isPresent()) {
+            // The table function already produced the complete KNN statement;
+            // leave any residual predicate to the Trino engine.
+            return Optional.empty();
+        }
         TupleDomain<ColumnHandle> summary = constraint.getSummary();
 
         if (summary.isAll()) {
@@ -330,7 +512,7 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
     // Schema resolution
     // -------------------------------------------------------------------------
 
-    private List<ColumnMetadata> resolveColumns(String schemaName, String tableName) {
+    List<ColumnMetadata> resolveColumns(String schemaName, String tableName) {
         requireNative();
         String uri = BenoStreamDBTableUri.of(warehouse, schemaName, tableName);
         String json = BenoStreamDBJNIBridge.getTableSchema(uri);
@@ -374,10 +556,58 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
         }
     }
 
+    private static String arrowTypeName(Type type) {
+        if (type instanceof BigintType) {
+            return "Int64";
+        }
+        if (type instanceof IntegerType) {
+            return "Int32";
+        }
+        if (type instanceof RealType) {
+            return "Float32";
+        }
+        if (type instanceof DoubleType) {
+            return "Float64";
+        }
+        if (type instanceof BooleanType) {
+            return "Boolean";
+        }
+        if (type instanceof DateType) {
+            return "Date32";
+        }
+        if (type instanceof VarcharType) {
+            return "Utf8";
+        }
+        if (type instanceof ArrayType) {
+            return "List(" + arrowTypeName(((ArrayType) type).getElementType()) + ")";
+        }
+        if (type instanceof io.trino.spi.type.RowType) {
+            io.trino.spi.type.RowType row = (io.trino.spi.type.RowType) type;
+            StringBuilder builder = new StringBuilder("Struct(");
+            List<io.trino.spi.type.RowType.Field> fields = row.getFields();
+            for (int i = 0; i < fields.size(); i++) {
+                if (i > 0) {
+                    builder.append(", ");
+                }
+                builder.append(fields.get(i).getName().orElse("field" + i))
+                        .append(": ")
+                        .append(arrowTypeName(fields.get(i).getType()));
+            }
+            return builder.append(")").toString();
+        }
+        return "Utf8";
+    }
+
     private static Type trinoType(String arrowType) {
         if (arrowType.startsWith("List(") && arrowType.endsWith(")")) {
             String inner = arrowType.substring(5, arrowType.length() - 1);
             return new io.trino.spi.type.ArrayType(trinoType(inner));
+        }
+        if (arrowType.startsWith("FixedSizeList(") && arrowType.endsWith(")")) {
+            String inner = arrowType.substring("FixedSizeList(".length(), arrowType.length() - 1);
+            int comma = inner.lastIndexOf(", ");
+            String element = comma > 0 ? inner.substring(0, comma) : inner;
+            return new io.trino.spi.type.ArrayType(trinoType(element));
         }
         if (arrowType.startsWith("Struct(") && arrowType.endsWith(")")) {
             String inner = arrowType.substring(7, arrowType.length() - 1);

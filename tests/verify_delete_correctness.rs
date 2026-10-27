@@ -128,17 +128,42 @@ async fn verify_delete_files_format(uri: &str, expected_min_count: usize) -> any
         let entry = entry?;
         let path = entry.path();
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with("del-pos-") && name.ends_with(".avro") {
+            if name.starts_with("del-pos-")
+                && (name.ends_with(".avro") || name.ends_with(".parquet"))
+            {
                 count += 1;
                 println!("Found valid position delete file: {}", name);
 
-                // Optional: Read it with avro-rs to verify schema
-                let file = std::fs::File::open(&path)?;
-                let reader = apache_avro::Reader::new(file)?;
-                let _schema = reader.writer_schema();
-                // Check if schema has "file_path" and "pos"
-                // Simplified check
-                // println!("Schema: {:?}", schema);
+                if name.ends_with(".parquet") {
+                    // Parquet is the portable position-delete format (PyIceberg
+                    // rejects Avro deletes). Verify the required columns and the
+                    // reserved Iceberg field ids.
+                    let file = std::fs::File::open(&path)?;
+                    let reader =
+                        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                            file,
+                        )?;
+                    let schema = reader.schema();
+                    let file_path = schema.field_with_name("file_path")?;
+                    let pos = schema.field_with_name("pos")?;
+                    assert_eq!(
+                        file_path
+                            .metadata()
+                            .get("PARQUET:field_id")
+                            .map(String::as_str),
+                        Some("2147483546"),
+                        "position delete `file_path` needs Iceberg's reserved field id"
+                    );
+                    assert_eq!(
+                        pos.metadata().get("PARQUET:field_id").map(String::as_str),
+                        Some("2147483545"),
+                        "position delete `pos` needs Iceberg's reserved field id"
+                    );
+                } else {
+                    let file = std::fs::File::open(&path)?;
+                    let reader = apache_avro::Reader::new(file)?;
+                    let _schema = reader.writer_schema();
+                }
             } else if name.ends_with(".roaring") {
                 return Err(anyhow::anyhow!(
                     "Found Legacy RoaringBitmap delete file! Violation: {}",

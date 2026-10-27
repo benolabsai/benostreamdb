@@ -20,14 +20,14 @@ try:
     v = _cargo.get('package', {}).get('version')
     if isinstance(v, dict) and v.get('workspace'):
         v = _cargo.get('workspace', {}).get('package', {}).get('version')
-    release = v if isinstance(v, str) else '0.13.1'
+    release = v if isinstance(v, str) else '0.14.0'
 except ModuleNotFoundError:
     import re
     with open(_cargo_toml, 'r') as f:
         _match = re.search(r'\[workspace\.package\][\s\S]*?version\s*=\s*"([^"]+)"', f.read())
         if not _match:
             _match = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.MULTILINE)
-    release = _match.group(1) if _match else '0.13.1'
+    release = _match.group(1) if _match else '0.14.0'
 
 project = 'BenoStreamDB'
 copyright = '2026, BenoStream Team'

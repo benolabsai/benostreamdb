@@ -1205,6 +1205,23 @@ fn sql_type_to_arrow(dt: &datafusion::sql::sqlparser::ast::DataType) -> Result<D
         SqlType::Timestamp(_, _) | SqlType::Datetime(_) => {
             DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
         }
+        // `DOUBLE[]` / `REAL[]` are how vector columns are declared; without this
+        // they silently became VARCHAR, which also made the Iceberg metadata
+        // describe the column with the wrong type.
+        SqlType::Array(element) => {
+            use datafusion::sql::sqlparser::ast::ArrayElemTypeDef;
+            let inner = match element {
+                ArrayElemTypeDef::AngleBracket(dt)
+                | ArrayElemTypeDef::SquareBracket(dt, _)
+                | ArrayElemTypeDef::Parenthesis(dt) => Some(dt),
+                ArrayElemTypeDef::None => None,
+            };
+            let item = match inner {
+                Some(dt) => sql_type_to_arrow(dt)?,
+                None => DataType::Utf8,
+            };
+            DataType::List(Arc::new(Field::new("item", item, true)))
+        }
         _ => DataType::Utf8,
     })
 }

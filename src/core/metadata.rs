@@ -22,11 +22,15 @@ pub struct MetadataLogEntry {
 #[serde(rename_all = "kebab-case")]
 pub struct Snapshot {
     pub snapshot_id: i64,
+    /// Iceberg's parser rejects an explicit JSON `null` for this key, so it is
+    /// omitted entirely for a root snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_snapshot_id: Option<i64>,
     pub timestamp_ms: i64,
     pub sequence_number: Option<i64>,
     pub summary: HashMap<String, String>,
     pub manifest_list: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub schema_id: Option<i32>,
 
     // V3 Row Lineage (Iceberg spec v3 required)
@@ -48,6 +52,11 @@ pub struct TableMetadata {
     pub last_sequence_number: i64,
     pub last_updated_ms: i64,
     pub last_column_id: i32,
+
+    /// Highest partition field id ever assigned. Iceberg requires this key and
+    /// reserves ids from 1000 upwards, so an unpartitioned table reports 999.
+    #[serde(default = "default_last_partition_id")]
+    pub last_partition_id: i32,
 
     // Schema
     pub current_schema_id: i32,
@@ -91,12 +100,20 @@ pub struct TableMetadata {
     pub next_row_id: Option<i64>,
 }
 
+/// First partition field id Iceberg assigns; unpartitioned tables report one less.
+const ICEBERG_PARTITION_DATA_ID_START: i32 = 1000;
+
+fn default_last_partition_id() -> i32 {
+    ICEBERG_PARTITION_DATA_ID_START - 1
+}
+
 impl TableMetadata {
     /// Create a minimal metadata skeleton (used by catalogs that only know the location)
     pub fn minimal(location: String) -> Self {
         Self {
             format_version: 2,
             location,
+            last_partition_id: default_last_partition_id(),
             ..Default::default()
         }
     }
@@ -116,6 +133,13 @@ impl TableMetadata {
             last_sequence_number: 0,
             last_updated_ms: chrono::Utc::now().timestamp_millis(),
             last_column_id: schema.fields.iter().map(|f| f.id).max().unwrap_or(0),
+            last_partition_id: partition_spec
+                .fields
+                .iter()
+                .filter_map(|f| f.field_id)
+                .max()
+                .unwrap_or(default_last_partition_id())
+                .max(default_last_partition_id()),
             current_schema_id: schema.schema_id,
             schemas: vec![schema.clone()],
             default_spec_id: partition_spec.spec_id,
@@ -136,6 +160,10 @@ impl TableMetadata {
     pub fn add_snapshot(&mut self, snapshot: Snapshot) {
         self.last_updated_ms = snapshot.timestamp_ms;
         self.current_snapshot_id = Some(snapshot.snapshot_id);
+        // Iceberg validates that `last-sequence-number` covers every snapshot.
+        if let Some(sequence_number) = snapshot.sequence_number {
+            self.last_sequence_number = self.last_sequence_number.max(sequence_number);
+        }
         self.snapshot_log.push(SnapshotLogEntry {
             timestamp_ms: snapshot.timestamp_ms,
             snapshot_id: snapshot.snapshot_id,
@@ -158,7 +186,72 @@ impl TableMetadata {
     /// Add a new partition spec
     pub fn add_partition_spec(&mut self, spec: PartitionSpec) {
         self.default_spec_id = spec.spec_id;
+        if let Some(field_id) = spec.fields.iter().filter_map(|f| f.field_id).max() {
+            self.last_partition_id = self.last_partition_id.max(field_id);
+        }
         self.partition_specs.push(spec);
+    }
+
+    /// Fill in the invariants Iceberg's `TableMetadataParser` enforces but that
+    /// older BenoStreamDB manifests may not have recorded.
+    ///
+    /// Kept at the write boundary (rather than in the constructors) so tables
+    /// written by earlier releases are upgraded as they are next committed.
+    fn normalize_iceberg_metadata(&mut self) {
+        // Iceberg rejects an empty `sort-orders` array.
+        if self.sort_orders.is_empty() {
+            self.sort_orders.push(SortOrder {
+                order_id: self.default_sort_order_id,
+                fields: Vec::new(),
+            });
+        }
+
+        // The default partition spec must exist, even when unpartitioned.
+        if self.partition_specs.is_empty() {
+            self.partition_specs.push(PartitionSpec {
+                spec_id: self.default_spec_id,
+                fields: Vec::new(),
+            });
+        }
+
+        // Every partition field needs a concrete `source-id` and `field-id`:
+        // Iceberg parses both as required integers.
+        let mut next_field_id = self.last_partition_id.max(default_last_partition_id()) + 1;
+        let mut max_field_id = self.last_partition_id.max(default_last_partition_id());
+        for spec in &mut self.partition_specs {
+            for field in &mut spec.fields {
+                if field.source_id.is_none() {
+                    field.source_id = field.source_ids.first().copied();
+                }
+                if field.field_id.is_none() {
+                    field.field_id = Some(next_field_id);
+                    next_field_id += 1;
+                }
+                if let Some(field_id) = field.field_id {
+                    max_field_id = max_field_id.max(field_id);
+                }
+            }
+        }
+        self.last_partition_id = max_field_id;
+
+        // `last-sequence-number` must cover every snapshot in the table.
+        let max_sequence_number = self
+            .snapshots
+            .iter()
+            .filter_map(|snapshot| snapshot.sequence_number)
+            .max()
+            .unwrap_or(0);
+        self.last_sequence_number = self.last_sequence_number.max(max_sequence_number);
+
+        // Row lineage (`first-row-id` / `added-rows`) is a v3 snapshot field.
+        // Emitting it in a v2 table is outside the spec, even though tolerant
+        // readers ignore it.
+        if self.format_version < 3 {
+            for snapshot in &mut self.snapshots {
+                snapshot.first_row_id = None;
+                snapshot.added_rows = None;
+            }
+        }
     }
 
     /// Save metadata to ObjectStore as a new version `v<X>.metadata.json`
@@ -167,6 +260,7 @@ impl TableMetadata {
         storage: &dyn object_store::ObjectStore,
         version: i32,
     ) -> anyhow::Result<String> {
+        self.normalize_iceberg_metadata();
         let path = object_store::path::Path::from(format!("metadata/v{}.metadata.json", version));
         let json = serde_json::to_vec(self)?;
 

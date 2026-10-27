@@ -45,6 +45,30 @@ pub const MANIFEST_LIST_SCHEMA_V2: &str = r#"
 }
 "#;
 
+/// Attach the Iceberg-required Avro user metadata to a manifest writer.
+///
+/// `ManifestReader` reads the table schema and partition spec from these keys
+/// (`schema`, `partition-spec`, `partition-spec-id`) and validates
+/// `format-version`/`content`. Without them external readers cannot open the
+/// manifest at all, even though the Avro schema itself is correct.
+fn attach_manifest_metadata<W: std::io::Write>(
+    writer: &mut apache_avro::Writer<W>,
+    spec: &crate::core::manifest::PartitionSpec,
+    schema: &crate::core::manifest::Schema,
+    content: &str,
+) -> Result<()> {
+    let schema_json = serde_json::to_string(schema)?;
+    // Iceberg stores the *fields array* here, not the `{"spec-id":..,"fields":..}`
+    // wrapper: it parses with `PartitionSpecParser.fromJsonFields`.
+    let spec_json = serde_json::to_string(&spec.fields)?;
+    writer.add_user_metadata("schema".to_string(), schema_json)?;
+    writer.add_user_metadata("partition-spec".to_string(), spec_json)?;
+    writer.add_user_metadata("partition-spec-id".to_string(), spec.spec_id.to_string())?;
+    writer.add_user_metadata("format-version".to_string(), "2".to_string())?;
+    writer.add_user_metadata("content".to_string(), content.to_string())?;
+    Ok(())
+}
+
 pub struct IcebergWriter;
 
 impl Default for IcebergWriter {
@@ -56,22 +80,34 @@ impl Default for IcebergWriter {
 /// Append a single Iceberg Delete record (content = 1/2/3) to a manifest writer.
 ///
 /// Delete files are partition-scoped and are written **once** per manifest, not
-/// once per data entry. Extracted so `write_manifest_chunks` can emit the
-/// global delete list after the data entries.
+/// once per data entry. They go into their own manifest (see
+/// [`IcebergWriter::write_delete_manifest`]): Iceberg requires one content type
+/// per manifest, so data and delete entries cannot share one.
+///
+/// `status` is `1` (ADDED) for a file first added by this snapshot and `0`
+/// (EXISTING) for one carried over from an earlier snapshot. The spec requires
+/// EXISTING entries to leave `snapshot_id` null; the id is inherited from the
+/// manifest metadata for ADDED entries.
 fn append_delete_record<W: std::io::Write>(
     writer: &mut apache_avro::Writer<W>,
     avro_schema: &apache_avro::Schema,
     partition_spec: &crate::core::manifest::PartitionSpec,
     del_file: &crate::core::manifest::DeleteFile,
-    snapshot_id: i64,
+    status: i32,
+    snapshot_id: Option<i64>,
     seq_num: i64,
 ) -> Result<()> {
     let mut record = apache_avro::types::Record::new(avro_schema)
         .ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
-    record.put("status", apache_avro::types::Value::Int(1)); // 1=ADDED
+    record.put("status", apache_avro::types::Value::Int(status));
     record.put(
         "snapshot_id",
-        apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(snapshot_id))),
+        match (status, snapshot_id) {
+            (1, Some(id)) => {
+                apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(id)))
+            }
+            _ => apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+        },
     );
     record.put(
         "sequence_number",
@@ -106,9 +142,20 @@ fn append_delete_record<W: std::io::Write>(
         "file_path",
         apache_avro::types::Value::String(del_file.file_path.clone()),
     );
+    // Position deletes are Parquet, equality deletes are Avro; the manifest must
+    // declare the actual container format or clients pick the wrong reader.
+    let delete_format = if del_file
+        .file_path
+        .to_ascii_lowercase()
+        .ends_with(".parquet")
+    {
+        "PARQUET"
+    } else {
+        "AVRO"
+    };
     data_file.put(
         "file_format",
-        apache_avro::types::Value::String("AVRO".to_string()),
+        apache_avro::types::Value::String(delete_format.to_string()),
     );
     data_file.put(
         "record_count",
@@ -285,9 +332,12 @@ impl IcebergWriter {
         seq_num: i64,
     ) -> Result<Vec<u8>> {
         // 1. Generate Schema based on Partition Spec
-        let schema_json = self.generate_manifest_schema(partition_spec, schema);
+        // Keep the table schema reachable after the Avro schema shadows `schema`.
+        let table_schema = schema;
+        let schema_json = self.generate_manifest_schema(partition_spec, table_schema);
         let schema = apache_avro::Schema::parse_str(&schema_json)?;
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
+        attach_manifest_metadata(&mut writer, partition_spec, table_schema, "0")?;
 
         for entry in entries {
             let mut record = apache_avro::types::Record::new(&schema)
@@ -500,9 +550,20 @@ impl IcebergWriter {
                     "file_path",
                     apache_avro::types::Value::String(del_file.file_path.clone()),
                 );
+                // Delete files may be Avro (equality deletes) or Parquet (position
+                // deletes); the manifest must declare the actual container format.
+                let delete_format = if del_file
+                    .file_path
+                    .to_ascii_lowercase()
+                    .ends_with(".parquet")
+                {
+                    "PARQUET"
+                } else {
+                    "AVRO"
+                };
                 data_file.put(
                     "file_format",
-                    apache_avro::types::Value::String("AVRO".to_string()),
+                    apache_avro::types::Value::String(delete_format.to_string()),
                 );
                 data_file.put(
                     "record_count",
@@ -596,10 +657,13 @@ impl IcebergWriter {
     }
 
     /// Write Manifest Files dynamically chunked by byte size (e.g. 8MB)
+    ///
+    /// Data entries only. Delete files are written by
+    /// [`IcebergWriter::write_delete_manifest`] because Iceberg requires a
+    /// manifest to contain a single content type.
     pub fn write_manifest_chunks(
         &self,
         entries: &[crate::core::manifest::ManifestEntry],
-        delete_files: &[crate::core::manifest::DeleteFile],
         partition_spec: &crate::core::manifest::PartitionSpec,
         schema: &crate::core::manifest::Schema,
         snapshot_id: i64,
@@ -640,6 +704,7 @@ impl IcebergWriter {
                 written: written.clone(),
             },
         );
+        attach_manifest_metadata(&mut writer, partition_spec, schema, "0")?;
 
         for entry in entries {
             let mut record = apache_avro::types::Record::new(&avro_schema)
@@ -810,30 +875,72 @@ impl IcebergWriter {
                         written: written.clone(),
                     },
                 );
+                attach_manifest_metadata(&mut writer, partition_spec, schema, "0")?;
                 current_file_count = 0;
                 current_row_count = 0;
             }
         }
 
-        // Delete files are partition-scoped: write them once, not per entry.
-        for del_file in delete_files {
-            append_delete_record(
-                &mut writer,
-                &avro_schema,
-                partition_spec,
-                del_file,
-                snapshot_id,
-                seq_num,
-            )?;
-        }
-
-        if current_file_count > 0 || !delete_files.is_empty() {
+        if current_file_count > 0 {
             writer.flush()?;
             let tracker = writer.into_inner()?;
             chunks.push((tracker.inner, current_file_count, current_row_count));
         }
 
         Ok(chunks)
+    }
+
+    /// Write delete files as their own manifest, declaring `content = 1`.
+    ///
+    /// Returns `None` when there are no delete files, so callers can skip the
+    /// manifest-list entry entirely. Also returns `(added, existing)` counts so
+    /// the manifest-list entry reports the spec's `added_files_count` /
+    /// `existing_files_count` accurately.
+    ///
+    /// `previous_paths` is the delete set of the parent snapshot. Files already
+    /// in it are emitted with status EXISTING and a null `snapshot_id`; only
+    /// genuinely new files are ADDED. Re-labelling every delete file as ADDED on
+    /// each commit would claim the same file was added by multiple snapshots.
+    pub fn write_delete_manifest(
+        &self,
+        delete_files: &[crate::core::manifest::DeleteFile],
+        previous_paths: &std::collections::HashSet<String>,
+        partition_spec: &crate::core::manifest::PartitionSpec,
+        schema: &crate::core::manifest::Schema,
+        snapshot_id: i64,
+        seq_num: i64,
+    ) -> Result<Option<(Vec<u8>, usize, usize)>> {
+        if delete_files.is_empty() {
+            return Ok(None);
+        }
+
+        let schema_json = self.generate_manifest_schema(partition_spec, schema);
+        let avro_schema = apache_avro::Schema::parse_str(&schema_json)?;
+        let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new());
+        attach_manifest_metadata(&mut writer, partition_spec, schema, "1")?;
+
+        let mut added = 0usize;
+        let mut existing = 0usize;
+        for delete_file in delete_files {
+            let is_existing = previous_paths.contains(&delete_file.file_path);
+            if is_existing {
+                existing += 1;
+            } else {
+                added += 1;
+            }
+            append_delete_record(
+                &mut writer,
+                &avro_schema,
+                partition_spec,
+                delete_file,
+                if is_existing { 0 } else { 1 },
+                if is_existing { None } else { Some(snapshot_id) },
+                seq_num,
+            )?;
+        }
+
+        writer.flush()?;
+        Ok(Some((writer.into_inner()?, added, existing)))
     }
 
     fn generate_manifest_schema(
@@ -1068,7 +1175,6 @@ mod bounds_roundtrip_tests {
         let chunks = IcebergWriter::new()
             .write_manifest_chunks(
                 &[entry],
-                &[],
                 &PartitionSpec::default(),
                 &schema,
                 1,

@@ -21,20 +21,38 @@
     <properties>
         <!-- Overridden by build-connectors.sh / the release workflow from the
              core engine's Cargo.toml (single source of truth). -->
-        <revision>0.12.0</revision>
-        <trino.version>468</trino.version>
-        <java.release>17</java.release>
+        <revision>0.14.0</revision>
+
+        <!-- Supported Trino bands. Trino offers no LTS and no binary
+             compatibility between releases, so each band is compiled and
+             tested separately:
+               d = 482-483  (finishMerge returns void, getSplits takes Set<ColumnHandle>)
+               e = 484+     (finishMerge returns Optional<ConnectorOutputMetadata>)
+             Bands differ only in finishMerge; see plans/trino_version_bands.md. -->
+        <trino.version>484</trino.version>
+        <trino.band>e</trino.band>
+        <!-- Trino 482+ SPI is compiled for Java 23; build with JDK 23+. -->
+        <java.release>23</java.release>
         <skipTests>false</skipTests>
     </properties>
 
-    <profiles>
-        <profile>
-            <id>java-21</id>
-            <properties>
-                <java.release>21</java.release>
-            </properties>
-        </profile>
-    </profiles>
+    <dependencyManagement>
+        <dependencies>
+            <!-- trino-testing / trino-main transitively bring JUnit 6. Declaring
+                 JUnit 5 alongside it left junit-platform-engine at 1.11.4 next to
+                 a JUnit 6 API that references
+                 org.junit.platform.engine.OutputDirectoryCreator, which the forked
+                 JVM could not load. Align every JUnit artifact on the 6.1 line via
+                 the BOM instead of downgrading the transitive one. -->
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>6.1.3</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -48,16 +66,20 @@
              <artifactId>guava</artifactId>
              <version>32.1.2-jre</version>
         </dependency>
+        <!-- Jackson versions follow the Trino release's airbase pin. Note that
+             since Jackson 2.20, jackson-annotations dropped the patch
+             component: valid coordinates are 2.20 / 2.21 / 2.22, so annotating
+             it with the databind version (2.22.3) fails dependency resolution. -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
-            <version>2.15.2</version>
+            <version>2.22</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.15.2</version>
+            <version>2.22.3</version>
         </dependency>
         <!-- For JNI -->
         <dependency>
@@ -89,14 +111,106 @@
             <version>4.13.2</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-testing</artifactId>
+            <version>${trino.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-main</artifactId>
+            <version>${trino.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- A second, first-party catalog for the cross-catalog join tests. It is
+             published at every Trino release, so it always matches the engine
+             version; trino-postgresql is not published past 476. -->
+        <dependency>
+            <groupId>io.trino</groupId>
+            <artifactId>trino-tpch</artifactId>
+            <version>${trino.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- TrinoConnectorTest is still JUnit 4; without the vintage engine
+             surefire silently runs zero tests from it. -->
+        <dependency>
+            <groupId>org.junit.vintage</groupId>
+            <artifactId>junit-vintage-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <profiles>
+        <!-- Deprecated aliases so `-P trino-482` / `-P trino-484` keep working
+             for anyone scripting the build. Prefer -Dtrino.version=483. -->
+        <profile>
+            <id>trino-482</id>
+            <properties>
+                <trino.version>483</trino.version>
+                <trino.band>d</trino.band>
+            </properties>
+        </profile>
+        <profile>
+            <id>trino-484</id>
+            <properties>
+                <trino.version>484</trino.version>
+                <trino.band>e</trino.band>
+            </properties>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>
             <plugin>
+                <!-- Adds src/main/java-trino-${trino.band} as an extra source
+                     root. Only the band-specific finishMerge shell lives there;
+                     all connector logic stays in src/main/java. -->
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>add-band-source-root</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>src/main/java-trino-${trino.band}</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.2.5</version>
+                <!-- 3.2.5 predates JUnit Platform 6 and mis-detects it. -->
+                <version>3.6.0</version>
+                <configuration>
+                    <!-- Trino 484's io.trino.simd.BlockEncodingSimdSupport
+                         references jdk.incubator.vector.VectorShape. That class
+                         exists on JDK 25 but only inside the incubator module,
+                         which is NOT resolved by default, so the engine dies
+                         with NoClassDefFoundError during Guice provisioning
+                         unless the module is added. Trino's own launcher adds
+                         it; surefire (and any embedder) must match.
+                         Arrow Java additionally needs reflective access to
+                         java.nio. -->
+                    <argLine>-Djava.library.path=${project.basedir}/../target/debug --add-opens=java.base/java.nio=ALL-UNNAMED --add-modules=jdk.incubator.vector</argLine>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

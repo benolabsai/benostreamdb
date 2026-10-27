@@ -1,6 +1,6 @@
 name: dbt_benostreamdb
 # Macro package version; tracks the BenoStreamDB engine version.
-version: 0.12.0
+version: 0.14.0
 config-version: 2
 
 # Supported dbt-core range. Adapters declare compatibility with ranges here

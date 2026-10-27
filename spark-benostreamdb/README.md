@@ -41,7 +41,7 @@ Add the JAR to Spark's classpath and configure the catalog:
 
 ```bash
 spark-shell \
-  --jars target/spark-benostream-0.12.0.jar \
+  --jars target/spark-benostream-0.14.0.jar \
   --conf spark.sql.catalog.benostream=com.benostreamdb.spark.BenoStreamCatalog \
   --conf spark.sql.catalog.benostream.warehouse=s3://my-bucket/warehouse
 ```

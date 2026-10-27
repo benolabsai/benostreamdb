@@ -217,15 +217,12 @@ public class TrinoConnectorTest {
         assertTrue("Addresses should be empty (managed by connector)", addresses.isEmpty());
     }
 
-    @Test
-    public void testSplitGetSplitInfo() {
-        BenoStreamDBSplit split = new BenoStreamDBSplit("s3://bucket/table", "SELECT * FROM t");
-        // Trino 468 replaced ConnectorSplit.getInfo() with getSplitInfo().
-        var info = split.getSplitInfo();
-        assertNotNull("Split info should not be null", info);
-    }
-
     // ---- SplitManager Tests ----
+
+    // NOTE: there is deliberately no getSplitInfo() test. ConnectorSplit now
+    // exposes no split-info accessor in either supported band (468's
+    // getSplitInfo was removed by 482), so asserting on it would only pin a
+    // version we no longer ship.
 
     @Test
     public void testSplitManagerEmitsSingleSplitWithPushedDownSql() throws Exception {
@@ -237,7 +234,9 @@ public class TrinoConnectorTest {
         var splitSource = splitManager.getSplits(null, null, tableHandle, null, null);
         assertNotNull("Split source should not be null", splitSource);
 
-        List<ConnectorSplit> splits = splitSource.getNextBatch(1000).get().getSplits();
+        // getNextBatch takes (maxSize, DynamicFilterSnapshot) in both supported
+        // bands. FixedSplitSource never consults the snapshot, so null is fine.
+        List<ConnectorSplit> splits = splitSource.getNextBatch(1000, null).get();
         assertEquals("Should emit exactly one split", 1, splits.size());
 
         BenoStreamDBSplit split = (BenoStreamDBSplit) splits.get(0);
@@ -252,7 +251,7 @@ public class TrinoConnectorTest {
         BenoStreamDBTableHandle tableHandle = new BenoStreamDBTableHandle("default", "events");
 
         var splitSource = splitManager.getSplits(null, null, tableHandle, null, null);
-        List<ConnectorSplit> splits = splitSource.getNextBatch(1000).get().getSplits();
+        List<ConnectorSplit> splits = splitSource.getNextBatch(1000, null).get();
         assertEquals("SELECT * FROM t", ((BenoStreamDBSplit) splits.get(0)).getSql());
     }
 

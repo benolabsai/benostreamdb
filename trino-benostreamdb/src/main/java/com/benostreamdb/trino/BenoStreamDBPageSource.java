@@ -3,8 +3,10 @@ package com.benostreamdb.trino;
 import io.trino.spi.Page;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorPageSource;
+import io.trino.spi.connector.SourcePage;
 import io.trino.spi.block.BlockBuilder;
 import java.util.List;
+import java.util.Optional;
 import java.io.IOException;
 
 import org.apache.arrow.c.ArrowArray;
@@ -19,9 +21,9 @@ import org.apache.arrow.vector.VectorSchemaRoot;
  * Streams a BenoStreamDB SQL query result into Trino pages.
  *
  * The query is opened once through the JNI bridge (which runs it via the
- * engine's DataFusion session, applying index/vector pushdown) and batches are
- * pulled until exhausted. There is no mock fallback: if the native library is
- * unavailable the page source fails loudly.
+ * engine's DataFusion session, applying scalar predicate pushdown) and batches
+ * are pulled until exhausted. There is no mock fallback: if the native library
+ * is unavailable the page source fails loudly.
  */
 public class BenoStreamDBPageSource implements ConnectorPageSource {
 
@@ -46,7 +48,26 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
         if (gpuDevice == null || !gpuDevice.contains(",")) {
             BenoStreamDBJNIBridge.setGpuContext(gpuDevice);
         }
-        this.queryHandle = BenoStreamDBJNIBridge.openQuery(split.getTableUri(), split.getSql());
+        Optional<HybridSearchHandle> hybrid = split.getHybridSearch();
+        if (hybrid.isPresent()) {
+            HybridSearchHandle handle = hybrid.get();
+            this.queryHandle = BenoStreamDBJNIBridge.hybridSearch(
+                    handle.getTableUri(),
+                    handle.getTextColumn(),
+                    handle.getQueryText(),
+                    handle.getVectorColumn(),
+                    handle.getQueryVector(),
+                    handle.getK(),
+                    handle.getRrfK());
+        } else if (split.getTablesJson().isPresent()) {
+            // Multi-table statement: the aliases travel in the split, so the
+            // engine registers each one before planning.
+            this.queryHandle = BenoStreamDBJNIBridge.openQueryMulti(
+                    split.getTablesJson().get(), split.getSql());
+        } else {
+            this.queryHandle = BenoStreamDBJNIBridge.openQuery(
+                    split.getTableUri(), split.getSql());
+        }
         if (this.queryHandle == 0) {
             throw new RuntimeException("BenoStreamDB openQuery failed for " + split.getTableUri());
         }
@@ -73,6 +94,11 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
     }
 
     @Override
+    public SourcePage getNextSourcePage() {
+        Page page = getNextPage();
+        return page == null ? null : SourcePage.create(page);
+    }
+
     public Page getNextPage() {
         if (finished) {
             return null;
@@ -157,7 +183,8 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
                 }
             });
         } else if (trinoType instanceof io.trino.spi.type.IntegerType
-                || trinoType instanceof io.trino.spi.type.BigintType) {
+                || trinoType instanceof io.trino.spi.type.BigintType
+                || trinoType instanceof io.trino.spi.type.DateType) {
             trinoType.writeLong(blockBuilder, ((Number) obj).longValue());
         } else if (trinoType instanceof io.trino.spi.type.DoubleType) {
             trinoType.writeDouble(blockBuilder, ((Number) obj).doubleValue());

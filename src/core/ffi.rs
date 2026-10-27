@@ -514,6 +514,45 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_addIn
 ///
 /// `segment_id` is the column to rebuild; `"all"`, `"null"`, or empty means
 /// "fill in every missing index file" (the offline batch build).
+/// Shared body for the Trino and Spark `build_index` entry points.
+///
+/// `"all"` means "fill in every missing overlay index". That can race with the
+/// detached build `add_index` schedules: if the background task commits first,
+/// our recovery commit conflicts even though the table is now fully indexed.
+/// Re-reading the manifest distinguishes the two outcomes.
+async fn run_build_index(uri: String, target: String) -> anyhow::Result<()> {
+    let table = Table::new_async(uri).await?;
+    let all = target.is_empty()
+        || target.eq_ignore_ascii_case("all")
+        || target.eq_ignore_ascii_case("null");
+    if all {
+        // `add_index` schedules its build on a detached task. Our recovery
+        // commit can conflict with that task's commit, and simply retrying the
+        // manifest read immediately can still see the pre-build snapshot. Wait
+        // (bounded) for whichever side wins instead of failing the procedure.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match table.recover_indexes_async().await {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    if table.all_segments_indexed_async().await.unwrap_or(false) {
+                        tracing::info!(
+                            "FFI: build_index raced with a background build; every segment is already indexed"
+                        );
+                        return Ok(());
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(err);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+        }
+    } else {
+        table.rebuild_index(target).await
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_buildIndex(
     mut env: JNIEnv,
@@ -533,18 +572,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_build
         tracing::error!("FFI(Spark): buildIndex requires a table");
         return 0;
     }
-    let target = seg.trim().to_string();
-    let all = target.is_empty()
-        || target.eq_ignore_ascii_case("all")
-        || target.eq_ignore_ascii_case("null");
-    let res = RUNTIME.block_on(async {
-        let table = Table::new_async(uri).await?;
-        if all {
-            table.recover_indexes_async().await.map(|_| ())
-        } else {
-            table.rebuild_index(target).await
-        }
-    });
+    let res = RUNTIME.block_on(run_build_index(uri, seg.trim().to_string()));
     match res {
         Ok(()) => 1,
         Err(e) => {
@@ -555,174 +583,64 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_build
 }
 
 /// Spark: set the table primary key to the comma-separated `columns`.
+/// Forwards to the canonical implementation above.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setPrimaryKey(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     table_uri: JString,
     columns: JString,
 ) -> jboolean {
-    let uri: String = env
-        .get_string(&table_uri)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let cols: String = env
-        .get_string(&columns)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let columns = split_columns(&cols);
-    if uri.is_empty() || columns.is_empty() {
-        tracing::error!("FFI(Spark): setPrimaryKey requires a table and at least one column");
-        return 0;
-    }
-    let res = RUNTIME.block_on(async {
-        let table = Table::new_async(uri).await?;
-        table.set_primary_key_async(columns).await
-    });
-    match res {
-        Ok(()) => 1,
-        Err(e) => {
-            tracing::error!("FFI(Spark): setPrimaryKey failed: {}", e);
-            0
-        }
-    }
+    set_primary_key_impl(env, table_uri, columns)
 }
 
 /// Spark: drop the comma-separated `columns` from the table primary key.
+/// Forwards to the canonical implementation above.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropPrimaryKey(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     table_uri: JString,
     columns: JString,
 ) -> jboolean {
-    let uri: String = env
-        .get_string(&table_uri)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let cols: String = env
-        .get_string(&columns)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let columns = split_columns(&cols);
-    if uri.is_empty() || columns.is_empty() {
-        tracing::error!("FFI(Spark): dropPrimaryKey requires a table and at least one column");
-        return 0;
-    }
-    let res = RUNTIME.block_on(async {
-        let table = Table::new_async(uri).await?;
-        for c in columns {
-            table.drop_primary_key(c).await?;
-        }
-        Ok::<(), anyhow::Error>(())
-    });
-    match res {
-        Ok(()) => 1,
-        Err(e) => {
-            tracing::error!("FFI(Spark): dropPrimaryKey failed: {}", e);
-            0
-        }
-    }
+    drop_primary_key_impl(env, table_uri, columns)
 }
 
 /// Spark: drop the index on `column`.
 ///
 /// `index_category` is advisory only — the engine keys indexes by column, so a
 /// single column can only have one index to drop.
+/// Spark: drop the index on `column`. Forwards to the canonical implementation.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropIndex(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     table_uri: JString,
     column: JString,
     index_category: JString,
 ) -> jboolean {
-    let uri: String = env
-        .get_string(&table_uri)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let col: String = env
-        .get_string(&column)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let _idx_type: String = env
-        .get_string(&index_category)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    if uri.is_empty() || col.is_empty() {
-        tracing::error!("FFI(Spark): dropIndex requires a table and column");
-        return 0;
-    }
-    let res = RUNTIME.block_on(async {
-        let table = Table::new_async(uri).await?;
-        table.drop_index(col).await
-    });
-    match res {
-        Ok(()) => 1,
-        Err(e) => {
-            tracing::error!("FFI(Spark): dropIndex failed: {}", e);
-            0
-        }
-    }
+    drop_index_impl(env, table_uri, column, index_category)
 }
 
-/// Spark: compact the table's data files.
+/// Spark: compact the table's data files. Forwards to the canonical implementation.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_compactTable(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     table_uri: JString,
 ) -> jboolean {
-    let uri: String = env
-        .get_string(&table_uri)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    if uri.is_empty() {
-        tracing::error!("FFI(Spark): compactTable requires a table");
-        return 0;
-    }
-    let res = RUNTIME.block_on(async {
-        let table = Table::new_async(uri).await?;
-        table.rewrite_data_files_async(None).await
-    });
-    match res {
-        Ok(()) => 1,
-        Err(e) => {
-            tracing::error!("FFI(Spark): compactTable failed: {}", e);
-            0
-        }
-    }
+    compact_table_impl(env, table_uri)
 }
 
 /// Spark: list the table's indexes as a JSON array of index-file records.
+/// Forwards to the canonical implementation above.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_listIndexes(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
     table_uri: JString,
 ) -> jstring {
-    let uri: String = env
-        .get_string(&table_uri)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let json = if uri.is_empty() {
-        "[]".to_string()
-    } else {
-        match RUNTIME.block_on(async {
-            let table = Table::new_async(uri).await?;
-            table.list_index_files().await
-        }) {
-            Ok(files) => serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string()),
-            Err(e) => {
-                tracing::error!("FFI(Spark): listIndexes failed: {}", e);
-                "[]".to_string()
-            }
-        }
-    };
-    match env.new_string(json) {
-        Ok(s) => s.into_raw(),
-        Err(_) => std::ptr::null_mut(),
-    }
+    list_indexes_impl(env, table_uri)
 }
 
 #[no_mangle]
@@ -1004,10 +922,45 @@ fn vector_search_impl(
 }
 
 // -----------------------------------------------------------------------------
-// Regional Drift Traversal JNI Bridge (Spark)
+// Regional Drift Traversal JNI Bridge
 // -----------------------------------------------------------------------------
+//
+// The implementation lives under the canonical Trino class name; Spark's
+// procedure forwards to it. Only `node_id` is exported because that is exactly
+// what the callers read (see runRegionalDriftSearch in the Spark bridge).
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_regionalDriftSearch(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    query: JString,
+    seeds_json: JString,
+    top_k: jint,
+    hops: jint,
+    n_depth: jint,
+    k_followups: jint,
+    mode_str: JString,
+    out_array_ptr: jlong,
+    out_schema_ptr: jlong,
+) -> jint {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_regionalDriftSearch(
+        env,
+        _class,
+        table_uri,
+        query,
+        seeds_json,
+        top_k,
+        hops,
+        n_depth,
+        k_followups,
+        mode_str,
+        out_array_ptr,
+        out_schema_ptr,
+    )
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_regionalDriftSearch(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -1022,7 +975,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_regio
     out_schema_ptr: jlong,
 ) -> jint {
     if out_array_ptr == 0 || out_schema_ptr == 0 {
-        tracing::error!("FFI(Spark): regionalDriftSearch called with null pointers");
+        tracing::error!("FFI: regionalDriftSearch called with null pointers");
         return -1;
     }
 
@@ -1044,7 +997,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_regio
     let seeds_str = match seeds_result {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!("FFI(Spark): failed to parse seeds_json: {}", e);
+            tracing::error!("FFI: failed to parse seeds_json: {}", e);
             return -1;
         }
     };
@@ -1079,7 +1032,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_regio
     let result = match res {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!("FFI(Spark): regional_drift_with_mode error: {}", e);
+            tracing::error!("FFI: regional_drift_with_mode error: {}", e);
             return -1;
         }
     };
@@ -1100,7 +1053,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_regio
     let batch = match arrow::record_batch::RecordBatch::try_new(schema, vec![row_id_array]) {
         Ok(b) => b,
         Err(e) => {
-            tracing::error!("FFI(Spark): Failed to create RecordBatch: {}", e);
+            tracing::error!("FFI: Failed to create RecordBatch: {}", e);
             return -1;
         }
     };
@@ -1111,7 +1064,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_regio
     let (ffi_array, ffi_schema) = match to_ffi(&array_data) {
         Ok(tuple) => tuple,
         Err(e) => {
-            tracing::error!("FFI(Spark): Error exporting to C Data Interface: {}", e);
+            tracing::error!("FFI: Error exporting to C Data Interface: {}", e);
             return -1;
         }
     };
@@ -1405,8 +1358,63 @@ impl QuerySession {
     }
 }
 
-/// Trino: run a SQL query against a table (registered as `t`) and return a
-/// handle to the materialized result.
+/// Trino: run a query with several tables registered under explicit aliases.
+///
+/// `tables_json` is a JSON object of `{ "alias": "table_uri" }`. Needed by
+/// multi-table table functions such as `graph_rag_search`, which references a
+/// document table and an edge table in one statement.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_openQueryMulti(
+    mut env: JNIEnv,
+    _class: JClass,
+    tables_json: JString,
+    sql: JString,
+) -> jlong {
+    let json: String = env
+        .get_string(&tables_json)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let query: String = env.get_string(&sql).map(|s| s.into()).unwrap_or_default();
+    if json.is_empty() || query.is_empty() {
+        tracing::warn!("FFI(Trino): openQueryMulti called with empty tables or sql");
+        return 0;
+    }
+
+    let parsed: std::collections::BTreeMap<String, String> = match serde_json::from_str(&json) {
+        Ok(map) => map,
+        Err(e) => {
+            tracing::error!("FFI(Trino): openQueryMulti could not parse tables: {}", e);
+            return 0;
+        }
+    };
+    if parsed.is_empty() {
+        tracing::error!("FFI(Trino): openQueryMulti requires at least one table");
+        return 0;
+    }
+
+    let tables: Vec<(String, String)> = parsed.into_iter().collect();
+    let anchor_uri = tables[0].1.clone();
+
+    let res = RUNTIME.block_on(async {
+        let anchor = Table::new_async(anchor_uri).await?;
+        anchor.sql_multi(tables, &query).await
+    });
+
+    match res {
+        Ok(batches) => {
+            tracing::info!(
+                "FFI(Trino): openQueryMulti produced {} batch(es)",
+                batches.len()
+            );
+            Box::into_raw(Box::new(QuerySession { batches, idx: 0 })) as jlong
+        }
+        Err(e) => {
+            tracing::error!("FFI(Trino): openQueryMulti failed: {}", e);
+            0
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_openQuery(
     mut env: JNIEnv,
@@ -1484,6 +1492,336 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_closeQu
     if handle != 0 {
         unsafe {
             drop(Box::from_raw(handle as *mut QuerySession));
+        }
+    }
+}
+
+/// Trino: add an index on `column` using the named algorithm/category.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_addIndex(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    column: JString,
+    index_category: JString,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let col: String = env
+        .get_string(&column)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let idx_type: String = env
+        .get_string(&index_category)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if uri.is_empty() || col.is_empty() {
+        tracing::error!("FFI(Trino): addIndex requires a table and column");
+        return 0;
+    }
+    let algorithm = IndexAlgorithm::from_name(&idx_type).unwrap_or_default();
+    let col_log = col.clone();
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.add_index(col, algorithm).await
+    });
+    match res {
+        Ok(()) => {
+            tracing::info!(
+                "FFI(Trino): addIndex committed for '{}' ({})",
+                col_log,
+                idx_type
+            );
+            1
+        }
+        Err(e) => {
+            tracing::error!("FFI(Trino): addIndex failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Trino: build/rebuild index files.
+///
+/// `segment_id` is the column to rebuild; `"all"`, `"null"`, or empty means
+/// "fill in every missing index file" (the offline batch build).
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_buildIndex(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    segment_id: JString,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let seg: String = env
+        .get_string(&segment_id)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if uri.is_empty() {
+        tracing::error!("FFI(Trino): buildIndex requires a table");
+        return 0;
+    }
+    let res = RUNTIME.block_on(run_build_index(uri, seg.trim().to_string()));
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Trino): buildIndex failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Trino: run vector + BM25 retrieval, fuse with RRF, and stream the hydrated
+/// rows. The fused score is returned as `rrf_score`.
+#[no_mangle]
+// -----------------------------------------------------------------------------
+// Index and primary-key maintenance (canonical Trino entry points)
+// -----------------------------------------------------------------------------
+//
+// add_index and build_index were the only maintenance operations ever exported
+// under the Trino class name, so the Trino connector could not reach drop_index,
+// compact, set/drop primary key, or list_indexes even though the engine
+// implements all of them and Spark already exposed them. The bodies live in
+// these helpers; the Trino exports below and the Spark forwarders further down
+// both call them, so there is exactly one implementation of each.
+
+fn jstring_or_empty(env: &mut JNIEnv, value: &JString) -> String {
+    env.get_string(value).map(|s| s.into()).unwrap_or_default()
+}
+
+fn set_primary_key_impl(mut env: JNIEnv, table_uri: JString, columns: JString) -> jboolean {
+    let uri = jstring_or_empty(&mut env, &table_uri);
+    let cols = jstring_or_empty(&mut env, &columns);
+    let columns = split_columns(&cols);
+    if uri.is_empty() || columns.is_empty() {
+        tracing::error!("FFI: setPrimaryKey requires a table and at least one column");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.set_primary_key_async(columns).await
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI: setPrimaryKey failed: {}", e);
+            0
+        }
+    }
+}
+
+fn drop_primary_key_impl(mut env: JNIEnv, table_uri: JString, columns: JString) -> jboolean {
+    let uri = jstring_or_empty(&mut env, &table_uri);
+    let cols = jstring_or_empty(&mut env, &columns);
+    let columns = split_columns(&cols);
+    if uri.is_empty() || columns.is_empty() {
+        tracing::error!("FFI: dropPrimaryKey requires a table and at least one column");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        for c in columns {
+            table.drop_primary_key(c).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI: dropPrimaryKey failed: {}", e);
+            0
+        }
+    }
+}
+
+/// `index_category` is advisory only; the engine keys indexes by column, so a
+/// single column can only have one index to drop.
+fn drop_index_impl(
+    mut env: JNIEnv,
+    table_uri: JString,
+    column: JString,
+    index_category: JString,
+) -> jboolean {
+    let uri = jstring_or_empty(&mut env, &table_uri);
+    let col = jstring_or_empty(&mut env, &column);
+    let _category = jstring_or_empty(&mut env, &index_category);
+    if uri.is_empty() || col.is_empty() {
+        tracing::error!("FFI: dropIndex requires a table and column");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.drop_index(col).await
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI: dropIndex failed: {}", e);
+            0
+        }
+    }
+}
+
+fn compact_table_impl(mut env: JNIEnv, table_uri: JString) -> jboolean {
+    let uri = jstring_or_empty(&mut env, &table_uri);
+    if uri.is_empty() {
+        tracing::error!("FFI: compactTable requires a table");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.rewrite_data_files_async(None).await
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI: compactTable failed: {}", e);
+            0
+        }
+    }
+}
+
+fn list_indexes_impl(mut env: JNIEnv, table_uri: JString) -> jstring {
+    let uri = jstring_or_empty(&mut env, &table_uri);
+    let json = if uri.is_empty() {
+        "[]".to_string()
+    } else {
+        match RUNTIME.block_on(async {
+            let table = Table::new_async(uri).await?;
+            table.list_index_files().await
+        }) {
+            Ok(files) => serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string()),
+            Err(e) => {
+                tracing::error!("FFI: listIndexes failed: {}", e);
+                "[]".to_string()
+            }
+        }
+    };
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_setPrimaryKey(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    columns: JString,
+) -> jboolean {
+    set_primary_key_impl(env, table_uri, columns)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_dropPrimaryKey(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    columns: JString,
+) -> jboolean {
+    drop_primary_key_impl(env, table_uri, columns)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_dropIndex(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    column: JString,
+    index_category: JString,
+) -> jboolean {
+    drop_index_impl(env, table_uri, column, index_category)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_compactTable(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jboolean {
+    compact_table_impl(env, table_uri)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_listIndexes(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jstring {
+    list_indexes_impl(env, table_uri)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_hybridSearch(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    text_column: JString,
+    query_text: JString,
+    vector_column: JString,
+    query_vector: JString,
+    k: jlong,
+    rrf_k: jlong,
+) -> jlong {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let text_col: String = env
+        .get_string(&text_column)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let query: String = env
+        .get_string(&query_text)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let vec_col: String = env
+        .get_string(&vector_column)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let vec_json: String = env
+        .get_string(&query_vector)
+        .map(|s| s.into())
+        .unwrap_or_default();
+
+    if uri.is_empty() || text_col.is_empty() || vec_col.is_empty() || vec_json.is_empty() {
+        tracing::error!(
+            "FFI(Trino): hybridSearch requires table, text column, vector column, and query vector"
+        );
+        return 0;
+    }
+    let vector: Vec<f32> = match serde_json::from_str(&vec_json) {
+        Ok(values) => values,
+        Err(e) => {
+            tracing::error!("FFI(Trino): invalid hybrid query vector JSON: {}", e);
+            return 0;
+        }
+    };
+    let limit = if k <= 0 { 10usize } else { k as usize };
+    let rrf = if rrf_k <= 0 { 60.0f32 } else { rrf_k as f32 };
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table
+            .hybrid_search_batches(&text_col, &query, &vec_col, vector, limit, rrf)
+            .await
+    });
+    match res {
+        Ok(batches) => {
+            tracing::info!(
+                "FFI(Trino): hybridSearch produced {} batch(es)",
+                batches.len()
+            );
+            Box::into_raw(Box::new(QuerySession { batches, idx: 0 })) as jlong
+        }
+        Err(e) => {
+            tracing::error!("FFI(Trino): hybridSearch failed: {}", e);
+            0
         }
     }
 }

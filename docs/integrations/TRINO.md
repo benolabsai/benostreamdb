@@ -1,87 +1,316 @@
 # Trino Connector
 
-The BenoStreamDB Trino connector allows you to query your datasets using distributed SQL. It implements the Trino SPI (Service Provider Interface) and delegates IO operations to the Rust core via JNI.
+The BenoStreamDB Trino connector queries your datasets with distributed SQL. It
+implements the Trino SPI and delegates IO to the Rust core over JNI, so vectors,
+keyword indexes, and graph traversals run in the engine rather than in Trino.
+
+## Supported Trino versions
+
+Trino publishes no LTS and does not keep the connector SPI source- or
+binary-compatible between releases, so the connector is built and tested per
+**band**:
+
+| Band | Trino versions | Status |
+|------|----------------|--------|
+| `e` | 484 and newer | current, default |
+| `d` | 482-483 | current-minus |
+
+A plugin built for one band does not load on another. See
+[`plans/trino_version_bands.md`](../../plans/trino_version_bands.md) for the
+measured SPI differences and the refresh procedure when a new release lands.
 
 ## Building
 
-The connector is a standard Maven project.
+Prerequisites:
+
+- **JDK 23 or newer.** The 482+ SPI is compiled for Java 23 (class file 67); a
+  JDK 21 compiler cannot read it.
+- **The native library, built with the `java` Cargo feature.** The JNI entry
+  points are feature-gated, so a plain `cargo build` produces a library with
+  zero `Java_com_benostreamdb_*` symbols and every query fails with
+  `UnsatisfiedLinkError`.
 
 ```bash
+cargo build --release --features java
+
 cd trino-benostreamdb
-mvn clean install -DskipTests
+# Band e (484+), the default
+mvn clean package -DskipTests
+# Band d (482-483)
+mvn clean package -DskipTests -Dtrino.version=482 -Dtrino.band=d
 ```
 
-This produces a plugin archive (ZIP) in `target/`.
+Each build produces a plugin ZIP in `trino-benostreamdb/target/` plus the main
+JAR.
 
 ## Installation
 
-1.  **Extract Plugin**: Unzip the artifact into the Trino plugin directory on all nodes.
-    ```bash
-    mkdir -p /usr/lib/trino/plugin/benostream
-    unzip trino-benostream-*-plugin.zip -d /usr/lib/trino/plugin/benostream
-    ```
+Trino's plugin loader only scans JARs **directly** inside the plugin directory;
+it does not recurse. The `trino-plugin` packaging nests everything under a
+versioned folder, so flatten it before installing:
 
-2.  **Configure Catalog**: Create a catalog properties file `etc/catalog/benostreamdb.properties`.
-    ```properties
-    connector.name=benostreamdb
-    benostream.base-uri=s3://my-bucket/
-    ```
+```bash
+mkdir -p /usr/lib/trino/plugin/benostream
+unzip -q trino-benostream-<version>.zip -d /tmp/bsdb-plugin
+cp /tmp/bsdb-plugin/trino-benostream-<version>/*.jar /usr/lib/trino/plugin/benostream/
+```
 
-## Usage
+The native library is **not** bundled in the plugin JAR: Trino loads it from
+`java.library.path`. Point it at a host or manylinux build of
+`libbenostreamdb.so`.
 
-Once configured, you can query BenoStreamDB tables just like any other SQL table.
+### Required JVM flags
+
+Trino 484's `io.trino.simd.BlockEncodingSimdSupport` references
+`jdk.incubator.vector.VectorShape`. That class exists on JDK 25 but only inside
+the incubator module, which is not resolved by default; without the flag the
+engine dies during startup with
+`NoClassDefFoundError: jdk/incubator/vector/VectorShape`. Trino's own launcher
+adds it, but any embedder must match:
+
+```
+--add-modules=jdk.incubator.vector
+--add-opens=java.base/java.nio=ALL-UNNAMED     # Arrow Java memory access
+-Djava.library.path=/path/to/libbenostreamdb
+```
+
+## Configuration
+
+`etc/catalog/benostreamdb.properties`:
+
+```properties
+connector.name=benostreamdb
+# Warehouse root: a local path or an object-store URI.
+benostream.warehouse=s3://my-bucket/
+# auto | cpu | cuda[:N] | mps | intel | rocm; comma-separated for a device pool.
+benostream.gpu-device=auto
+```
+
+## Querying tables
 
 ```sql
 SELECT * FROM benostreamdb.default.logs
-WHERE severity = 'ERROR' AND timestamp > NOW() - INTERVAL '1' DAY
+WHERE severity = 'ERROR' AND ts > NOW() - INTERVAL '1' DAY
 ```
 
-### Graph Traversal
+Scalar predicates are pushed into the engine as a SQL `WHERE` clause, so
+inverted indexes prune segments before Parquet is decoded.
 
-The connector forwards each scan to the engine's DataFusion session, so the
-engine's graph traversal **table functions** are callable directly in `FROM`
-clauses. Each follows the in-memory / out-of-core `GraphMode` pattern
-(`auto` | `in_memory` | `out_of_core` | `cached`):
+## Stored procedures
+
+All procedures live under `system` and mirror the Spark connector's catalog
+name for name, so a migration needs no rewrite. Index and primary-key changes
+are engine-side operations, not Trino DDL.
+
+| Procedure | Arguments | Purpose |
+|-----------|-----------|---------|
+| `add_index` | `TABLE`, `COLUMN`, `ALGORITHM` (default `vector`) | Add a secondary index |
+| `build_index` | `TABLE`, `SEGMENT_ID` (default `all`) | Build a pending index |
+| `rebuild_index` | `TABLE`, `COLUMN` | Rebuild an index segment |
+| `drop_index` | `TABLE`, `COLUMN` | Drop a secondary index |
+| `compact` | `TABLE` | Rewrite data files |
+| `optimize` | `TABLE` | Alias of `compact` |
+| `set_primary_key` | `TABLE`, `COLUMNS` (comma-separated) | Declare the row key |
+| `drop_primary_key` | `TABLE`, `COLUMNS` (comma-separated) | Remove key columns |
 
 ```sql
--- Nodes within 2 hops of node 101 (node, hop, seed)
-SELECT * FROM graph_neighbors('edges', '101', 2, 'auto');
--- Shortest path between two nodes (node, hop)
-SELECT * FROM graph_shortest_path('edges', 101, 205, 'auto');
--- Induced subgraph edges within 2 hops (source, target)
-SELECT * FROM graph_subgraph('edges', '101,102', 2, 'auto');
+CALL benostreamdb.system.add_index('default.docs', 'embedding', 'hnsw');
+CALL benostreamdb.system.build_index('default.docs');
+CALL benostreamdb.system.set_primary_key('default.docs', 'id');
+CALL benostreamdb.system.compact('default.docs');
 ```
 
-Endpoint columns are auto-detected (`source`/`src`/… , `target`/`dst`/…); pass
-trailing `source`, `target` string arguments to name them explicitly.
+## Table functions
 
-### Live Subscriptions (change feed)
+Vector, hybrid, and graph retrieval are exposed as table functions in the
+`system` schema. Arguments are named, and names are uppercase. `TABLE_NAME`
+(rather than `TABLE`) is used because `TABLE => ...` is reserved syntax in
+Trino for table arguments.
 
-The engine's `subscribe_events` table function is reachable through the same
-pass-through path. It drains the next committed-change events for a table and
-returns one row per event (`event_type` = `batch` | `commit`, `rows`):
+### Vector search
 
 ```sql
-SELECT * FROM subscribe_events('edges', 'weight > 0.5', 100, 1000);
+SELECT id, title, distance
+FROM TABLE(system.vector_search(
+    table_name => 'default.docs',
+    column     => 'embedding',
+    query      => '[1.0, 0.0, 0.0]',
+    k          => 10));
 ```
 
-The change feed is in-process, so a Trino worker only observes commits made by
-writers in the same JVM.
+The query vector is a JSON-style string literal. Trino's planner rewrites that
+literal into a `FixedSizeList`, which is what the KNN optimizer recognises —
+`ARRAY[1.0, 0.0, 0.0]` is not usable here. The engine runs the KNN search and
+adds a `distance` column.
 
-### GPU Device
+### Hybrid search (vector + BM25, fused with RRF)
 
-Set `benostream.gpu-device` in the catalog properties (`auto` | `cpu` |
-`cuda[:N]` | `mps` | `intel` | `rocm`). The connector resolves it through the
-same core mapping as every other surface.
+```sql
+SELECT id, title, rrf_score
+FROM TABLE(system.hybrid_search(
+    table_name    => 'default.docs',
+    text_column   => 'title',
+    query_text    => 'graph',
+    vector_column => 'embedding',
+    query_vector  => '[1.0, 0.0, 0.0]',
+    k             => 10,
+    rrf_k         => 60));
+```
 
-For **multi-GPU**, pass a comma-separated list (e.g.
-`benostream.gpu-device=cuda:0,cuda:1`). The connector installs a device pool;
-each engine worker thread is assigned one device round-robin, so a single query
-spreads its kernels across the listed GPUs. A single device (or `auto`) keeps
-the process-wide behaviour.
+`filter` is accepted but currently rejected when non-empty; filtering inside a
+fused search is not wired yet.
 
-### Predicate Pushdown
+### Graph traversal
 
-The connector supports aggressive predicate pushdown. The query engine passes the `WHERE` clause to the Rust core, which uses:
-*   **Inverted Indexes**: To prune segments and rows based on scalar columns (e.g., `severity`).
-*   **Vector Indexes**: (Planned) To optimize `ORDER BY similarity(...)` queries.
+```sql
+-- Nodes within N hops of the seed nodes: (node, hop, seed)
+SELECT * FROM TABLE(system.graph_neighbors(
+    table_name => 'default.edges', seeds => '101', hops => 2));
+
+-- Shortest path between two nodes: (node, hop)
+SELECT * FROM TABLE(system.graph_shortest_path(
+    table_name => 'default.edges', source => '101', target => '205'));
+
+-- Induced subgraph edges within N hops: (source, target)
+SELECT * FROM TABLE(system.graph_subgraph(
+    table_name => 'default.edges', seeds => '101,102', hops => 2));
+```
+
+All three accept an optional `mode` (`auto` | `in_memory` | `out_of_core` |
+`cached`). Endpoint columns are auto-detected (`source`/`src`/… and
+`target`/`dst`/…).
+
+### Graph-expanded retrieval (`graph_rag_search`)
+
+Vector ranking over a document table, joined to a traversal of a separate edge
+table — two tables in one statement:
+
+```sql
+SELECT id, title, hop
+FROM TABLE(system.graph_rag_search(
+    table_name    => 'default.docs',
+    edge_table    => 'default.edges',
+    vector_column => 'embedding',
+    query_vector  => '1.0, 0.0',
+    seeds         => '101',
+    id_column     => 'id',       -- default: id
+    hops          => 1,          -- default: 1
+    k             => 10,         -- default: 10
+    mode          => 'auto'));
+```
+
+Returns the document columns plus `hop`. Internally the engine registers both
+tables in one session (documents as `t`, edges as `e`) and evaluates:
+
+```sql
+SELECT d.*, g.hop FROM t d
+JOIN graph_neighbors('e', '<seeds>', <hops>, '<mode>') g ON d.<id> = g.node
+ORDER BY dist_cosine(d.<vector>, '[<query>]') LIMIT <k>
+```
+
+### DRIFT graph search
+
+```sql
+SELECT node_id FROM TABLE(system.regional_drift_search(
+    table_name   => 'default.edges',
+    query        => 'related incidents',
+    seeds        => '101,102',
+    top_k        => 5,
+    hops         => 2,
+    n_depth      => 2,
+    k_followups  => 3,
+    mode         => 'auto'));
+```
+
+Returns the discovered node ids as a single `node_id` column. This is a table
+function rather than a procedure on purpose: Spark registers it as a procedure
+whose `call` runs the search and then returns an empty iterator, so
+`CALL regional_drift_search(...)` computes an answer and discards it. Both
+surfaces run the same engine code and read the same Arrow `node_id` column.
+
+### Index listing
+
+```sql
+SELECT column_name, index_category, algorithm, index_id, format_version
+FROM TABLE(system.list_indexes(table_name => 'default.docs'));
+```
+
+Backed by the engine's manifest, so it reports what actually exists rather than
+what was requested. Spark's equivalent `show_indexes` calls the same JNI entry
+point but discards the rows.
+
+Note that indexing is two-phase: `add_index` registers an index and builds it on
+a detached background task. Call `build_index` when a subsequent query must
+observe the index immediately.
+
+## Joining with other catalogs
+
+Retrieval results join foreign catalogs directly in one statement; nothing is
+exported or copied. This is the same code path exercised by
+`TestCrossCatalogJoin`. An Iceberg catalog registered against a BenoStreamDB
+table directory works the same way; see [ICEBERG.md](ICEBERG.md).
+
+```sql
+SELECT v.title, o.orderstatus
+FROM TABLE(system.vector_search(
+        table_name => 'default.docs', column => 'embedding',
+        query => '[1.0, 0.0, 0.0]', k => 5)) v
+JOIN tpch.tiny.orders o ON v.id = o.orderkey;
+```
+
+## Limitations
+
+These are deliberate and documented rather than hidden:
+
+- **No live change feed.** The engine's in-process `subscribe_events` feed is
+  not exposed as a Trino table function. It is JVM-local by design, so a worker
+  would only ever observe commits from its own process.
+- **Iceberg reads are zero-copy.** Table metadata, manifests, Parquet, and
+  delete files are spec-compliant, so Trino's Iceberg connector can
+  `CALL iceberg.system.register_table(...)` against a BenoStreamDB table
+  directory and read the same files without copying — including position
+  deletes. Equality deletes are Avro, as the spec allows, and Trino reads them.
+  See [ICEBERG.md](ICEBERG.md) for the contract and the exact commands.
+- **Built-ins cannot be overridden per catalog.** Trino registers scalar
+  functions globally, so `cosine_distance` and `dot_product` are Trino's
+  implementations (the plugin cannot shadow them, and there is no
+  schema-scoped overload). For engine-side scoring on our own tables, use
+  `system.vector_search` / `system.hybrid_search`, which compute `distance` and
+  `rrf_score` inside the Rust session.
+
+## Scalar functions
+
+Seven functions are available SQL-wide, matching the Spark connector's UDFs:
+
+| Function | Source | Signature |
+|----------|--------|-----------|
+| `cosine_distance` | Trino built-in | `(array(double), array(double)) -> double` |
+| `dot_product` | Trino built-in | `(array(double), array(double)) -> double` |
+| `euclidean_distance` | Trino built-in | `(array(double), array(double)) -> double` |
+| `l2_distance` | this plugin | `(array(double), array(double)) -> double` |
+| `vector_distance` | this plugin | `(array(double), array(double), varchar) -> double` |
+| `sparse_dot_product` | this plugin | `(array(bigint), array(double), array(bigint), array(double)) -> double` |
+| `hybrid_score` | this plugin | `(double, double, double) -> double` |
+| `reciprocal_rank_fusion` | this plugin | `(array(integer), integer) -> double` |
+
+```sql
+SELECT l2_distance(embedding, CAST(ARRAY[1.0, 0.0, 0.0] AS array(double))) AS d,
+       vector_distance(embedding, CAST(ARRAY[1.0, 0.0, 0.0] AS array(double)), 'dot') AS dot_d,
+       reciprocal_rank_fusion(CAST(ARRAY[1, 3] AS array(integer)), 60) AS rrf
+FROM benostreamdb.default.docs;
+```
+
+`vector_distance` accepts `cosine`, `l2`/`euclidean`, and `dot`; `dot` is
+negated so that lower is closer, matching the engine.
+
+## Testing
+
+```bash
+# Both supported bands
+mvn test -Dtrino.version=482 -Dtrino.band=d
+mvn test -Dtrino.version=484 -Dtrino.band=e
+```
+
+The suite runs a real `DistributedQueryRunner` with the native library loaded,
+covering DDL/DML, every table function, the procedure surface, the type matrix,
+error paths, and cross-catalog joins against a second first-party catalog.

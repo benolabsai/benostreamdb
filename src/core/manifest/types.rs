@@ -741,37 +741,399 @@ impl IndexAlgorithm {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SchemaField {
     pub id: i32,
     pub name: String,
-    #[serde(rename = "type")]
-    pub type_str: String, // "int", "string", "struct", "list", "map"
+    /// Canonical BenoStreamDB/Arrow spelling of the column type (`int`, `long`,
+    /// `double`, `list`, `map`, `struct`, ...). Serialized to Iceberg's type
+    /// grammar by [`schema_field_to_json`].
+    pub type_str: String,
     pub required: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fields: Vec<SchemaField>, // For nested types (struct fields, list element, map key/value)
+    /// For nested types: struct members, the list element, or the map
+    /// key/value pair, in that order.
+    pub fields: Vec<SchemaField>,
     /// Iceberg V3: Default value for rows written before this column was added
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_default: Option<Value>,
     /// Iceberg V3: Default value for new rows when this column is null
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub write_default: Option<Value>,
     /// BenoStream Extension: Multiple indexing algorithms for this column
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub indexes: Vec<IndexAlgorithm>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Schema {
-    #[serde(alias = "schema-id")]
     pub schema_id: i32,
     pub fields: Vec<SchemaField>,
-    #[serde(
-        rename = "identifier-field-ids",
-        default,
-        skip_serializing_if = "Vec::is_empty"
-    )]
     pub identifier_field_ids: Vec<i32>,
+}
+
+/// Map BenoStreamDB/Arrow type spellings onto Iceberg's primitive type grammar.
+///
+/// Iceberg's `SchemaParser` only accepts its own names (`int`, `long`, `double`,
+/// `timestamp`, `timestamptz`, `fixed[N]`, ...). Anything else is rejected, so
+/// Arrow-specific spellings have to be normalised at the metadata boundary.
+fn iceberg_primitive_name(raw: &str) -> String {
+    let s = raw.trim().to_ascii_lowercase();
+    match s.as_str() {
+        "int8" | "int16" | "int32" | "int" | "uint8" | "uint16" => "int".to_string(),
+        "int64" | "long" | "uint32" | "uint64" => "long".to_string(),
+        "float32" | "float" => "float".to_string(),
+        "float64" | "double" => "double".to_string(),
+        "bool" | "boolean" => "boolean".to_string(),
+        "utf8" | "string" | "largeutf8" => "string".to_string(),
+        "binary" | "largebinary" => "binary".to_string(),
+        "date" | "date32" | "date64" => "date".to_string(),
+        "timestamptz" => "timestamptz".to_string(),
+        "timestamp" => "timestamp".to_string(),
+        "time" | "time32" | "time64" => "time".to_string(),
+        "null" => "unknown".to_string(),
+        other => {
+            if let Some(inner) = other
+                .strip_prefix("timestamp(")
+                .and_then(|v| v.strip_suffix(')'))
+            {
+                let mut parts = inner.splitn(2, ',').map(str::trim);
+                let unit = parts.next().unwrap_or("microsecond");
+                let tz = parts.next().unwrap_or("none");
+                let has_tz = !(tz.is_empty() || tz == "none");
+                return match (unit, has_tz) {
+                    ("nanosecond", true) => "timestamptz_ns".to_string(),
+                    ("nanosecond", false) => "timestamp_ns".to_string(),
+                    (_, true) => "timestamptz".to_string(),
+                    (_, false) => "timestamp".to_string(),
+                };
+            }
+            if other.starts_with("time32(") || other.starts_with("time64(") {
+                return "time".to_string();
+            }
+            other.to_string()
+        }
+    }
+}
+
+/// Serialize one schema field using Iceberg's nested-type encoding.
+fn schema_field_to_json(field: &SchemaField) -> Result<Value, String> {
+    let mut obj = serde_json::Map::new();
+    obj.insert("id".to_string(), Value::from(field.id));
+    obj.insert("name".to_string(), Value::from(field.name.clone()));
+    obj.insert("required".to_string(), Value::from(field.required));
+    obj.insert("type".to_string(), schema_field_type_to_json(field)?);
+    if let Some(value) = &field.initial_default {
+        obj.insert("initial-default".to_string(), value.clone());
+    }
+    if let Some(value) = &field.write_default {
+        obj.insert("write-default".to_string(), value.clone());
+    }
+    if !field.indexes.is_empty() {
+        let indexes = serde_json::to_value(&field.indexes).map_err(|e| e.to_string())?;
+        obj.insert("indexes".to_string(), indexes);
+    }
+    Ok(Value::Object(obj))
+}
+
+fn schema_field_type_to_json(field: &SchemaField) -> Result<Value, String> {
+    match field.type_str.trim().to_ascii_lowercase().as_str() {
+        "struct" => {
+            let fields = field
+                .fields
+                .iter()
+                .map(schema_field_to_json)
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".to_string(), Value::from("struct"));
+            obj.insert("fields".to_string(), Value::Array(fields));
+            Ok(Value::Object(obj))
+        }
+        "list" => {
+            let element = field.fields.first();
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".to_string(), Value::from("list"));
+            obj.insert(
+                "element-id".to_string(),
+                Value::from(element.map(|e| e.id).unwrap_or(field.id + 1)),
+            );
+            obj.insert(
+                "element".to_string(),
+                match element {
+                    Some(e) => schema_field_type_to_json(e)?,
+                    None => Value::from("string"),
+                },
+            );
+            obj.insert(
+                "element-required".to_string(),
+                Value::from(element.map(|e| e.required).unwrap_or(false)),
+            );
+            Ok(Value::Object(obj))
+        }
+        "map" => {
+            let key = field.fields.first();
+            let value = field.fields.get(1);
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".to_string(), Value::from("map"));
+            obj.insert(
+                "key-id".to_string(),
+                Value::from(key.map(|e| e.id).unwrap_or(field.id + 1)),
+            );
+            obj.insert(
+                "key".to_string(),
+                match key {
+                    Some(e) => schema_field_type_to_json(e)?,
+                    None => Value::from("string"),
+                },
+            );
+            obj.insert(
+                "key-required".to_string(),
+                Value::from(key.map(|e| e.required).unwrap_or(false)),
+            );
+            obj.insert(
+                "value-id".to_string(),
+                Value::from(value.map(|e| e.id).unwrap_or(field.id + 2)),
+            );
+            obj.insert(
+                "value".to_string(),
+                match value {
+                    Some(e) => schema_field_type_to_json(e)?,
+                    None => Value::from("string"),
+                },
+            );
+            obj.insert(
+                "value-required".to_string(),
+                Value::from(value.map(|e| e.required).unwrap_or(false)),
+            );
+            Ok(Value::Object(obj))
+        }
+        other => Ok(Value::from(iceberg_primitive_name(other))),
+    }
+}
+
+/// Build a nested field from an Iceberg `element`/`key`/`value` node.
+fn nested_schema_field(
+    id: i32,
+    name: &str,
+    type_node: Option<&Value>,
+    required: bool,
+) -> Result<SchemaField, String> {
+    match type_node {
+        Some(Value::String(primitive)) => Ok(SchemaField {
+            id,
+            name: name.to_string(),
+            type_str: iceberg_primitive_name(primitive),
+            required,
+            fields: Vec::new(),
+            initial_default: None,
+            write_default: None,
+            indexes: Vec::new(),
+        }),
+        Some(Value::Object(nested)) => {
+            let mut obj = nested.clone();
+            obj.insert("id".to_string(), Value::from(id));
+            obj.insert("name".to_string(), Value::from(name));
+            obj.insert("required".to_string(), Value::from(required));
+            schema_field_from_json(&Value::Object(obj))
+        }
+        _ => Err(format!("nested schema type for `{name}` is not an object")),
+    }
+}
+
+fn schema_field_from_json(value: &Value) -> Result<SchemaField, String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "schema field must be a JSON object".to_string())?;
+    let id = obj
+        .get("id")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| "schema field is missing `id`".to_string())? as i32;
+    let name = obj
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "schema field is missing `name`".to_string())?
+        .to_string();
+    let required = obj
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let type_node = obj
+        .get("type")
+        .ok_or_else(|| "schema field is missing `type`".to_string())?;
+
+    let (type_str, fields) = match type_node {
+        Value::String(kind) => {
+            let kind = kind.to_ascii_lowercase();
+            // Legacy BenoStreamDB encoding kept nested members in `fields`
+            // alongside a plain `list`/`map`/`struct` type string.
+            let nested = if matches!(kind.as_str(), "struct" | "list" | "map") {
+                obj.get("fields")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .map(schema_field_from_json)
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            (kind, nested)
+        }
+        Value::Object(nested) => {
+            let kind = nested
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_ascii_lowercase();
+            match kind.as_str() {
+                "struct" => {
+                    let fields = nested
+                        .get("fields")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .map(schema_field_from_json)
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    ("struct".to_string(), fields)
+                }
+                "list" => {
+                    let element_id = nested
+                        .get("element-id")
+                        .and_then(Value::as_i64)
+                        .map(|v| v as i32)
+                        .unwrap_or_else(|| id + 1);
+                    let element_required = nested
+                        .get("element-required")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let element = nested_schema_field(
+                        element_id,
+                        "element",
+                        nested.get("element"),
+                        element_required,
+                    )?;
+                    ("list".to_string(), vec![element])
+                }
+                "map" => {
+                    let key_id = nested
+                        .get("key-id")
+                        .and_then(Value::as_i64)
+                        .map(|v| v as i32)
+                        .unwrap_or_else(|| id + 1);
+                    let value_id = nested
+                        .get("value-id")
+                        .and_then(Value::as_i64)
+                        .map(|v| v as i32)
+                        .unwrap_or_else(|| id + 2);
+                    let key_required = nested
+                        .get("key-required")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let value_required = nested
+                        .get("value-required")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let key = nested_schema_field(key_id, "key", nested.get("key"), key_required)?;
+                    let value = nested_schema_field(
+                        value_id,
+                        "value",
+                        nested.get("value"),
+                        value_required,
+                    )?;
+                    ("map".to_string(), vec![key, value])
+                }
+                other => (other.to_string(), Vec::new()),
+            }
+        }
+        _ => return Err("schema field `type` must be a string or an object".to_string()),
+    };
+
+    Ok(SchemaField {
+        id,
+        name,
+        type_str,
+        required,
+        fields,
+        initial_default: obj.get("initial-default").cloned(),
+        write_default: obj.get("write-default").cloned(),
+        indexes: obj
+            .get("indexes")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default(),
+    })
+}
+
+impl Serialize for SchemaField {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = schema_field_to_json(self).map_err(serde::ser::Error::custom)?;
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SchemaField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        schema_field_from_json(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for Schema {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        // Iceberg requires `type: "struct"` and kebab-case `schema-id`.
+        let mut state = serializer.serialize_struct("schema", 4)?;
+        state.serialize_field("type", "struct")?;
+        state.serialize_field("schema-id", &self.schema_id)?;
+        state.serialize_field("fields", &self.fields)?;
+        if !self.identifier_field_ids.is_empty() {
+            state.serialize_field("identifier-field-ids", &self.identifier_field_ids)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Schema {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SchemaRepr {
+            #[serde(rename = "schema-id", alias = "schema_id", default)]
+            schema_id: i32,
+            #[serde(default)]
+            fields: Vec<SchemaField>,
+            #[serde(
+                rename = "identifier-field-ids",
+                alias = "identifier_field_ids",
+                default
+            )]
+            identifier_field_ids: Vec<i32>,
+        }
+
+        let repr = SchemaRepr::deserialize(deserializer)?;
+        Ok(Schema {
+            schema_id: repr.schema_id,
+            fields: repr.fields,
+            identifier_field_ids: repr.identifier_field_ids,
+        })
+    }
 }
 
 impl Schema {
@@ -883,6 +1245,7 @@ impl SchemaField {
         let field_id = f
             .metadata()
             .get("iceberg.id")
+            .or_else(|| f.metadata().get("PARQUET:field_id"))
             .and_then(|id_str| id_str.parse::<i32>().ok())
             .unwrap_or(id);
 

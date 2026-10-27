@@ -51,8 +51,10 @@ mod tests {
         for path in paths {
             let p = path?.path();
             let name = p.file_name().unwrap().to_str().unwrap();
-            // Look for del-pos-*.avro
-            if name.starts_with("del-pos-") && name.ends_with(".avro") {
+            // Position deletes are written as Parquet.
+            if name.starts_with("del-pos-")
+                && (name.ends_with(".parquet") || name.ends_with(".avro"))
+            {
                 found_del_file = true;
                 println!("Found Delete File: {}", name);
             }

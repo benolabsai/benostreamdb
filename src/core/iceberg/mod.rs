@@ -46,3 +46,22 @@ pub use value::{
     avro_to_json, decode_iceberg_value, json_to_avro_value, parse_avro_value_bytes,
     parse_avro_value_bytes_with_type,
 };
+
+/// Qualify a manifest-relative data-file path to the absolute URI that Iceberg
+/// manifests record.
+///
+/// Position-delete rows must reference exactly the data-file path declared by
+/// the data manifests (absolute). The engine keeps paths store-relative
+/// internally, so deletes need this conversion at write time; otherwise readers
+/// cannot match a delete to its file and silently return the deleted row.
+pub fn qualify_data_file_path(root_uri: &str, path: &str) -> String {
+    if path.contains("://") || path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!(
+            "{}/{}",
+            root_uri.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
+    }
+}

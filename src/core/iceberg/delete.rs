@@ -478,6 +478,9 @@ fn avro_to_arrow_array(
 /// (e.g. `./s3:/bucket/…`) and made deletes invisible to readers.
 pub struct IcebergDeleteWriter {
     base_path: String,
+    /// Table root as supplied by the caller, before the `file://` strip. Delete
+    /// rows must reference absolute data-file URIs.
+    root_uri: String,
     format_version: i32,
     store: Arc<dyn object_store::ObjectStore>,
 }
@@ -490,6 +493,7 @@ impl IcebergDeleteWriter {
     ) -> Self {
         Self {
             base_path: base_path.replace("file://", ""),
+            root_uri: base_path,
             format_version,
             store,
         }
@@ -524,8 +528,10 @@ impl IcebergDeleteWriter {
             ));
         }
 
+        // Parquet, not Avro: PyIceberg (and some other clients) only implement
+        // Parquet position deletes, even though the spec allows Avro.
         let file_name = format!(
-            "del-pos-{}-{}.avro",
+            "del-pos-{}-{}.parquet",
             uuid::Uuid::new_v4(),
             self.format_version
         );
@@ -536,35 +542,48 @@ impl IcebergDeleteWriter {
             file_name.clone()
         };
 
-        // Construct Avro Schema for Position Deletes
-        let schema_json = r#"
-        {
-            "type": "record",
-            "name": "position_delete",
-            "fields": [
-                {"name": "file_path", "type": "string"},
-                {"name": "pos", "type": "long"}
-            ]
-        }
-        "#;
-        let schema = apache_avro::Schema::parse_str(schema_json)?;
-
-        // Build the Avro bytes in memory, then write to the object store.
-        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-
+        // Iceberg reserves these field ids for position-delete columns.
+        let file_path_field =
+            arrow::datatypes::Field::new("file_path", arrow::datatypes::DataType::Utf8, false)
+                .with_metadata(std::collections::HashMap::from([(
+                    parquet::arrow::PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "2147483546".to_string(),
+                )]));
+        let pos_field =
+            arrow::datatypes::Field::new("pos", arrow::datatypes::DataType::Int64, false)
+                .with_metadata(std::collections::HashMap::from([(
+                    parquet::arrow::PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "2147483545".to_string(),
+                )]));
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            file_path_field,
+            pos_field,
+        ]));
+        // The delete rows must name the data file exactly as the data manifest
+        // does (an absolute URI), not the store-relative form used internally.
+        let mut qualified_paths = arrow::array::StringBuilder::new();
         for i in 0..file_path_column.len() {
-            let mut record =
-                Record::new(&schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
-            record.put(
-                "file_path",
-                apache_avro::types::Value::String(file_path_column.value(i).to_string()),
-            );
-            record.put("pos", apache_avro::types::Value::Long(pos_column.value(i)));
-            writer.append(record)?;
+            qualified_paths.append_value(super::qualify_data_file_path(
+                &self.root_uri,
+                file_path_column.value(i),
+            ));
         }
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(qualified_paths.finish()),
+                Arc::new(pos_column.clone()),
+            ],
+        )?;
 
-        let len = writer.flush()?;
-        let bytes = writer.into_inner()?;
+        // Build the Parquet bytes in memory, then write to the object store.
+        let mut bytes = Vec::new();
+        {
+            let mut writer = parquet::arrow::ArrowWriter::try_new(&mut bytes, schema, None)?;
+            writer.write(&batch)?;
+            writer.close()?;
+        }
+        let len = bytes.len();
         self.store
             .put(
                 &object_store::path::Path::from(object_path.as_str()),

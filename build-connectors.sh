@@ -13,14 +13,19 @@ CORE_VERSION="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/^version = "([^"]
 echo "Core version: ${CORE_VERSION}"
 
 # Parse arguments
-CARGO_FEATURES=""
+#
+# The JNI entry points in src/core/ffi.rs are behind the `java` Cargo feature.
+# Building without it produces a library that exports ZERO Java_com_benostreamdb_*
+# symbols, so every connector fails at its first native call. It is therefore
+# not optional here.
+CARGO_FEATURES="java"
 ARTIFACT_SUFFIX=""
 
 for arg in "$@"; do
     case $arg in
         --cuda)
             echo "Enabling CUDA support..."
-            CARGO_FEATURES="cuda"
+            CARGO_FEATURES="java,cuda"
             ARTIFACT_SUFFIX="-cuda"
             # Check for nvcc
             if ! command -v nvcc &> /dev/null; then
@@ -85,11 +90,11 @@ build_with_java() {
 JAVA_17_HOME="${JAVA_17_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
 JAVA_21_HOME="$(pwd)/${JDK_21_DIR}"
 
-# Trino 468's SPI is compiled for Java 23 (class file version 67), so the
-# connector must be *compiled* with a JDK >= 23 even though the emitted
-# bytecode still targets 17/21 (and runs on the Trino image's Java 23). A JDK 21
-# compiler cannot read the SPI and fails with "class file has wrong version
-# 67.0, should be 65.0". Prefer a system JDK 23+.
+# The Trino 482+ SPI is compiled for Java 23 (class file version 67), so the
+# connector must be *compiled* with a JDK >= 23. A JDK 21 compiler cannot read
+# the SPI and fails with "class file has wrong version 67.0, should be 65.0".
+# Prefer a system JDK 23+. The bytecode target stays 23 (the pom default), so no
+# java.release override is passed for this module.
 if [ -z "${JAVA_TRINO_HOME:-}" ]; then
     JAVA_TRINO_HOME=""
     for cand in /usr/lib/jvm/java-25-openjdk-amd64 /usr/lib/jvm/java-24-openjdk-amd64 /usr/lib/jvm/java-23-openjdk-amd64; do
@@ -97,7 +102,7 @@ if [ -z "${JAVA_TRINO_HOME:-}" ]; then
     done
 fi
 if [ -z "$JAVA_TRINO_HOME" ]; then
-    echo "ERROR: the Trino connector targets Trino 468, whose SPI requires JDK >= 23 to compile." >&2
+    echo "ERROR: the Trino connector's SPI requires JDK >= 23 to compile." >&2
     echo "       Install a JDK 23+ (e.g. /usr/lib/jvm/java-25-openjdk-amd64) and re-run." >&2
     exit 1
 fi
@@ -108,16 +113,23 @@ mkdir -p connector-artifacts
 
 # --- Build Native Library ---
 echo "--- Building Native Core ---"
-if [ -n "$CARGO_FEATURES" ]; then
-    cargo build --release --features "$CARGO_FEATURES"
-else
-    cargo build --release
-fi
+echo "Cargo features: $CARGO_FEATURES"
+cargo build --release --features "$CARGO_FEATURES"
 LIB_PATH="target/release/libbenostreamdb.so"
 if [ ! -f "$LIB_PATH" ]; then
     # Fallback for macOS or potential naming
     LIB_PATH="target/release/libbenostreamdb.dylib"
 fi
+
+# Hard gate: shipping a JVM connector whose native library lacks the JNI
+# exports is a silent, total failure at runtime (UnsatisfiedLinkError on the
+# first metadata call), so verify the symbols before anything is packaged.
+if ! nm -D --defined-only "$LIB_PATH" 2>/dev/null | grep -q 'Java_com_benostreamdb'; then
+    echo "ERROR: $LIB_PATH exports no JNI symbols." >&2
+    echo "       The 'java' Cargo feature must be enabled (CARGO_FEATURES='$CARGO_FEATURES')." >&2
+    exit 1
+fi
+echo "JNI symbol check passed: $(nm -D --defined-only "$LIB_PATH" | grep -c 'Java_com_benostreamdb') exported entry points"
 
 # Function to prepare resources
 prepare_resources() {
@@ -145,18 +157,26 @@ echo "--- Building Trino Connectors ---"
 # plugin JAR. Trino loads it from `java.library.path` (see Dockerfile.trino),
 # and a host-built lib bundled in the JAR would shadow the manylinux one.
 rm -f trino-benostreamdb/src/main/resources/libbenostreamdb.so
-for java_version in "17" "21"; do
-    # Compile with the JDK 23+ toolchain (see JAVA_TRINO_HOME above); the
-    # `java-<version>` profile still controls the emitted bytecode target.
-    build_with_java "$JAVA_TRINO_HOME" "java-$java_version" "" "trino-benostreamdb"
+# Trino publishes no LTS and does not keep the connector SPI source- or
+# binary-compatible between releases, so one artifact is built per supported
+# band (see plans/trino_version_bands.md). Band `e` is current; band `d` is
+# current-minus.
+for trino_target in "482:d" "484:e"; do
+    trino_version="${trino_target%%:*}"
+    trino_band="${trino_target##*:}"
+    echo "Building Trino connector for $trino_version (band $trino_band)"
+    export JAVA_HOME="$JAVA_TRINO_HOME"
+    "$MVN_BIN" clean package -Dmaven.test.skip=true -Drevision="$CORE_VERSION" \
+        -Dtrino.version="$trino_version" -Dtrino.band="$trino_band" \
+        -f trino-benostreamdb/pom.xml
     # For Trino, the main JAR is in target/ but the ZIP contains all deps.
     # The artifact version tracks the core engine version (`${revision}`).
-    cp "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.jar" "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.jar"
+    cp "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.jar" "connector-artifacts/trino-benostream-${trino_version}${ARTIFACT_SUFFIX}.jar"
     # Flatten the plugin ZIP. Trino's plugin loader only scans JARs *directly*
     # in the plugin dir (it does not recurse), but the `trino-plugin` packaging
     # nests them under `trino-benostream-<version>/`, which fails with
     # "No service providers of type io.trino.spi.Plugin in the classpath".
-    flat_zip="$(pwd)/connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.zip"
+    flat_zip="$(pwd)/connector-artifacts/trino-benostream-${trino_version}${ARTIFACT_SUFFIX}.zip"
     tmp_zip="$(mktemp -d)"
     unzip -q "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.zip" -d "$tmp_zip"
     ( cd "$tmp_zip/trino-benostream-${CORE_VERSION}" && zip -q -r "$flat_zip" . )
