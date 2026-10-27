@@ -65,6 +65,13 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets
 
+      # `#![deny(warnings)]` includes rustdoc's lints, but nothing in CI built the
+      # docs, so an intra-doc link to a private item only surfaced in the Pages
+      # workflow (and failed it after the change had already landed). Building the
+      # docs here makes the lint part of the normal gate.
+      - name: Build API docs
+        run: cargo doc --no-deps --features java
+
       - name: Run Cargo Check
         run: cargo check --all-targets
 

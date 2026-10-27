@@ -113,6 +113,12 @@
   engine), matching `trino-testing`.
 
 ### Fixed
+- **Documentation site build** — a public doc comment on `SchemaField::type_str`
+  linked to the private `schema_field_to_json`, and `#![deny(warnings)]` promotes
+  rustdoc's `private_intra_doc_links` to an error, so the Pages workflow failed
+  after the change had already landed. The link is now plain text, and `cargo doc
+  --no-deps` runs in the `lint` job so the lint is part of the normal gate instead
+  of only the deploy pipeline.
 - **Spark writes are exactly-once and produce one snapshot per job** — Spark only
   guarantees that a task attempt's work is committed once if the *driver* commits
   it (`BatchWrite.commit`), so tasks no longer append. On `files` tables the task

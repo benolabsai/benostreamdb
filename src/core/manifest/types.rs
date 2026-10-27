@@ -747,7 +747,7 @@ pub struct SchemaField {
     pub name: String,
     /// Canonical BenoStreamDB/Arrow spelling of the column type (`int`, `long`,
     /// `double`, `list`, `map`, `struct`, ...). Serialized to Iceberg's type
-    /// grammar by [`schema_field_to_json`].
+    /// grammar by `schema_field_to_json`.
     pub type_str: String,
     pub required: bool,
     /// For nested types: struct members, the list element, or the map
