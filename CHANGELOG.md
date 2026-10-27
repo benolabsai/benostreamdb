@@ -1,4 +1,16 @@
-## [0.14.0]
+## [0.14.0] - 2026-10-27
+
+> **This is the developer-preview release.** 0.14.0 is the line we are calling the
+> preview, and it is the release that closes the functionality gaps and bugs that
+> held the preview back rather than a feature-only drop. The blockers it clears:
+> Spark reads returned a data file twice when more than one manifest entry
+> referenced it; Spark `CALL` could not execute any procedure (an unquoted VARCHAR
+> default and a non-`LocalScan` result); a retried Spark task could append its rows
+> twice; Spark MERGE/DELETE built an unbounded `pk = .. OR pk = ..` predicate;
+> the Trino `vector_search` function had no metric argument; `hybrid_search`
+> accepted a filter and then ignored it; and `to_pandas` added a `_distance` alias
+> even for an explicit projection. Everything under `### Fixed` is part of that
+> remediation; the connector features are under `### Added`.
 
 ### Added
 - **Staged-data-file writes (engine + Spark)** — `Table::stage_data_files_async`

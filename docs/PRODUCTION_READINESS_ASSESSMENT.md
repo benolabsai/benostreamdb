@@ -1,12 +1,19 @@
 # BenoStreamDB — Release Readiness Assessment
-Date: 2026-10-03 (Updated for v0.13.0 Developer Preview)
+Date: 2026-10-03 (core audit performed for v0.13.0; carried forward for v0.14.0)
 Scope: Architectural audit of core storage invariants, differential oracles, crash recovery, and security against the **Developer Preview Release Bar**.
-Current Version: 0.13.0
+Current Version: 0.14.0
 
 Status: **Developer Preview Ready** (All core integrity gates passed; enterprise HA/clustering deferred).
 
-> **Release Scope Notice:**  
-> For release v0.13.0, BenoStreamDB is evaluated against a **Developer Preview release standard** rather than an enterprise production service standard. The evaluation verifies that developers can install, query, and evaluate the engine without risk of silent data corruption or unhandled write loss. Enterprise operational controls (multi-node automatic failover, distributed cluster consensus, high-availability SLAs) are explicitly deferred to post-v1.0.
+> **Release Scope Notice:**
+> For release v0.14.0 the same **Developer Preview** standard applies. The audit below covers the
+> engine's storage invariants, which 0.14.0 did not change: its work is connector-side (Spark/Trino
+> parity, staged data-file writes in Spark, MCP HTTP + SSE transport, dbt remote access) plus CI and
+> dependency hygiene. The staged write path added in 0.14.0 (`stage_data_files` +
+> `commit_staged_entries`) is an alternate entry point into the audited primitives — it uses the same
+> segment writer, primary-key checks, and manifest commit — and the pre-release soak gate
+> (`release.yml`) exercises it along with the rest of the write path on every tag. Connector-specific
+> evidence lives in `docs/integrations/*.md`.
 
 This assessment summarizes the verification of core invariants (WS1-WS5) and the end-to-end benchmark suite.
 

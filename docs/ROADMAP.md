@@ -120,8 +120,13 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
 
 > **Release line.** v0.13.0 shipped embedding provenance (core
 > `benostream.embedding.*` table properties, the write/commit vector-space guard,
-> and local BGE-small embeddings in the MCP server). **v0.14.0 is the next
-> planned release.**
+> and local BGE-small embeddings in the MCP server). v0.14.0 shipped connector
+> parity — file-split parallel scans in Spark and Trino, Spark `CALL` procedures
+> and row-level operations, exactly-once Spark writes (data files written in the
+> task, metadata committed on the driver), multi-metric `vector_search`, hybrid
+> search filter pushdown, Trino scalar-function parity, Flight SQL streaming
+> execution, remote dbt through the Trino connector, and an MCP HTTP + SSE
+> transport. TQ4 removal is the highest-priority item for **v0.15.0**.
 
 Themes are ordered by priority.
 

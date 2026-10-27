@@ -16,6 +16,7 @@
 | Tier | Capabilities | Status |
 | :--- | :--- | :--- |
 | **Preview-Ready** | Embedded Python & Rust engine, Apache Iceberg (V2/V3) Parquet read/write, HNSW (Float32) vector search, in-process CSR graph analytics (PageRank, shortest path), DuckDB/DataFusion SQL compatibility, Puffin sidecar management | ✅ Fully supported & tested for evaluation |
+| **Connectors** | [Apache Spark](docs/integrations/SPARK.md) (3.5 & 4.x, exactly-once writes), [Trino](docs/integrations/TRINO.md) (bands 482–483 and 484+), [dbt](docs/integrations/DBT.md) adapter, [MCP](docs/integrations/MCP.md) server (stdio + HTTP/SSE), [Flight SQL](docs/integrations/FLIGHT_SQL.md) | ⚠️ Functional; each guide lists the supported versions |
 | **Experimental** | 8-bit TurboQuant (TQ8), OpenSearch 7.10 & Qdrant REST gateway compatibility, Arrow Flight SQL server | ⚠️ Functional; APIs and performance tuning are actively evolving |
 
 > **Serverless by default.** BenoStreamDB runs directly against object storage and does not require a database server or always-on cluster. For applications that prefer a network-accessible database endpoint, BenoStreamDB also provides an optional Arrow Flight SQL server interface.
