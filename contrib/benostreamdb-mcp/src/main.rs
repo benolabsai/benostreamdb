@@ -23,6 +23,8 @@ async fn main() -> Result<()> {
             USAGE:\n    \
                 benostreamdb-mcp [OPTIONS]\n\n\
             OPTIONS:\n    \
+                --transport <stdio|sse>         MCP transport (default: stdio)\n    \
+                --bind <ADDR:PORT>              Listen address for --transport sse (default: 127.0.0.1:8080)\n    \
                 --warehouse <PATH>              Persistent local warehouse path for Iceberg tables\n    \
                 --readwrite-schemas <SCHEMAS>   Comma-separated list of writable schemas (default: scratch)\n    \
                 --readonly-schemas <SCHEMAS>    Comma-separated list of read-only schemas\n    \
@@ -60,7 +62,13 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let mut config = McpServerConfig::resolve_from_args_and_env(&args)?;
+    // Transport flags are consumed here (not by the config resolver): they are
+    // server-level, not warehouse/embedding settings.
+    let transport = arg_or_env(&args, "--transport", "BSDB_MCP_TRANSPORT", "stdio");
+    let bind = arg_or_env(&args, "--bind", "BSDB_MCP_BIND", "127.0.0.1:8080");
+    let config_args: Vec<String> = strip_transport_args(&args);
+
+    let mut config = McpServerConfig::resolve_from_args_and_env(&config_args)?;
 
     if config.warehouse.is_none() && !config.ephemeral.unwrap_or(false) {
         let warehouse_path = resolve_default_warehouse();
@@ -69,9 +77,44 @@ async fn main() -> Result<()> {
     }
 
     let mcp_server = McpServer::with_config(config);
-    mcp_server.run().await?;
+    if transport.eq_ignore_ascii_case("sse") || transport.eq_ignore_ascii_case("http") {
+        let server = std::sync::Arc::new(mcp_server);
+        server.run_sse(&bind).await?;
+    } else if transport.eq_ignore_ascii_case("stdio") {
+        mcp_server.run().await?;
+    } else {
+        anyhow::bail!("unknown --transport '{transport}'; expected stdio or sse");
+    }
 
     info!("Server loop exited");
 
     Ok(())
+}
+
+/// Value of `--flag` if present, else the environment variable, else the default.
+fn arg_or_env(args: &[String], flag: &str, env: &str, default: &str) -> String {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == flag {
+            if let Some(value) = iter.next() {
+                return value.clone();
+            }
+        }
+    }
+    std::env::var(env).unwrap_or_else(|_| default.to_string())
+}
+
+/// Drop `--transport`/`--bind` and their values so the config resolver never
+/// sees server-level flags it does not know about.
+fn strip_transport_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--transport" || arg == "--bind" {
+            let _ = iter.next();
+            continue;
+        }
+        out.push(arg.clone());
+    }
+    out
 }

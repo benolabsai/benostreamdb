@@ -3069,6 +3069,9 @@ impl PyTable {
             row_group_ids: split.row_group_ids.clone(),
             index_file_path: split.index_file_path.clone(),
             can_use_indexes: split.can_use_indexes,
+            // `read_split_async` goes through the segment reader, which applies
+            // merge-on-read deletes; the flag only gates connector fan-out.
+            has_deletes: false,
         };
 
         let batches = self

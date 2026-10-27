@@ -79,6 +79,19 @@ public class BenoStreamDBJNIBridge {
             long outArrayPtr,
             long outSchemaPtr);
 
+    // File-level scan splits (a JSON array of {file_path, start_offset, length,
+    // row_group_ids}) for multi-split reads. One entry per Parquet file.
+    public static native String listSplits(String tableUri);
+
+    // File-scoped session backing a single file split. These handles are
+    // BenoStreamSession pointers, NOT QuerySession ones: always pair them with
+    // readFileSessionBatch / closeFileSession.
+    public static native long openFileSession(String filePath);
+
+    public static native long readFileSessionBatch(long handle, long outArrayPtr, long outSchemaPtr);
+
+    public static native void closeFileSession(long handle);
+
     // Hybrid search: run vector + BM25 retrieval, fuse with RRF, and stream the
     // hydrated rows with an `rrf_score` column. `filter` is a SQL WHERE clause
     // applied to both retrieval paths (null/empty = no filter).

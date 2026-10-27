@@ -26,31 +26,52 @@ public class BenoStreamDBSplit implements ConnectorSplit {
      * SQL through {@code openQueryMulti} instead of {@code openQuery}.
      */
     private final Optional<String> tablesJson;
+    /**
+     * Data file backing this split. Present for multi-split scans (plain,
+     * unfiltered table reads): the page source then opens a file-scoped session
+     * instead of running {@code sql} against the whole table.
+     */
+    private final Optional<String> filePath;
 
     @JsonCreator
     public BenoStreamDBSplit(
         @JsonProperty("tableUri") String tableUri,
         @JsonProperty("sql") String sql,
         @JsonProperty("hybridSearch") Optional<HybridSearchHandle> hybridSearch,
-        @JsonProperty("tablesJson") Optional<String> tablesJson) {
+        @JsonProperty("tablesJson") Optional<String> tablesJson,
+        @JsonProperty("filePath") Optional<String> filePath) {
         this.tableUri = tableUri;
         this.sql = sql;
         this.hybridSearch = hybridSearch == null ? Optional.empty() : hybridSearch;
         this.tablesJson = tablesJson == null ? Optional.empty() : tablesJson;
+        this.filePath = filePath == null ? Optional.empty() : filePath;
+    }
+
+    public BenoStreamDBSplit(
+            String tableUri,
+            String sql,
+            Optional<HybridSearchHandle> hybridSearch,
+            Optional<String> tablesJson) {
+        this(tableUri, sql, hybridSearch, tablesJson, Optional.empty());
     }
 
     public BenoStreamDBSplit(
             String tableUri, String sql, Optional<HybridSearchHandle> hybridSearch) {
-        this(tableUri, sql, hybridSearch, Optional.empty());
+        this(tableUri, sql, hybridSearch, Optional.empty(), Optional.empty());
     }
 
     public BenoStreamDBSplit(String tableUri, String sql) {
-        this(tableUri, sql, Optional.empty(), Optional.empty());
+        this(tableUri, sql, Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     @JsonProperty
     public Optional<String> getTablesJson() {
         return tablesJson;
+    }
+
+    @JsonProperty
+    public Optional<String> getFilePath() {
+        return filePath;
     }
 
     @Override
@@ -89,11 +110,12 @@ public class BenoStreamDBSplit implements ConnectorSplit {
         BenoStreamDBSplit that = (BenoStreamDBSplit) o;
         return Objects.equals(tableUri, that.tableUri)
                 && Objects.equals(sql, that.sql)
-                && Objects.equals(hybridSearch, that.hybridSearch);
+                && Objects.equals(hybridSearch, that.hybridSearch)
+                && Objects.equals(filePath, that.filePath);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableUri, sql, hybridSearch);
+        return Objects.hash(tableUri, sql, hybridSearch, filePath);
     }
 }

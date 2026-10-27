@@ -1256,6 +1256,68 @@ impl McpServer {
         }
     }
 
+    /// Handle one JSON-RPC line and return the response to deliver (if any).
+    ///
+    /// Shared by the stdio loop and the SSE transport, so both transports have
+    /// identical semantics: notifications run without a response, requests get
+    /// one, and a malformed line becomes a `-32700` error.
+    pub async fn handle_rpc_line(&self, line: &str) -> Option<JsonRpcResponse> {
+        match serde_json::from_str::<JsonRpcRequest>(line) {
+            Ok(req) => match req.id {
+                Some(id) => {
+                    let response = self
+                        .handle_request(&req.method, req.params.unwrap_or(json!({})))
+                        .await;
+                    Some(match response {
+                        Ok(res) => JsonRpcResponse::success(id, res),
+                        Err(err) => JsonRpcResponse::error(id, -32603, err.to_string()),
+                    })
+                }
+                None => {
+                    let _ = self
+                        .handle_notification(&req.method, req.params.unwrap_or(json!({})))
+                        .await;
+                    None
+                }
+            },
+            Err(_) => {
+                error!("Failed to parse JSON-RPC request");
+                Some(JsonRpcResponse::error(
+                    Value::Null,
+                    -32700,
+                    "Parse error".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Serve the MCP over the HTTP + SSE transport (spec 2024-11-05).
+    ///
+    /// `GET /sse` opens the event stream and advertises the POST endpoint as the
+    /// first event; `POST /message?sessionId=...` accepts a JSON-RPC request and
+    /// answers `202 Accepted`, with the actual response delivered on that
+    /// session's event stream. stdio remains the default transport.
+    pub async fn run_sse(self: std::sync::Arc<Self>, bind: &str) -> Result<()> {
+        use axum::routing::{get, post};
+        use axum::Router;
+
+        self.load_warehouse_tables().await;
+
+        let state = SseState {
+            server: self,
+            sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        };
+        let app = Router::new()
+            .route("/sse", get(sse_events))
+            .route("/message", post(sse_message))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind(bind).await?;
+        info!("MCP SSE transport listening on http://{bind}/sse");
+        axum::serve(listener, app).await?;
+        Ok(())
+    }
+
     pub async fn run(&self) -> Result<()> {
         self.load_warehouse_tables().await;
         let stdin = tokio::io::stdin();
@@ -1265,38 +1327,8 @@ impl McpServer {
             match reader.next_line().await {
                 Ok(Some(line)) => {
                     debug!("Received line: {}", line);
-                    if let Ok(req) = serde_json::from_str::<JsonRpcRequest>(&line) {
-                        if let Some(id) = req.id {
-                            let response = self
-                                .handle_request(&req.method, req.params.unwrap_or(json!({})))
-                                .await;
-                            let send_result = match response {
-                                Ok(res) => {
-                                    self.send_response(JsonRpcResponse::success(id.clone(), res))
-                                }
-                                Err(err) => self.send_response(JsonRpcResponse::error(
-                                    id.clone(),
-                                    -32603,
-                                    err.to_string(),
-                                )),
-                            };
-                            if let Err(e) = send_result {
-                                error!("Stdout closed or write failed, exiting loop: {}", e);
-                                break;
-                            }
-                        } else {
-                            // It's a notification, handle without response
-                            let _ = self
-                                .handle_notification(&req.method, req.params.unwrap_or(json!({})))
-                                .await;
-                        }
-                    } else {
-                        error!("Failed to parse JSON-RPC request");
-                        if let Err(e) = self.send_response(JsonRpcResponse::error(
-                            Value::Null,
-                            -32700,
-                            "Parse error".to_string(),
-                        )) {
+                    if let Some(response) = self.handle_rpc_line(&line).await {
+                        if let Err(e) = self.send_response(response) {
                             error!("Stdout closed or write failed, exiting loop: {}", e);
                             break;
                         }
@@ -3716,6 +3748,84 @@ impl McpServer {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP + SSE transport (MCP 2024-11-05)
+// ---------------------------------------------------------------------------
+
+type SseSessions = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>,
+>;
+
+#[derive(Clone)]
+struct SseState {
+    server: std::sync::Arc<McpServer>,
+    sessions: SseSessions,
+}
+
+static NEXT_SSE_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// `GET /sse`: open the event stream and advertise the POST endpoint.
+async fn sse_events(
+    axum::extract::State(state): axum::extract::State<SseState>,
+) -> impl axum::response::IntoResponse {
+    use axum::response::sse::{Event, Sse};
+    use tokio_stream::StreamExt as _;
+
+    let session_id = format!(
+        "sse-{}",
+        NEXT_SSE_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
+    if let Ok(mut sessions) = state.sessions.lock() {
+        // Prune sessions whose client disconnected so the map stays bounded.
+        sessions.retain(|_, sender| !sender.is_closed());
+        sessions.insert(session_id.clone(), sender);
+    }
+
+    let endpoint = Event::default()
+        .event("endpoint")
+        .data(format!("/message?sessionId={session_id}"));
+    let messages = tokio_stream::wrappers::UnboundedReceiverStream::new(receiver).map(|payload| {
+        Ok::<_, std::convert::Infallible>(Event::default().event("message").data(payload))
+    });
+
+    Sse::new(tokio_stream::once(Ok::<_, std::convert::Infallible>(endpoint)).chain(messages))
+}
+
+/// `POST /message?sessionId=...`: run the request, deliver the reply on the stream.
+async fn sse_message(
+    axum::extract::State(state): axum::extract::State<SseState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    body: String,
+) -> axum::http::StatusCode {
+    use axum::http::StatusCode;
+
+    let Some(session_id) = params.get("sessionId").cloned() else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let sender = state
+        .sessions
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(&session_id).cloned());
+    let Some(sender) = sender else {
+        return StatusCode::NOT_FOUND;
+    };
+
+    if let Some(response) = state.server.handle_rpc_line(&body).await {
+        match serde_json::to_string(&response) {
+            Ok(payload) => {
+                if sender.send(payload).is_err() {
+                    return StatusCode::GONE;
+                }
+            }
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+    // Notifications carry no response; both cases are accepted.
+    StatusCode::ACCEPTED
 }
 
 #[cfg(test)]

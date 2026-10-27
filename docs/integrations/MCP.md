@@ -79,6 +79,29 @@ Add the server to your MCP client configuration (e.g., `claude_desktop_config.js
 }
 ```
 
+### Remote transport: HTTP + SSE
+
+`stdio` is the default and is what a local IDE/agent spawn uses. For a
+cloud-hosted agent that cannot spawn a subprocess, run the HTTP + SSE transport
+(MCP spec 2024-11-05):
+
+```bash
+benostreamdb-mcp --transport sse --bind 0.0.0.0:8080
+# or: BSDB_MCP_TRANSPORT=sse BSDB_MCP_BIND=0.0.0.0:8080 benostreamdb-mcp
+```
+
+| Endpoint | Method | Purpose |
+|:---|:---|:---|
+| `/sse` | `GET` | Opens the event stream. The first event is `endpoint` and carries `/message?sessionId=...`. |
+| `/message?sessionId=...` | `POST` | Accepts one JSON-RPC message. Replies `202 Accepted`; the JSON-RPC response is delivered on that session's `/sse` stream. Unknown sessions return `404`. |
+
+Both transports share the same request handler, so tools, resources, and
+notifications behave identically. Sessions are dropped when their stream closes
+(the session map is pruned on each new connection).
+
+> The SSE transport has no authentication. Bind it to loopback, or put it behind
+> an authenticating proxy, before exposing it beyond the host.
+
 ### Environment Variables
 
 | Variable | Description | Default |
@@ -86,6 +109,8 @@ Add the server to your MCP client configuration (e.g., `claude_desktop_config.js
 | `BSDB_WAREHOUSE` | Base directory or URI for tables | `./data` |
 | `BSDB_GPU_DEVICE` | Compute target or pool (`auto`, `cpu`, `cuda[:N]`, `mps`, `cuda:0,cuda:1`) | `auto` |
 | `BSDB_CONFIG` | Catalog configuration file path | Unset |
+| `BSDB_MCP_TRANSPORT` | `stdio` or `sse` (flag `--transport` wins) | `stdio` |
+| `BSDB_MCP_BIND` | Listen address for `sse` (flag `--bind` wins) | `127.0.0.1:8080` |
 
 ---
 

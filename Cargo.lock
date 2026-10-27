@@ -1078,10 +1078,13 @@ checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core 0.5.6",
  "bytes",
+ "form_urlencoded",
  "futures-util",
  "http 1.4.2",
  "http-body 1.0.1",
  "http-body-util",
+ "hyper 1.10.1",
+ "hyper-util",
  "itoa",
  "matchit 0.8.4",
  "memchr",
@@ -1089,10 +1092,15 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper 1.0.2",
+ "tokio",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -1149,6 +1157,7 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -1364,6 +1373,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "arrow-json",
+ "axum 0.8.9",
  "base64 0.22.1",
  "benostreamdb",
  "calamine",
@@ -1381,6 +1391,7 @@ dependencies = [
  "tempfile",
  "tokenizers 0.23.2",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber",
  "zip 2.4.2",

@@ -30,6 +30,12 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
     private final List<ColumnHandle> columns;
     private final BufferAllocator allocator;
     private long queryHandle = 0;
+    /**
+     * File-scoped session handle (a {@code BenoStreamSession}, not a
+     * {@code QuerySession}) for multi-split scans. Exactly one of
+     * {@code queryHandle} / {@code fileHandle} is non-zero.
+     */
+    private long fileHandle = 0;
     private boolean finished = false;
 
     public BenoStreamDBPageSource(BenoStreamDBSplit split, List<ColumnHandle> columns, String gpuDevice) {
@@ -49,7 +55,13 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
             BenoStreamDBJNIBridge.setGpuContext(gpuDevice);
         }
         Optional<HybridSearchHandle> hybrid = split.getHybridSearch();
-        if (hybrid.isPresent()) {
+        if (split.getFilePath().isPresent()) {
+            // Multi-split scan: this split owns one Parquet file. The file
+            // session yields the file's rows as-is; the connector only fans out
+            // plain, delete-free scans (see BenoStreamDBSplitManager), so there
+            // is no predicate to apply here.
+            this.fileHandle = BenoStreamDBJNIBridge.openFileSession(split.getFilePath().get());
+        } else if (hybrid.isPresent()) {
             HybridSearchHandle handle = hybrid.get();
             this.queryHandle = BenoStreamDBJNIBridge.hybridSearch(
                     handle.getTableUri(),
@@ -69,7 +81,7 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
             this.queryHandle = BenoStreamDBJNIBridge.openQuery(
                     split.getTableUri(), split.getSql());
         }
-        if (this.queryHandle == 0) {
+        if (this.queryHandle == 0 && this.fileHandle == 0) {
             throw new RuntimeException("BenoStreamDB openQuery failed for " + split.getTableUri());
         }
     }
@@ -108,8 +120,11 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
         try (ArrowArray arrowArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema arrowSchema = ArrowSchema.allocateNew(allocator)) {
 
-            long result = BenoStreamDBJNIBridge.readQueryBatch(
-                    queryHandle, arrowArray.memoryAddress(), arrowSchema.memoryAddress());
+            long result = fileHandle != 0
+                    ? BenoStreamDBJNIBridge.readFileSessionBatch(
+                            fileHandle, arrowArray.memoryAddress(), arrowSchema.memoryAddress())
+                    : BenoStreamDBJNIBridge.readQueryBatch(
+                            queryHandle, arrowArray.memoryAddress(), arrowSchema.memoryAddress());
             if (result == 0) {
                 finished = true;
                 return null;
@@ -203,6 +218,10 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
         if (queryHandle != 0) {
             BenoStreamDBJNIBridge.closeQuery(queryHandle);
             queryHandle = 0;
+        }
+        if (fileHandle != 0) {
+            BenoStreamDBJNIBridge.closeFileSession(fileHandle);
+            fileHandle = 0;
         }
         allocator.close();
     }

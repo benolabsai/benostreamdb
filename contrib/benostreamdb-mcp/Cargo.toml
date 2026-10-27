@@ -23,6 +23,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 arrow = "57.2.0"
 arrow-json = "57.2.0"
+# HTTP + SSE transport (`--transport sse`). stdio stays the default so a local
+# IDE/agent spawn needs no network listener.
+axum = "0.8"
+tokio-stream = "0.1"
 tempfile = "3.10"
 sqlparser = { version = "0.55.0", features = ["visitor"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

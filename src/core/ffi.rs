@@ -235,6 +235,69 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBPageSource_readBa
     }
 }
 
+/// Trino: open a session over a single Parquet file (one scan split).
+///
+/// Multi-split reads give each Trino split its own file, so the page source
+/// pulls batches from a file-scoped session instead of re-running the whole
+/// table query per split. The handle is a `BenoStreamSession`, NOT a
+/// `QuerySession`: use `readFileSessionBatch`/`closeFileSession` with it.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_openFileSession(
+    env: JNIEnv,
+    _class: JClass,
+    path: JString,
+) -> jlong {
+    open_session_helper(env, path)
+}
+
+/// Trino: pull one batch from a file-scoped session.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_readFileSessionBatch(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    out_array_ptr: jlong,
+    out_schema_ptr: jlong,
+) -> jlong {
+    if handle == 0 || out_array_ptr == 0 || out_schema_ptr == 0 {
+        tracing::warn!("FFI(Trino): readFileSessionBatch called with null handle or pointers");
+        return 0;
+    }
+    let session = unsafe { &mut *(handle as *mut BenoStreamSession) };
+    match session.next_batch() {
+        Some(batch) => {
+            let struct_array: arrow::array::StructArray = batch.into();
+            let (ffi_array, ffi_schema) = match to_ffi(&struct_array.to_data()) {
+                Ok(tuple) => tuple,
+                Err(e) => {
+                    tracing::error!("FFI(Trino): export failed: {}", e);
+                    return 0;
+                }
+            };
+            unsafe {
+                std::ptr::write(out_array_ptr as *mut FFI_ArrowArray, ffi_array);
+                std::ptr::write(out_schema_ptr as *mut FFI_ArrowSchema, ffi_schema);
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Trino: free a file-scoped session handle.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_closeFileSession(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if handle != 0 {
+        unsafe {
+            drop(Box::from_raw(handle as *mut BenoStreamSession));
+        }
+    }
+}
+
 /// Trino Integration: Split Generation
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBSplitManager_getSplits(
@@ -346,6 +409,71 @@ pub extern "system" fn Java_com_benostreamdb_spark_BenoStreamScanBuilder_listDat
     };
 
     match env.new_string(files_json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Serialize the file-level scan splits as JSON.
+///
+/// One split per data file (see [`Table::list_scan_splits`]); the connectors turn
+/// each into an independent input partition/split so a multi-file table is read
+/// in parallel instead of by a single task.
+fn list_splits_json(uri: &str) -> String {
+    match Table::new(uri.to_string()) {
+        Ok(table) => match RUNTIME.block_on(table.list_scan_splits()) {
+            Ok(splits) => serde_json::to_string(&splits).unwrap_or_else(|_| "[]".to_string()),
+            Err(e) => {
+                tracing::error!("FFI: listSplits failed for {}: {}", uri, e);
+                "[]".to_string()
+            }
+        },
+        Err(e) => {
+            tracing::error!("FFI: listSplits could not open {}: {}", uri, e);
+            "[]".to_string()
+        }
+    }
+}
+
+/// Spark Integration: file-level scan splits for multi-partition reads.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_BenoStreamScanBuilder_listSplits(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jstring {
+    let uri: String = match env.get_string(&table_uri) {
+        Ok(s) => s.into(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    if uri.is_empty() || uri.len() > 4096 || uri.contains('\0') {
+        tracing::warn!("FFI(Spark): listSplits URI validation failed");
+        return std::ptr::null_mut();
+    }
+    let json = list_splits_json(&uri);
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Trino: file-level scan splits for multi-split reads.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_listSplits(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jstring {
+    let uri: String = match env.get_string(&table_uri) {
+        Ok(s) => s.into(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    if uri.is_empty() || uri.len() > 4096 || uri.contains('\0') {
+        tracing::warn!("FFI(Trino): listSplits URI validation failed");
+        return std::ptr::null_mut();
+    }
+    let json = list_splits_json(&uri);
+    match env.new_string(json) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }

@@ -150,7 +150,10 @@ public class BenoStreamDBConnectorFactory implements ConnectorFactory {
 
         @Override
         public ConnectorSplitManager getSplitManager() {
-            return new BenoStreamDBSplitManager(warehouse, gpuDevice);
+            // Opt-in: one split per Parquet file for plain, unfiltered scans.
+            boolean fileGranularity =
+                    Boolean.parseBoolean(config.getOrDefault("benostream.split.file-granularity", "false"));
+            return new BenoStreamDBSplitManager(warehouse, gpuDevice, fileGranularity);
         }
 
         @Override

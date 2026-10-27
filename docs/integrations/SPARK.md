@@ -59,6 +59,14 @@ settable per write option or table property). See
 [Row-Level Operations](#5-row-level-operations-delete--update--merge) for how it
 bounds MERGE memory.
 
+Reads fan out by file when `spark.benostream.split.maxSize` is greater than zero
+(default `128 MB`). The scan then plans one partition per Parquet file instead of
+one table-wide query, provided Spark pushed no filter into the scan. Setting it
+to `0` forces the single-partition SQL scan. Splits are file-granular, so the
+configured value acts as the on/off threshold rather than a byte-range size.
+Tables with merge-on-read delete files always use the single SQL scan: a raw
+per-file read would resurrect deleted rows.
+
 ---
 
 ## Core Capabilities

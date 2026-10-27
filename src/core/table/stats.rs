@@ -55,6 +55,10 @@ pub struct Split {
     // Index metadata
     pub index_file_path: Option<String>,
     pub can_use_indexes: bool,
+    /// The file has merge-on-read delete files. A raw per-file read would
+    /// resurrect deleted rows, so connectors must not fan out such tables.
+    #[serde(default)]
+    pub has_deletes: bool,
 }
 
 /// Table-level statistics (for query planning)
@@ -146,6 +150,45 @@ impl Table {
             }
             Ok(results)
         })
+    }
+
+    /// Physical scan splits for connector-side parallelism.
+    ///
+    /// One split per data file. A file is the smallest unit the connectors can
+    /// read independently today (`openFileSession` / `read_segment`), so
+    /// sub-dividing a large file would need the footer-only metadata path;
+    /// `row_group_ids` is left empty (meaning "all row groups") and reserved for
+    /// that. `has_deletes` is set per file so a connector never fans out a table
+    /// whose deletes would be bypassed by a raw per-file read.
+    pub async fn list_scan_splits(&self) -> Result<Vec<Split>> {
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, entries, _) = manifest_manager.load_latest_full().await?;
+
+        Ok(entries
+            .into_iter()
+            .map(|entry| {
+                // Same absolute-path rule as `list_data_files`.
+                let file_path = if entry.file_path.contains("://") {
+                    entry.file_path.clone()
+                } else {
+                    let base = self.uri.trim_end_matches('/');
+                    let relative = entry.file_path.trim_start_matches('/');
+                    format!("{}/{}", base, relative)
+                };
+                Split {
+                    file_path,
+                    start_offset: 0,
+                    length: entry.file_size_bytes.max(0) as u64,
+                    row_group_ids: Vec::new(),
+                    index_file_path: entry
+                        .index_files
+                        .first()
+                        .map(|index| index.file_path.clone()),
+                    can_use_indexes: !entry.index_files.is_empty(),
+                    has_deletes: !entry.delete_files.is_empty(),
+                }
+            })
+            .collect())
     }
 
     /// List all data files in the table (Async)
@@ -272,6 +315,9 @@ impl Table {
                             .first()
                             .map(|_| file.file_path.replace(".parquet", "")),
                         can_use_indexes: file.has_scalar_indexes || file.has_vector_indexes,
+                        // Legacy byte-range splitter: it cannot see delete files,
+                        // so callers must not fan out from here.
+                        has_deletes: true,
                     });
                 }
             } else {
@@ -285,6 +331,9 @@ impl Table {
                         .first()
                         .map(|_| file.file_path.replace(".parquet", "")),
                     can_use_indexes: file.has_scalar_indexes || file.has_vector_indexes,
+                    // Legacy byte-range splitter: it cannot see delete files,
+                    // so callers must not fan out from here.
+                    has_deletes: true,
                 });
             }
         }
@@ -351,6 +400,9 @@ impl Table {
                             .first()
                             .map(|_| file.file_path.replace(".parquet", "")),
                         can_use_indexes: file.has_scalar_indexes || file.has_vector_indexes,
+                        // Legacy byte-range splitter: it cannot see delete files,
+                        // so callers must not fan out from here.
+                        has_deletes: true,
                     });
                 }
             } else {
@@ -364,6 +416,9 @@ impl Table {
                         .first()
                         .map(|_| file.file_path.replace(".parquet", "")),
                     can_use_indexes: file.has_scalar_indexes || file.has_vector_indexes,
+                    // Legacy byte-range splitter: it cannot see delete files,
+                    // so callers must not fan out from here.
+                    has_deletes: true,
                 });
             }
         }

@@ -1,6 +1,7 @@
 package com.benostreamdb.spark
 
 import com.benostreamdb.spark.jni.BenoStreamJNIBridge
+import scala.jdk.CollectionConverters._
 import org.apache.arrow.c.{ArrowArray, ArrowSchema, Data}
 import org.apache.arrow.memory.RootAllocator
 import org.apache.arrow.vector.VectorSchemaRoot
@@ -30,6 +31,9 @@ class BenoStreamScanBuilder(table: BenoStreamTable)
 
   @native def listDataFiles(tableUri: String): String
 
+  /** File-level scan splits (one entry per Parquet file) for parallel reads. */
+  @native def listSplits(tableUri: String): String
+
   BenoStreamJNIBridge.getInstance() // ensure the library is loaded for natives
 
   override def pushFilters(filters: Array[Filter]): Array[Filter] = {
@@ -49,16 +53,101 @@ class BenoStreamScanBuilder(table: BenoStreamTable)
     val isDelta = requiredSchema.exists(f => f.name == "_file" || f.name == "_pos")
     if (isDelta) {
       val dataSchema = StructType(requiredSchema.fields.filterNot(f => f.name == "_file" || f.name == "_pos"))
-      val files = parseFiles(BenoStreamScanBuilder.this.listDataFiles(table.tableUri))
+      val files = parseFilePaths(BenoStreamScanBuilder.this.listDataFiles(table.tableUri))
       new BenoStreamDeltaScan(table.tableUri, requiredSchema, dataSchema, files)
     } else {
-      val sql = BenoStreamSql.buildScanSql(table.structSchema, requiredSchema, handled)
-      new BenoStreamScan(table.tableUri, requiredSchema, sql)
+      // Multi-partition read: one task per data file, when the scan carries no
+      // pushed-down predicate (so dropping the single SQL scan loses nothing) and
+      // the table has more than one file. The per-file reader is the same one the
+      // merge-on-read path already uses.
+      val splitFiles =
+        if (handled.isEmpty && BenoStreamScanBuilder.splitFanoutEnabled()) {
+          parseSplitFiles(BenoStreamScanBuilder.this.listSplits(table.tableUri))
+        } else {
+          Seq.empty
+        }
+      if (splitFiles.length > 1) {
+        new BenoStreamSplitScan(table.tableUri, requiredSchema, splitFiles)
+      } else {
+        val sql = BenoStreamSql.buildScanSql(table.structSchema, requiredSchema, handled)
+        new BenoStreamScan(table.tableUri, requiredSchema, sql)
+      }
     }
   }
 
-  private def parseFiles(json: String): Seq[String] =
-    BenoStreamArrowUtils.parseStringArray(json)
+  /**
+   * Split file paths, or nothing when a file carries merge-on-read deletes: a
+   * raw per-file read would resurrect deleted rows, so such tables stay on the
+   * single SQL scan.
+   */
+  private def parseSplitFiles(json: String): Seq[String] = {
+    if (json == null || json.trim.isEmpty) return Seq.empty
+    val root =
+      try BenoStreamScanBuilder.mapper.readTree(json)
+      catch { case _: Throwable => null }
+    if (root == null || !root.isArray) return Seq.empty
+    val nodes = root.elements().asScala.toSeq
+    val hasDeletes = nodes.exists(node => node.path("has_deletes").asBoolean(false))
+    if (hasDeletes) {
+      Seq.empty
+    } else {
+      nodes.flatMap(node => Option(node.get("file_path")).map(_.asText())).filter(_.nonEmpty)
+    }
+  }
+
+  /** Accept both `["path", ...]` and `[{"file_path": "..."}, ...]` shapes. */
+  private def parseFilePaths(json: String): Seq[String] = {
+    if (json == null || json.trim.isEmpty) return Seq.empty
+    val root =
+      try BenoStreamScanBuilder.mapper.readTree(json)
+      catch { case _: Throwable => null }
+    if (root == null || !root.isArray) {
+      Seq.empty
+    } else {
+      root.elements().asScala.flatMap { node =>
+        if (node.isTextual) Some(node.asText())
+        else Option(node.get("file_path")).map(_.asText())
+      }.filter(path => path != null && path.nonEmpty).toSeq
+    }
+  }
+}
+
+object BenoStreamScanBuilder {
+  /** Advisory split size; splitting is file-granular (<= 0 disables fan-out). */
+  val SplitMaxSizeConf = "spark.benostream.split.maxSize"
+  val DefaultSplitMaxSizeBytes: Long = 128L * 1024 * 1024
+
+  private[spark] val mapper = new com.fasterxml.jackson.databind.ObjectMapper()
+
+  private[spark] def splitFanoutEnabled(): Boolean =
+    Option(org.apache.spark.sql.SparkSession.getActiveSession)
+      .flatten
+      .map(_.conf.getLong(SplitMaxSizeConf, DefaultSplitMaxSizeBytes))
+      .getOrElse(DefaultSplitMaxSizeBytes) > 0L
+}
+
+// ---- Multi-partition scan: one partition per data file ----
+
+class BenoStreamSplitScan(uri: String, readSchema: StructType, files: Seq[String]) extends Scan {
+  override def toBatch: Batch = new BenoStreamSplitBatch(uri, readSchema, files)
+  override def readSchema(): StructType = readSchema
+}
+
+class BenoStreamSplitBatch(uri: String, readSchema: StructType, files: Seq[String]) extends Batch {
+  override def planInputPartitions(): Array[InputPartition] =
+    files.map(file => BenoStreamSplitPartition(uri, file, readSchema)).toArray
+  override def createReaderFactory(): PartitionReaderFactory = BenoStreamSplitReaderFactory
+}
+
+case class BenoStreamSplitPartition(uri: String, file: String, readSchema: StructType) extends InputPartition
+
+object BenoStreamSplitReaderFactory extends PartitionReaderFactory {
+  override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {
+    val p = partition.asInstanceOf[BenoStreamSplitPartition]
+    // Same per-file reader as the merge-on-read path; `_file`/`_pos` are simply
+    // absent from the read schema here.
+    new BenoStreamPartitionReader(p.file, p.readSchema, p.readSchema)
+  }
 }
 
 // ---- Normal SQL scan (unchanged behaviour) ----

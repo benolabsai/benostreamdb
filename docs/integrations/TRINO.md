@@ -271,6 +271,26 @@ Note that indexing is two-phase: `add_index` registers an index and builds it on
 a detached background task. Call `build_index` when a subsequent query must
 observe the index immediately.
 
+## Parallel scans
+
+`benostream.split.file-granularity=true` (catalog property, default `false`)
+makes a plain, unfiltered table scan emit **one split per Parquet file**, so the
+coordinator can spread the read across workers instead of running one
+table-wide query:
+
+```properties
+# etc/catalog/benostream.properties
+connector.name=benostream
+benostream.warehouse=/data/warehouse
+benostream.split.file-granularity=true
+```
+
+Each split is read through a file-scoped engine session. The connector only fans
+out when it is safe: the scan must carry no pushed predicate, no
+`pushdownSql`/table function, no multi-table statement, and no file may have
+merge-on-read delete files (a raw per-file read would resurrect deleted rows).
+Otherwise the single-split SQL path is used, which is why the default is off.
+
 ## Joining with other catalogs
 
 Retrieval results join foreign catalogs directly in one statement; nothing is

@@ -9,6 +9,21 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Parallel scans (Spark + Trino)** — new native `list_scan_splits` /
+  `listSplits` entry points expose one split per data file, and each split
+  reports `has_deletes` so connectors never fan out a table whose merge-on-read
+  deletes a raw per-file read would bypass. Spark fans out automatically when
+  `spark.benostream.split.maxSize > 0` (default 128 MB) and no filter was pushed;
+  Trino fans out with `benostream.split.file-granularity=true` (default off) for
+  plain, unfiltered scans, reading each split through a file-scoped session
+  (`openFileSession`). File granularity is what the reader supports today;
+  `Split::row_group_ids` is reserved for sub-file splits.
+- **MCP HTTP + SSE transport** — `benostreamdb-mcp --transport sse --bind
+  <addr:port>` (or `BSDB_MCP_TRANSPORT`/`BSDB_MCP_BIND`) serves `GET /sse` and
+  `POST /message?sessionId=...` on top of a shared JSON-RPC handler, so a
+  cloud-hosted agent no longer needs to spawn a subprocess. `stdio` stays the
+  default. The transport is unauthenticated: bind it to loopback or front it with
+  an authenticating proxy.
 - **`vector_search(..., metric => ...)` in the Trino connector** — the table
   function gained a sixth argument (`cosine` default, plus `l2`/`euclidean`,
   `dot`/`inner_product`, `l1`/`manhattan`, `hamming`, `jaccard`). It drives both
