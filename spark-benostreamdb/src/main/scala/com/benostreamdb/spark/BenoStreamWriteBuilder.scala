@@ -11,7 +11,16 @@ class BenoStreamWriteBuilder(table: BenoStreamTable, info: LogicalWriteInfo, gpu
 }
 
 class BenoStreamWrite(uri: String, writeSchema: StructType, gpuDevice: String) extends Write {
-  override def toBatch: BatchWrite = new BenoStreamBatchWrite(uri, writeSchema, gpuDevice)
+  /**
+   * Resolved on the driver, before any task runs, so tasks and the commit agree
+   * on the protocol. `files` is the Iceberg shape: tasks write data files, the
+   * driver commits only metadata. `buffered` is used for tables that need
+   * commit-time coordination (`format_version = 3` row ids).
+   */
+  private val mode: String = BenoStreamArrowIpc.writeMode(uri)
+
+  override def toBatch: BatchWrite =
+    new BenoStreamBatchWrite(uri, writeSchema, gpuDevice, mode)
 }
 
 /**
@@ -28,7 +37,18 @@ class BenoStreamWrite(uri: String, writeSchema: StructType, gpuDevice: String) e
  */
 case class BenoStreamCommitMessage(chunks: Vector[Array[Byte]]) extends WriterCommitMessage
 
-class BenoStreamBatchWrite(uri: String, writeSchema: StructType, gpuDevice: String)
+/**
+ * Commit message for the file protocol: the task's manifest entries, as JSON.
+ *
+ * Same shape as Iceberg's `SparkWrite$TaskCommit` — file metadata, not rows.
+ */
+case class BenoStreamFileCommitMessage(entriesJson: String) extends WriterCommitMessage
+
+class BenoStreamBatchWrite(
+    uri: String,
+    writeSchema: StructType,
+    gpuDevice: String,
+    mode: String)
     extends BatchWrite {
 
   /**
@@ -40,36 +60,59 @@ class BenoStreamBatchWrite(uri: String, writeSchema: StructType, gpuDevice: Stri
   private val token: String = java.util.UUID.randomUUID().toString
 
   override def createBatchWriterFactory(info: PhysicalWriteInfo): DataWriterFactory =
-    new BenoStreamDataWriterFactory(uri, writeSchema, gpuDevice)
+    new BenoStreamDataWriterFactory(uri, writeSchema, gpuDevice, mode)
 
   /**
-   * Driver-side commit: stage every accepted task's rows, then commit once.
+   * Driver-side commit.
    *
-   * Two-phase on purpose — staging does not touch the table, and the native
-   * commit drains its buffer before writing, so Spark retrying this method
-   * cannot append the job's rows twice. The whole job becomes one snapshot.
+   * `files`: the entries the tasks returned are committed in one metadata-only
+   * snapshot — no data crosses the driver, and the commit is idempotent per token.
+   * `buffered`: the rows are staged in the engine and written once (see
+   * [[BenoStreamCommitMessage]]).
    */
   override def commit(messages: Array[WriterCommitMessage]): Unit = {
-    messages.foreach {
-      case message: BenoStreamCommitMessage =>
-        message.chunks.foreach(chunk => BenoStreamArrowIpc.stage(uri, token, chunk))
-      case _ => ()
+    if (mode == BenoStreamArrowIpc.FilesMode) {
+      val entries = messages.iterator
+        .collect { case message: BenoStreamFileCommitMessage => message.entriesJson }
+        .toVector
+      BenoStreamArrowIpc.commitStagedEntries(uri, token, entries)
+    } else {
+      messages.foreach {
+        case message: BenoStreamCommitMessage =>
+          message.chunks.foreach(chunk => BenoStreamArrowIpc.stage(uri, token, chunk))
+        case _ => ()
+      }
+      BenoStreamArrowIpc.commitStaged(uri, token, gpuDevice)
     }
-    BenoStreamArrowIpc.commitStaged(uri, token, gpuDevice)
   }
 
-  /** Nothing was written before the commit, so there is nothing to undo. */
-  override def abort(messages: Array[WriterCommitMessage]): Unit =
-    BenoStreamArrowIpc.discard(token)
+  /**
+   * Nothing is visible before the commit: buffered writes drop their staging
+   * buffer, file writes leave their data files as orphans for
+   * `remove_orphan_files`.
+   */
+  override def abort(messages: Array[WriterCommitMessage]): Unit = {
+    if (mode != BenoStreamArrowIpc.FilesMode) {
+      BenoStreamArrowIpc.discard(token)
+    }
+  }
 }
 
-class BenoStreamDataWriterFactory(uri: String, writeSchema: StructType, gpuDevice: String)
+class BenoStreamDataWriterFactory(
+    uri: String,
+    writeSchema: StructType,
+    gpuDevice: String,
+    mode: String)
     extends DataWriterFactory {
   override def createWriter(partitionId: Int, taskId: Long): DataWriter[InternalRow] =
-    new BenoStreamDataWriter(uri, writeSchema, gpuDevice)
+    new BenoStreamDataWriter(uri, writeSchema, gpuDevice, mode)
 }
 
-class BenoStreamDataWriter(uri: String, writeSchema: StructType, gpuDevice: String)
+class BenoStreamDataWriter(
+    uri: String,
+    writeSchema: StructType,
+    gpuDevice: String,
+    mode: String)
     extends DataWriter[InternalRow] {
 
   private val batch = scala.collection.mutable.ArrayBuffer.empty[InternalRow]
@@ -85,7 +128,11 @@ class BenoStreamDataWriter(uri: String, writeSchema: StructType, gpuDevice: Stri
       .map(chunk => BenoStreamArrowIpc.encode(chunk.toSeq, writeSchema))
       .toVector
     batch.clear()
-    BenoStreamCommitMessage(chunks)
+    if (mode == BenoStreamArrowIpc.FilesMode) {
+      BenoStreamFileCommitMessage(BenoStreamArrowIpc.stageDataFiles(uri, chunks))
+    } else {
+      BenoStreamCommitMessage(chunks)
+    }
   }
 
   override def abort(): Unit = batch.clear()

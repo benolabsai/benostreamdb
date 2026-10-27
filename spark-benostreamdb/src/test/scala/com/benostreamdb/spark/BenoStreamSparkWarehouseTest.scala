@@ -280,4 +280,46 @@ class BenoStreamSparkWarehouseTest {
       parquetFiles.size
     )
   }
+
+  /**
+   * The file protocol (Iceberg's shape): tasks write data files, the driver
+   * commits file metadata.
+   *
+   * Three properties matter and are asserted here: the files are invisible until
+   * the driver commits, the commit publishes them exactly once, and replaying the
+   * commit for the same token appends nothing.
+   */
+  @Test
+  def stagedFilesAreInvisibleUntilCommittedAndCommitOnce(): Unit = {
+    spark.sql("CREATE TABLE benostream.default.staged_files_t (id bigint, label string)")
+    val uri = warehouse.toUri.toString + "/default/staged_files_t"
+    Assert.assertEquals(
+      "plain v2 tables must use the file-based task protocol",
+      BenoStreamArrowIpc.FilesMode,
+      BenoStreamArrowIpc.writeMode(uri)
+    )
+
+    val schema = new StructType().add("id", LongType).add("label", StringType)
+    val rows = Seq(1L, 2L, 3L).map(id => InternalRow(id, UTF8String.fromString(s"v$id")))
+    val entriesJson =
+      BenoStreamArrowIpc.stageDataFiles(uri, Seq(BenoStreamArrowIpc.encode(rows, schema)))
+    Assert.assertTrue(
+      s"staging must return manifest entries (file metadata), got: $entriesJson",
+      entriesJson.contains("\"file_path\"") && entriesJson.contains("\"record_count\"")
+    )
+    Assert.assertEquals(
+      "staged files must not be visible before the driver commits",
+      Seq.empty[Long],
+      idsOf("staged_files_t")
+    )
+
+    val token = java.util.UUID.randomUUID().toString
+    BenoStreamArrowIpc.commitStagedEntries(uri, token, Seq(entriesJson))
+    BenoStreamArrowIpc.commitStagedEntries(uri, token, Seq(entriesJson))
+    Assert.assertEquals(
+      "the driver commit must publish the entries once, even when replayed",
+      Seq(1L, 2L, 3L),
+      idsOf("staged_files_t")
+    )
+  }
 }

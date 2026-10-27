@@ -38,9 +38,84 @@ import java.nio.channels.Channels
  */
 object BenoStreamArrowIpc {
 
+  /** Tables whose tasks write data files and whose driver commits metadata. */
+  val FilesMode: String = "files"
+
+  /** Tables that need commit-time coordination (Iceberg v3 `_row_id`); rows are shipped instead. */
+  val BufferedMode: String = "buffered"
+
   private val allocator = new RootAllocator()
 
   private def bridge: BenoStreamJNIBridge = BenoStreamJNIBridge.getInstance()
+
+  /** Which write protocol this table supports (see `Table::write_mode` in the engine). */
+  def writeMode(tableUri: String): String = {
+    val mode = bridge.writeMode(tableUri)
+    if (mode == null || mode.isEmpty) BufferedMode else mode
+  }
+
+  /**
+   * Task side of the file protocol: write one task's rows as data files.
+   *
+   * Returns the manifest entries as JSON. The driver commits them; until it does,
+   * the files are invisible to readers, so a retried task attempt can only leak
+   * orphan files (reaped by `remove_orphan_files`), never duplicate rows.
+   */
+  def stageDataFiles(tableUri: String, chunks: Seq[Array[Byte]]): String = {
+    val parts = chunks.map(chunk => stageChunkAsFiles(tableUri, chunk))
+    mergeEntryArrays(parts)
+  }
+
+  private def stageChunkAsFiles(tableUri: String, ipc: Array[Byte]): String = {
+    val reader =
+      new ArrowStreamReader(Channels.newChannel(new ByteArrayInputStream(ipc)), allocator)
+    try {
+      val root = reader.getVectorSchemaRoot
+      val parts = scala.collection.mutable.ArrayBuffer.empty[String]
+      while (reader.loadNextBatch()) {
+        val array = ArrowArray.allocateNew(allocator)
+        val schema = ArrowSchema.allocateNew(allocator)
+        try {
+          Data.exportVectorSchemaRoot(allocator, root, null, array, schema)
+          val json = bridge.stageDataFiles(
+            tableUri,
+            array.memoryAddress(),
+            schema.memoryAddress()
+          )
+          if (json == null) {
+            throw new RuntimeException(s"BenoStreamDB stageDataFiles failed for $tableUri")
+          }
+          parts += json
+        } finally {
+          array.close()
+          schema.close()
+        }
+      }
+      mergeEntryArrays(parts.toSeq)
+    } finally {
+      reader.close()
+    }
+  }
+
+  /** Driver side of the file protocol: commit every accepted task's entries once. */
+  def commitStagedEntries(tableUri: String, token: String, entries: Seq[String]): Unit = {
+    val json = mergeEntryArrays(entries)
+    if (!bridge.commitStagedEntries(tableUri, token, json)) {
+      throw new RuntimeException(s"BenoStreamDB commitStagedEntries failed for $tableUri")
+    }
+  }
+
+  /** Concatenate JSON arrays of manifest entries into one array. */
+  private def mergeEntryArrays(parts: Seq[String]): String = {
+    val bodies = parts.flatMap { part =>
+      val trimmed = if (part == null) "" else part.trim
+      if (trimmed.length <= 2) Seq.empty
+      else if (trimmed.startsWith("[") && trimmed.endsWith("]"))
+        Seq(trimmed.substring(1, trimmed.length - 1))
+      else Seq(trimmed)
+    }
+    bodies.mkString("[", ",", "]")
+  }
 
   /** Encode rows as an Arrow IPC stream (self-describing: carries its schema). */
   def encode(rows: Seq[InternalRow], schema: StructType): Array[Byte] = {

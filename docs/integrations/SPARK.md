@@ -319,24 +319,36 @@ DELETE FROM benostream.default.users WHERE age < 0;
 
 The full MERGE matrix (UPDATE / DELETE / INSERT clauses, plus standalone UPDATE/DELETE) is verified end-to-end on Spark 3.5.9 and 4.2.0 with whole-stage codegen enabled. Declare the primary key with `CALL benostream.system.set_primary_key('db.tbl', 'id')` (or the `primary_key` table property); when unset, the first column is used. A table with **no** key and no columns cannot service `UPDATE`/`DELETE`; the connector records no predicates for those rows instead of failing the task.
 
-**Exactly-once writes (two-phase driver commit).** Spark calls
+**Exactly-once writes (file protocol, Iceberg's shape).** Spark calls
 `DataWriter.commit()` inside the task and `BatchWrite.commit(messages)` once on
 the driver. Only the driver call is a valid commit point: a task can succeed and
-then be retried, and Spark replays the messages of successful attempts only. So:
+then be retried, and Spark replays the messages of successful attempts only. So
+the write is split the way Iceberg's driver splits it:
 
-1. the task **encodes** its rows as Arrow IPC and returns them in
-   `BenoStreamCommitMessage` — it never touches the table;
-2. the driver decodes them into a per-write staging buffer (keyed by a token
-   minted when the writer factory is built) and commits that buffer in **one**
-   `write_async` + `commit_async` — a single snapshot for the whole job, not one
-   per partition or per encoded batch;
-3. the buffer is drained *before* it is written, so Spark retrying `commit`
-   (which it does on failure) appends nothing the second time.
+1. **Task** — writes its rows as *data files* (with their indexes, built in the
+   task) and returns the manifest entries as JSON:
+   `BenoStreamFileCommitMessage` → `stageDataFiles` → `(Table::stage_data_files_async)`
+   in `src/core/table/stage.rs`. The task never commits; the files are invisible.
+2. **Driver** — commits only that metadata, in one snapshot:
+   `commitStagedEntries` → `Table::commit_staged_entries_async`, which is a single
+   manifest commit plus the snapshot publish. No row data crosses the driver, so
+   the commit is O(files) instead of O(bytes), and a 20-partition `INSERT` is one
+   snapshot.
+3. **Retries** — a retried task attempt writes new files at new paths; only the
+   entries the driver accepted are committed, and the rest are orphans for
+   `remove_orphan_files`. A retried `commit` is a no-op: tokens already committed
+   are recorded and skipped.
 
-MERGE uses the same commit point: the driver applies every rendered delete
-predicate as one OR-combined `deleteRows` commit, then the staged inserts, in that
-order — an UPDATE reuses the key, so inserting first would let the delete reap the
-new row.
+`format_version = 3` tables fall back to the buffered path (`writeMode` returns
+`buffered`): `_row_id` is assigned from the manifest head, so two tasks staging
+concurrently would hand out overlapping ids. On those tables the task encodes rows
+as Arrow IPC (`BenoStreamCommitMessage`), the driver stages them in the engine and
+commits once — still exactly-once and still one snapshot, but the rows cross the
+driver.
+
+MERGE uses the same driver commit point: every rendered delete predicate is applied
+as one OR-combined `deleteRows` commit, then the staged inserts, in that order — an
+UPDATE reuses the key, so inserting first would let the delete reap the new row.
 
 Conformance with Iceberg's Spark driver (`iceberg-spark-runtime`), verified against
 the 1.11.0 jar:
@@ -344,24 +356,17 @@ the 1.11.0 jar:
 | Contract | Iceberg | This connector |
 | --- | --- | --- |
 | `BatchWrite.createBatchWriterFactory` | `SparkWrite$BaseBatchWrite` | `BenoStreamBatchWrite` |
-| `DataWriter` writes into the engine | no — writes Parquet data files | no — encodes Arrow IPC |
-| `WriterCommitMessage` payload | `SparkWrite$TaskCommit` → `DataFile[] files()` (metadata only) | `BenoStreamCommitMessage` → encoded rows |
-| `BatchWrite.commit(messages)` | `SparkWrite$BatchAppend`: one snapshot (`AppendFiles`) | one `write_async` + `commit_async` snapshot |
-| `BatchWrite.abort(messages)` | removes staged files | drops the staging buffer |
-| Row-level (`SupportsDelta`) | `SparkPositionDeltaWrite$DeltaTaskCommit` → `dataFiles()`, `deleteFiles()`, … | `BenoStreamDeltaCommitMessage` → predicates + encoded rows |
-| Retry safety | file names are unique per attempt; uncommitted files are orphans removed by `RemoveOrphanFiles` | the buffer is drained before writing, so a replay is a no-op |
+| `DataWriter` writes into the engine | no — writes Parquet data files | no — writes Parquet data files (`stage_data_files`) |
+| `WriterCommitMessage` payload | `SparkWrite$TaskCommit` → `DataFile[] files()` | `BenoStreamFileCommitMessage` → manifest entries (JSON) |
+| `BatchWrite.commit(messages)` | `SparkWrite$BatchAppend`: one metadata snapshot | one metadata snapshot (`commit_staged_entries`) |
+| `BatchWrite.abort(messages)` | staged files become orphans | staged files become orphans (`remove_orphan_files`) |
+| Row-level (`SupportsDelta`) | `SparkPositionDeltaWrite$DeltaTaskCommit` → `dataFiles()`, `deleteFiles()`, … | `BenoStreamDeltaCommitMessage` → predicates + encoded rows (buffered) |
+| Retry safety | unique file names per attempt | unique file names per attempt; commit token is idempotent |
 
-The one remaining difference is the last column of that table: Iceberg's tasks
-write *data files* and the commit message carries their **paths**, so only metadata
-crosses the driver. Here the encoded rows cross it, which bounds a single write by
-the driver's heap. Matching Iceberg exactly needs a staged-file API on the engine —
-write data files (and their indexes) now, commit only their manifest entries later.
-`flush_internal_async` already contains both halves; exposing them separately also
-has to settle three things that are currently decided at commit time: schema
-evolution (the task's evolved schema must travel with the entries), `_row_id`
-reservation for `format_version = 3` (two tasks staging concurrently would allocate
-overlapping ids), and index building (today it is a post-commit background attach;
-in a file-based protocol it must happen in the task, before the entry is returned).
+Index building moved into the task as a consequence: the driver commits only
+metadata, so there is no post-commit hook that could attach index files later. The
+staged file's `index_files` are populated before the entry is returned, so the
+snapshot is complete the moment it is published.
 
 **Bounded task memory.** Each task buffers its own rows and encodes them in
 `spark.benostream.write.batchSize` (default `10000`) row chunks:

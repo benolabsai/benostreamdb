@@ -2535,6 +2535,158 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_delet
     delete_rows_batch_impl(&mut env, table_uri, predicates_json)
 }
 
+/// Tokens whose staged entries were already committed, so a retried
+/// `BatchWrite.commit` does not append the same files twice.
+///
+/// Driver-scoped on purpose: after a driver restart Spark re-runs the job under a
+/// new token, which must commit (that is the "commit succeeded, driver died"
+/// case, and Iceberg has the same exposure).
+fn committed_entry_tokens() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static TOKENS: LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    &TOKENS
+}
+
+/// Spark: how this table wants writes performed (`"files"` or `"buffered"`).
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_writeMode(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jstring {
+    let uri: String = match env.get_string(&table_uri) {
+        Ok(s) => s.into(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    if uri.is_empty() {
+        return std::ptr::null_mut();
+    }
+    let mode = match Table::new(uri) {
+        Ok(table) => table.write_mode(),
+        Err(e) => {
+            tracing::error!("FFI(Spark): writeMode failed: {}", e);
+            return std::ptr::null_mut();
+        }
+    };
+    match env.new_string(mode) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Spark: write one task's batch as data files and return their manifest
+/// entries as JSON. Nothing is committed — the driver commits the entries.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_stageDataFiles(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    in_array_ptr: jlong,
+    in_schema_ptr: jlong,
+) -> jstring {
+    let uri: String = match env.get_string(&table_uri) {
+        Ok(s) => s.into(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    if uri.is_empty() {
+        return std::ptr::null_mut();
+    }
+    let batch = match unsafe { import_batch(in_array_ptr, in_schema_ptr) } {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("FFI(Spark): stageDataFiles import failed: {}", e);
+            return std::ptr::null_mut();
+        }
+    };
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.stage_data_files_async(vec![batch]).await
+    });
+    let json = match res {
+        Ok(entries) => match serde_json::to_string(&entries) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::error!("FFI(Spark): stageDataFiles serialization failed: {}", e);
+                return std::ptr::null_mut();
+            }
+        },
+        Err(e) => {
+            tracing::error!("FFI(Spark): stageDataFiles failed: {}", e);
+            return std::ptr::null_mut();
+        }
+    };
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Spark: commit staged manifest entries in one snapshot. Idempotent per token.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_commitStagedEntries(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    token: JString,
+    entries_json: JString,
+) -> jboolean {
+    let uri: String = match env.get_string(&table_uri) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    let token_str: String = match env.get_string(&token) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    let raw: String = match env.get_string(&entries_json) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    if uri.is_empty() || token_str.is_empty() {
+        return 0;
+    }
+
+    {
+        let tokens = match committed_entry_tokens().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if tokens.contains(&token_str) {
+            tracing::info!(
+                "FFI(Spark): commitStagedEntries token {} already committed",
+                token_str
+            );
+            return 1;
+        }
+    }
+
+    let entries: Vec<crate::core::manifest::ManifestEntry> = match serde_json::from_str(&raw) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::error!("FFI(Spark): invalid staged entries JSON: {}", e);
+            return 0;
+        }
+    };
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.commit_staged_entries_async(entries).await
+    });
+    match res {
+        Ok(()) => {
+            let mut tokens = match committed_entry_tokens().lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            tokens.insert(token_str);
+            1
+        }
+        Err(e) => {
+            tracing::error!("FFI(Spark): commitStagedEntries failed: {}", e);
+            0
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_getPrimaryKey(
     env: JNIEnv,

@@ -56,6 +56,7 @@ pub mod stats;
 pub use stats::{DataFileInfo, IndexCoverage, Split, TableStatistics};
 pub mod subscribe;
 pub use subscribe::{Subscription, TableEvent};
+pub mod stage;
 pub mod write;
 
 #[cfg(test)]

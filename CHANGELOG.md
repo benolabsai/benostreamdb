@@ -1,6 +1,20 @@
 ## [0.14.0]
 
 ### Added
+- **Staged-data-file writes (engine + Spark)** — `Table::stage_data_files_async`
+  writes batches as data files (with their indexes, built in the staging caller)
+  and returns the manifest entries without publishing anything;
+  `Table::commit_staged_entries_async` commits those entries in one metadata-only
+  snapshot. `Table::write_mode()` reports which protocol a table supports. The
+  Spark connector now uses this for every non-`format_version = 3` table: tasks
+  write data files (`stageDataFiles`) and return the entries in
+  `BenoStreamFileCommitMessage`, the driver commits them (`commitStagedEntries`,
+  idempotent per token). Rows never cross the driver, so the commit is O(files)
+  instead of O(bytes) and one job is one snapshot. `format_version = 3` tables
+  keep the buffered path because `_row_id` is assigned from the manifest head and
+  concurrent tasks would allocate overlapping ids. Index building moved into the
+  task for the file path (there is no post-commit hook once the driver owns the
+  commit), so a published snapshot already carries its index files.
 - **Parallel scans (Spark + Trino)** — new native `list_scan_splits` /
   `listSplits` entry points expose one split per data file, and each split
   reports `has_deletes` so connectors never fan out a table whose merge-on-read
@@ -89,20 +103,24 @@
 ### Fixed
 - **Spark writes are exactly-once and produce one snapshot per job** — Spark only
   guarantees that a task attempt's work is committed once if the *driver* commits
-  it (`BatchWrite.commit`), so tasks no longer append: they encode their rows as
-  Arrow IPC and the driver replays them through a per-write staging buffer in the
-  native layer, which writes and commits everything in a single
-  `write_async` + `commit_async`. Consequences: a task that appends successfully
-  and is then retried cannot duplicate its rows; a 20-partition `INSERT` creates
-  one manifest commit instead of 20; a retried `BatchWrite.commit` is a no-op
-  because the buffer is drained before the write. MERGE applies all delete
+  it (`BatchWrite.commit`), so tasks no longer append. On `files` tables the task
+  writes data files and the driver commits the manifest entries they returned; on
+  `buffered` tables (`format_version = 3`) the task encodes Arrow IPC and the
+  driver replays it through a per-write staging buffer that is written and
+  committed in a single `write_async` + `commit_async`. Either way: a task that
+  appends successfully and is then retried cannot duplicate its rows; a
+  20-partition `INSERT` creates one manifest commit instead of 20; a retried
+  `BatchWrite.commit` is a no-op (the staging buffer is drained before the write,
+  and committed file-entry tokens are recorded). MERGE applies all delete
   predicates as one OR-combined `deleteRows` commit, then the staged inserts.
-  Commit messages are `Vector[Array[Byte]]` — on Scala 2.12 `Iterator.toSeq`
-  returns a lazy `Stream` whose tail captures the iterator, which Spark rejected
-  with `not serializable result: scala.collection.Iterator$$anon$10`. New test
-  `stagedAppendCommitsOnceAndIsRetrySafe` asserts one data file for two staged
-  batches and no duplicate rows after a repeated commit; the MERGE test asserts
-  the updated row is replaced, not duplicated.
+  Buffered commit messages are `Vector[Array[Byte]]` — on Scala 2.12
+  `Iterator.toSeq` returns a lazy `Stream` whose tail captures the iterator, which
+  Spark rejected with `not serializable result: scala.collection.Iterator$$anon$10`.
+  New tests: `stagedAppendCommitsOnceAndIsRetrySafe` (one data file for two staged
+  batches, no duplicates after a repeated commit),
+  `stagedFilesAreInvisibleUntilCommittedAndCommitOnce` (staged files are invisible
+  until the driver commits, and a replayed commit publishes once), and the MERGE
+  test asserts the updated row is replaced, not duplicated.
 - **Spark `CALL` now works for every procedure** — two connector-side bugs, no
   JNI/Rust change: a VARCHAR parameter default must be a *quoted* SQL literal
   (`defaultValue("'vector'")`), because Spark parses the default as an expression
