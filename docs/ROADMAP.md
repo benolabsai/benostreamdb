@@ -126,7 +126,11 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
 > task, metadata committed on the driver), multi-metric `vector_search`, hybrid
 > search filter pushdown, Trino scalar-function parity, Flight SQL streaming
 > execution, remote dbt through the Trino connector, and an MCP HTTP + SSE
-> transport. TQ4 removal is the highest-priority item for **v0.15.0**.
+> transport. v0.14.1 is a performance/correctness follow-up: angular recall on the
+> TQ8/HNSW path is restored, HNSW-IVF cluster search runs in parallel, and the
+> benchmark suite now records the machine state each sweep ran in (with a report
+> that refuses to mix sessions). TQ4 removal is the highest-priority item for
+> **v0.15.0**.
 
 Themes are ordered by priority.
 

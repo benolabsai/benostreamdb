@@ -5,7 +5,7 @@
 # BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
-> ⚠️ **Developer Preview (v0.14.0)**
+> ⚠️ **Developer Preview (v0.14.1)**
 > BenoStreamDB is an early-stage database engine intended for evaluation, benchmarking, and community feedback. 
 > - **API & Storage Mutability:** APIs, configuration schemas, and secondary index sidecar on-disk layouts may evolve between preview releases.
 > - **Workload Suitability:** Not yet recommended for irreplaceable production data or mission-critical workloads requiring enterprise high-availability SLAs. Always back up authoritative data and pin versions.

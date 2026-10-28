@@ -45,7 +45,7 @@ members = [
 # independent crate and keeps its own version. The release workflow bumps this
 # one line from the git tag; Maven and dbt derive from it.
 [workspace.package]
-version = "0.14.0"
+version = "0.14.1"
 
 
 

@@ -1,12 +1,12 @@
 # BenoStreamDB — Release Readiness Assessment
 Date: 2026-10-03 (core audit performed for v0.13.0; carried forward for v0.14.0)
 Scope: Architectural audit of core storage invariants, differential oracles, crash recovery, and security against the **Developer Preview Release Bar**.
-Current Version: 0.14.0
+Current Version: 0.14.1
 
 Status: **Developer Preview Ready** (All core integrity gates passed; enterprise HA/clustering deferred).
 
 > **Release Scope Notice:**
-> For release v0.14.0 the same **Developer Preview** standard applies. The audit below covers the
+> For releases v0.14.0 and v0.14.1 the same **Developer Preview** standard applies. The audit below covers the
 > engine's storage invariants, which 0.14.0 did not change: its work is connector-side (Spark/Trino
 > parity, staged data-file writes in Spark, MCP HTTP + SSE transport, dbt remote access) plus CI and
 > dependency hygiene. The staged write path added in 0.14.0 (`stage_data_files` +

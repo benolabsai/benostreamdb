@@ -1,3 +1,55 @@
+## [0.14.1] - 2026-10-28
+
+Follow-up to the developer preview: two vector-search defects that suppressed
+recall and throughput on the angular datasets, plus the benchmark-integrity work
+needed to publish the resulting numbers honestly.
+
+### Fixed
+- **Angular recall on the TQ8/HNSW path** — recall on the angular datasets
+  (`glove-100`, `glove-200`, `nytimes-256`) is restored, and the competitor
+  matrix has been re-measured against the corrected behaviour. The recall numbers
+  in `benchmarks/results/BENCHMARK_REPORT.md` are regenerated from those runs;
+  treat earlier angular rows as superseded.
+- **Trino connector build in the release pipeline** — the connectors workflow
+  compiles Trino against Java 25, matching the release's `java.release = 23`
+  target (the previous JDK could not compile the band sources).
+
+### Performance
+- **Parallel HNSW-IVF cluster search** — per-cluster graphs are searched
+  concurrently instead of one after another, which raises search QPS at the same
+  recall. The out-of-core architecture (what stays resident, what is mmap'd, what
+  is streamed) is now documented alongside it.
+
+### Added
+- **Benchmark sessions record the machine state** — `benchmarks/session_provenance.py`
+  fingerprints the host a sweep ran on (CPU model/threads, DIMM configuration and
+  timings, governor, frequency driver and limits, RAPL package limit, kernel,
+  engine version) and samples three calibration probes (random-gather latency,
+  triad bandwidth, fixed fp64 matmul) once per stamped section. The committed
+  report previously disagreed with the JSON artifacts it summarized (generated
+  2026-10-21 from artifacts modified 2026-10-26); it is regenerated from the
+  current artifacts and now carries the fingerprint, the calibration envelope and
+  a per-section session table.
+- **`generate_summary.py` refuses mixed-session reports** — a report whose stamped
+  sections were measured in different machine states exits 2 and names them, since
+  RAM timings, a CPU undervolt or a frequency-limit change move every engine in the
+  comparison at once (and the discrete-GPU section not at all). `--allow-mixed-sessions`
+  produces a labelled historical report instead. DIMMs are parsed from
+  `dmidecode -t memory` into one signature (count, size, type, *configured* speed,
+  rank, voltage, part number, slots); SPD timings are recorded from `decode-dimms`
+  when available, because DMI has no tCL/tRCD/tRP field.
+- **`benchmarks/run_sweep.py`** — one command for the whole sweep: run each
+  section, stamp it with the artifacts it produced, then regenerate the report
+  under the session guard. `--dry-run` prints the exact plan; `--only` and
+  `--cmd SECTION=COMMAND` rerun or override a single section.
+- `docs/BENCHMARKING.md` states the rule as part of the reproducibility contract:
+  numbers are comparable only within one session, a hardware/firmware/frequency
+  change requires re-running the whole sweep (competitors included), versions are
+  compared by interleaving builds on the current state, and a `powersave`
+  governor is a confounder to pin and record. Tests:
+  `tests/python/test_bench_session_provenance.py` (14 cases, driven by real
+  `dmidecode` output from the benchmark host).
+
 ## [0.14.0] - 2026-10-28
 
 > **This is the developer-preview release.** 0.14.0 is the line we are calling the
