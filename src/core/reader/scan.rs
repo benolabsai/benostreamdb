@@ -2477,7 +2477,11 @@ impl HybridReader {
             if allowed_bitmap.is_some() {
                 20
             } else if let Some(ef) = ef_search {
-                if ef >= 100 { 32 } else { 16 }
+                if ef >= 100 {
+                    32
+                } else {
+                    16
+                }
             } else {
                 10
             }
@@ -2489,7 +2493,13 @@ impl HybridReader {
         );
 
         let matches = tokio::task::spawn_blocking(move || {
-            hnsw_ivf_clone.search(&query_clone, k, n_probe, allowed_bm_clone.as_ref(), ef_search)
+            hnsw_ivf_clone.search(
+                &query_clone,
+                k,
+                n_probe,
+                allowed_bm_clone.as_ref(),
+                ef_search,
+            )
         })
         .await??;
 

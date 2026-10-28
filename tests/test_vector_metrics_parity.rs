@@ -124,13 +124,7 @@ fn test_all_vector_metrics_against_brute_force() -> Result<()> {
         // `filter` and `ef_search` are both None: no scalar pre-filter, and the index's
         // default `ef_search` (the parallel cluster search changed the signature, not the
         // semantics this test asserts).
-        let results = index.search(
-            &VectorValue::Float32(query.clone()),
-            k,
-            n_lists,
-            None,
-            None,
-        )?;
+        let results = index.search(&VectorValue::Float32(query.clone()), k, n_lists, None, None)?;
 
         let brute_force = compute_brute_force(&query, &vectors, metric, k);
         assert!(

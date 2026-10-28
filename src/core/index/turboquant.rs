@@ -55,9 +55,7 @@ impl TurboQuantEncoder {
                     }
                 } else if !rotated.is_empty() {
                     let inv_sqrt_d = 1.0 / (rotated.len() as f32).sqrt();
-                    for x in &mut rotated {
-                        *x = inv_sqrt_d;
-                    }
+                    rotated.fill(inv_sqrt_d);
                 }
             }
             // Pad to power of 2 for FWHT if necessary
@@ -105,9 +103,7 @@ impl Quantizer for TurboQuantEncoder {
                 }
             } else if !rotated.is_empty() {
                 let inv_sqrt_d = 1.0 / (rotated.len() as f32).sqrt();
-                for x in &mut rotated {
-                    *x = inv_sqrt_d;
-                }
+                rotated.fill(inv_sqrt_d);
             }
         }
         // Pad to power of 2
@@ -181,9 +177,7 @@ impl Quantizer for TurboQuantEncoder {
                 }
             } else if !rotated_query.is_empty() {
                 let inv_sqrt_d = 1.0 / (rotated_query.len() as f32).sqrt();
-                for x in &mut rotated_query {
-                    *x = inv_sqrt_d;
-                }
+                rotated_query.fill(inv_sqrt_d);
             }
         }
         if !rotated_query.len().is_power_of_two() {
