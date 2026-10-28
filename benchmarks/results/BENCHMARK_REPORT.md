@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-28 20:14:49 UTC
+- **Generated At**: 2026-10-28 20:21:16 UTC
 - **Engine version**: 0.14.1
 - **Platform**: Linux-7.0.0-38-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
@@ -250,14 +250,16 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 1.0 | 4695.0 | 0.203 | 0.445 | 0.675 | 65.6 |
 | hnswlib | f32 | cpu | 1.0 | 4443.8 | 0.212 | 0.491 | 1.371 | 65.69 |
+| **benostreamdb** | tq8 | cpu | 0.9376 | 1557.4 | 1.059 | 1.427 | 2.3 | 152.94 |
 | weaviate | f32 | cpu | 0.9998 | 1099.7 | 0.887 | 1.275 | 5.011 | 62.72 |
 | pgvector | f32 | cpu | 1.0 | 899.5 | 1.076 | 1.619 | 10.64 | 166.35 |
-| **benostreamdb** | tq8 | cpu | 0.9376 | 841.7 | 1.059 | 1.427 | 2.3 | 152.94 |
+| **benostreamdb** | f32 | cpu | 0.995 | 858.7 | 1.575 | 2.27 | 2.399 | 195.19 |
 | opensearch | f32 | cpu | 0.9714 | 725.7 | 1.349 | 1.844 | 7.657 | 153.73 |
 | qdrant | f32 | cpu | 1.0 | 583.5 | 1.692 | 2.138 | 9.648 | 62.72 |
-| **benostreamdb** | f32 | cpu | 0.995 | 541.6 | 1.575 | 2.27 | 2.399 | 195.19 |
 | lancedb_hnsw | f32 | cpu | 1.0 | 423.0 | 2.226 | 2.887 | 1.883 | 81.67 |
 | lancedb | f32 | cpu | 0.7506 | 411.9 | 2.32 | 2.981 | 5.621 | 64.59 |
+
+BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every competitor adapter returns ids without fetching the row payload, so its `qps` is already ids-only; using our full search+fetch number here would compare different amounts of work (§4.1). Recall is *not* held at parity across engines in this table — a row with lower recall is doing less work per query, and rows within one dataset are directly comparable only on (recall, QPS) pairs.
 
 ### Vector — `gist-960-euclidean`
 
@@ -265,13 +267,15 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9916 | 2539.4 | 0.398 | 0.572 | 1.265 | 79.68 |
 | hnswlib | f32 | cpu | 0.9912 | 2344.2 | 0.428 | 0.652 | 3.027 | 79.77 |
-| **benostreamdb** | tq8 | cpu | 0.8358 | 937.6 | 0.944 | 1.263 | 2.703 | 181.15 |
+| **benostreamdb** | tq8 | cpu | 0.8358 | 1758.0 | 0.944 | 1.263 | 2.703 | 181.15 |
 | weaviate | f32 | cpu | 0.978 | 937.0 | 1.068 | 1.348 | 6.25 | 76.8 |
-| **benostreamdb** | f32 | cpu | 0.9654 | 518.6 | 1.594 | 2.198 | 2.919 | 237.47 |
+| **benostreamdb** | f32 | cpu | 0.9654 | 826.5 | 1.594 | 2.198 | 2.919 | 237.47 |
 | lancedb_hnsw | f32 | cpu | 0.965 | 423.1 | 2.262 | 2.743 | 2.388 | 99.15 |
 | lancedb | f32 | cpu | 0.4714 | 414.2 | 2.305 | 2.879 | 6.807 | 79.07 |
 | pgvector | f32 | cpu | 0.9988 | 368.1 | 2.7 | 3.623 | 25.043 | 247.28 |
 | opensearch | f32 | cpu | 0.8538 | 304.4 | 3.122 | 4.708 | 18.868 | 588.52 |
+
+BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every competitor adapter returns ids without fetching the row payload, so its `qps` is already ids-only; using our full search+fetch number here would compare different amounts of work (§4.1). Recall is *not* held at parity across engines in this table — a row with lower recall is doing less work per query, and rows within one dataset are directly comparable only on (recall, QPS) pairs.
 
 ### Vector — `glove-100-angular`
 
@@ -279,15 +283,17 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 0.9758 | 3540.3 | 0.132 | 0.345 | 0.628 | 10.97 |
 | faiss | f32 | cpu | 0.9826 | 3290.0 | 0.143 | 0.312 | 0.41 | 10.88 |
-| **benostreamdb** | tq8 | cpu | 0.9602 | 1274.1 | 0.691 | 0.938 | 0.837 | 25.13 |
-| **benostreamdb** | f32 | cpu | 0.9778 | 1150.3 | 0.765 | 0.98 | 0.904 | 30.56 |
+| **benostreamdb** | tq8 | cpu | 0.9602 | 2057.2 | 0.691 | 0.938 | 0.837 | 25.13 |
+| **benostreamdb** | f32 | cpu | 0.9778 | 1777.5 | 0.765 | 0.98 | 0.904 | 30.56 |
+| **benostreamdb** | tq8 | cuda | 0.9592 | 1574.9 | 0.871 | 1.206 | 0.949 | 25.13 |
 | weaviate | f32 | cpu | 0.933 | 1126.1 | 0.863 | 1.278 | 4.147 | 8.0 |
-| **benostreamdb** | tq8 | cuda | 0.9592 | 929.0 | 0.871 | 1.206 | 0.949 | 25.13 |
 | qdrant | f32 | cpu | 1.0 | 831.5 | 1.023 | 1.418 | 1.628 | 8.0 |
 | pgvector | f32 | cpu | 0.9852 | 696.3 | 1.443 | 1.943 | 7.111 | 24.85 |
 | opensearch | f32 | cpu | 0.8 | 612.2 | 1.602 | 2.187 | 8.456 | 47.06 |
 | lancedb | f32 | cpu | 0.0364 | 489.9 | 1.771 | 2.237 | 0.414 | 8.2 |
 | lancedb_hnsw | f32 | cpu | 0.9538 | 448.1 | 2.128 | 2.501 | 0.737 | 13.28 |
+
+BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every competitor adapter returns ids without fetching the row payload, so its `qps` is already ids-only; using our full search+fetch number here would compare different amounts of work (§4.1). Recall is *not* held at parity across engines in this table — a row with lower recall is doing less work per query, and rows within one dataset are directly comparable only on (recall, QPS) pairs.
 
 ### Vector — `glove-200-angular`
 
@@ -295,15 +301,17 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9494 | 5041.8 | 0.193 | 0.372 | 0.57 | 18.88 |
 | hnswlib | f32 | cpu | 0.9466 | 2804.4 | 0.192 | 0.512 | 0.883 | 18.97 |
-| **benostreamdb** | tq8 | cpu | 0.8782 | 989.2 | 0.687 | 1.064 | 1.698 | 43.76 |
-| **benostreamdb** | tq8 | cuda | 0.8776 | 907.4 | 0.872 | 1.097 | 1.715 | 43.78 |
+| **benostreamdb** | tq8 | cpu | 0.8782 | 2196.5 | 0.687 | 1.064 | 1.698 | 43.76 |
+| **benostreamdb** | tq8 | cuda | 0.8776 | 1692.6 | 0.872 | 1.097 | 1.715 | 43.78 |
+| **benostreamdb** | f32 | cpu | 0.8886 | 1552.9 | 0.854 | 1.216 | 1.985 | 54.66 |
 | weaviate | f32 | cpu | 0.8844 | 887.6 | 0.96 | 1.545 | 4.482 | 16.0 |
-| **benostreamdb** | f32 | cpu | 0.8886 | 831.9 | 0.854 | 1.216 | 1.985 | 54.66 |
 | qdrant | f32 | cpu | 1.0 | 738.7 | 1.312 | 2.002 | 3.328 | 16.0 |
 | pgvector | f32 | cpu | 0.9654 | 550.8 | 1.686 | 2.4 | 8.171 | 42.27 |
 | lancedb | f32 | cpu | 0.3848 | 435.2 | 2.072 | 2.616 | 2.333 | 16.78 |
 | lancedb_hnsw | f32 | cpu | 0.922 | 428.7 | 2.043 | 2.721 | 1.022 | 23.26 |
 | opensearch | f32 | cpu | 0.7156 | 313.5 | 2.997 | 5.068 | 12.589 | 181.07 |
+
+BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every competitor adapter returns ids without fetching the row payload, so its `qps` is already ids-only; using our full search+fetch number here would compare different amounts of work (§4.1). Recall is *not* held at parity across engines in this table — a row with lower recall is doing less work per query, and rows within one dataset are directly comparable only on (recall, QPS) pairs.
 
 ### Vector — `lastfm-64-dot`
 
@@ -311,14 +319,16 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9964 | 13970.8 | 0.069 | 0.107 | 0.215 | 8.08 |
 | hnswlib | f32 | cpu | 0.9908 | 4655.5 | 0.058 | 0.166 | 0.347 | 8.17 |
+| **benostreamdb** | tq8 | cpu | 0.91 | 2965.3 | 0.545 | 0.782 | 1.108 | 19.47 |
+| **benostreamdb** | f32 | cpu | 0.9872 | 2079.9 | 0.692 | 1.012 | 1.829 | 22.11 |
 | weaviate | f32 | cpu | 0.9822 | 1390.4 | 0.703 | 0.966 | 2.883 | 5.2 |
-| **benostreamdb** | tq8 | cpu | 0.91 | 1258.6 | 0.545 | 0.782 | 1.108 | 19.47 |
 | pgvector | f32 | cpu | 0.996 | 1102.5 | 0.751 | 0.92 | 6.112 | 18.51 |
-| **benostreamdb** | f32 | cpu | 0.9872 | 1064.7 | 0.692 | 1.012 | 1.829 | 22.11 |
 | opensearch | f32 | cpu | 0.5554 | 907.8 | 0.933 | 1.281 | 3.634 | 32.25 |
 | qdrant | f32 | cpu | 1.0 | 867.9 | 0.976 | 1.363 | 1.194 | 5.2 |
 | lancedb | f32 | cpu | 0.2118 | 488.2 | 1.792 | 2.195 | 0.49 | 5.36 |
 | lancedb_hnsw | f32 | cpu | 0.9148 | 467.2 | 2.035 | 2.605 | 0.592 | 7.89 |
+
+BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every competitor adapter returns ids without fetching the row payload, so its `qps` is already ids-only; using our full search+fetch number here would compare different amounts of work (§4.1). Recall is *not* held at parity across engines in this table — a row with lower recall is doing less work per query, and rows within one dataset are directly comparable only on (recall, QPS) pairs.
 
 ### Vector — `mnist-784-euclidean`
 
@@ -326,14 +336,16 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9998 | 3912.1 | 0.255 | 0.422 | 0.946 | 65.6 |
 | hnswlib | f32 | cpu | 1.0 | 3672.6 | 0.273 | 0.463 | 1.841 | 65.69 |
+| **benostreamdb** | tq8 | cpu | 0.9592 | 1477.2 | 1.088 | 1.503 | 2.353 | 152.92 |
 | weaviate | f32 | cpu | 0.9988 | 1038.5 | 0.94 | 1.519 | 5.257 | 62.72 |
-| **benostreamdb** | tq8 | cpu | 0.9592 | 821.6 | 1.088 | 1.503 | 2.353 | 152.92 |
+| **benostreamdb** | f32 | cpu | 0.9818 | 792.1 | 1.764 | 2.459 | 2.391 | 195.16 |
 | pgvector | f32 | cpu | 1.0 | 769.6 | 1.287 | 1.933 | 12.887 | 166.35 |
 | opensearch | f32 | cpu | 0.954 | 719.7 | 1.369 | 1.799 | 8.598 | 137.32 |
 | qdrant | f32 | cpu | 0.9998 | 537.7 | 1.819 | 2.424 | 10.355 | 62.72 |
-| **benostreamdb** | f32 | cpu | 0.9818 | 493.7 | 1.764 | 2.459 | 2.391 | 195.16 |
 | lancedb | f32 | cpu | 0.828 | 436.2 | 2.201 | 2.698 | 5.676 | 64.59 |
 | lancedb_hnsw | f32 | cpu | 0.9996 | 430.0 | 2.218 | 2.713 | 1.999 | 81.79 |
+
+BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every competitor adapter returns ids without fetching the row payload, so its `qps` is already ids-only; using our full search+fetch number here would compare different amounts of work (§4.1). Recall is *not* held at parity across engines in this table — a row with lower recall is doing less work per query, and rows within one dataset are directly comparable only on (recall, QPS) pairs.
 
 ### Vector — `nytimes-256-angular`
 
@@ -341,15 +353,17 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.924 | 4215.3 | 0.232 | 0.354 | 0.676 | 23.36 |
 | hnswlib | f32 | cpu | 0.925 | 3882.5 | 0.253 | 0.403 | 1.056 | 23.45 |
+| **benostreamdb** | tq8 | cpu | 0.9572 | 1584.7 | 0.876 | 1.29 | 1.186 | 52.81 |
+| **benostreamdb** | tq8 | cuda | 0.9558 | 1340.2 | 1.068 | 1.344 | 1.468 | 52.82 |
+| **benostreamdb** | f32 | cpu | 0.9916 | 1167.7 | 1.065 | 1.505 | 1.287 | 68.19 |
 | weaviate | f32 | cpu | 0.8616 | 870.8 | 0.991 | 1.459 | 4.92 | 20.48 |
-| **benostreamdb** | tq8 | cpu | 0.9572 | 805.8 | 0.876 | 1.29 | 1.186 | 52.81 |
-| **benostreamdb** | f32 | cpu | 0.9916 | 775.7 | 1.065 | 1.505 | 1.287 | 68.19 |
-| **benostreamdb** | tq8 | cuda | 0.9558 | 752.9 | 1.068 | 1.344 | 1.468 | 52.82 |
 | qdrant | f32 | cpu | 0.9992 | 581.6 | 1.553 | 2.161 | 3.816 | 20.48 |
 | pgvector | f32 | cpu | 0.9472 | 505.3 | 1.962 | 2.403 | 9.657 | 50.91 |
 | lancedb | f32 | cpu | 0.372 | 451.9 | 1.958 | 2.467 | 1.732 | 21.14 |
 | lancedb_hnsw | f32 | cpu | 0.9164 | 418.0 | 2.146 | 2.63 | 1.114 | 28.85 |
 | opensearch | f32 | cpu | 0.6446 | 280.5 | 3.391 | 5.473 | 14.797 | 223.04 |
+
+BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every competitor adapter returns ids without fetching the row payload, so its `qps` is already ids-only; using our full search+fetch number here would compare different amounts of work (§4.1). Recall is *not* held at parity across engines in this table — a row with lower recall is doing less work per query, and rows within one dataset are directly comparable only on (recall, QPS) pairs.
 
 ### Vector — `sift-128-euclidean`
 
@@ -357,14 +371,16 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | hnswlib | f32 | cpu | 1.0 | 10503.1 | 0.092 | 0.22 | 0.359 | 13.21 |
 | faiss | f32 | cpu | 1.0 | 10389.2 | 0.094 | 0.186 | 0.302 | 13.12 |
+| **benostreamdb** | tq8 | cpu | 0.9614 | 1853.9 | 0.726 | 0.953 | 0.827 | 29.64 |
+| **benostreamdb** | f32 | cpu | 0.9858 | 1840.6 | 0.832 | 1.093 | 0.85 | 37.31 |
 | pgvector | f32 | cpu | 1.0 | 1259.3 | 0.784 | 1.153 | 4.083 | 29.21 |
-| **benostreamdb** | tq8 | cpu | 0.9614 | 1212.4 | 0.726 | 0.953 | 0.827 | 29.64 |
 | weaviate | f32 | cpu | 0.999 | 1207.1 | 0.798 | 1.273 | 4.113 | 10.24 |
-| **benostreamdb** | f32 | cpu | 0.9858 | 1054.3 | 0.832 | 1.093 | 0.85 | 37.31 |
 | opensearch | f32 | cpu | 0.952 | 961.8 | 1.004 | 1.501 | 3.865 | 28.38 |
 | qdrant | f32 | cpu | 1.0 | 926.4 | 1.057 | 1.494 | 1.937 | 10.24 |
 | lancedb | f32 | cpu | 0.5052 | 506.7 | 1.878 | 2.474 | 0.837 | 10.61 |
 | lancedb_hnsw | f32 | cpu | 0.9884 | 465.9 | 2.058 | 2.557 | 0.641 | 16.19 |
+
+BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every competitor adapter returns ids without fetching the row payload, so its `qps` is already ids-only; using our full search+fetch number here would compare different amounts of work (§4.1). Recall is *not* held at parity across engines in this table — a row with lower recall is doing less work per query, and rows within one dataset are directly comparable only on (recall, QPS) pairs.
 
 ### Graph
 

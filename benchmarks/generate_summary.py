@@ -290,6 +290,22 @@ def _session_header(ledger: dict, primary: str | None, mismatches: list[tuple[st
     return lines
 
 
+def _comparable_qps(record: dict) -> float | None:
+    """Ids-only QPS, so our rows are measured on the same work as the competitors.
+
+    The competitor adapters return ids without fetching the row payload, while
+    BenoStreamDB's `qps` includes materialising it. `pure_index_qps` is the same
+    search without the fetch — the only like-for-like number (docs/BENCHMARKING.md
+    §4.1). Fall back to `qps` when a record has no pure-index measurement.
+    """
+    if str(record.get("engine", "")).startswith("benostreamdb"):
+        pure = record.get("pure_index_qps")
+        if isinstance(pure, (int, float)) and pure > 0:
+            return pure
+    qps = record.get("qps")
+    return qps if isinstance(qps, (int, float)) else None
+
+
 def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None = None) -> None:
     os.makedirs(RESULTS_DIR, exist_ok=True)
     report_path = os.path.join(RESULTS_DIR, "BENCHMARK_REPORT.md")
@@ -737,15 +753,25 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
                 "| Engine | Index Precision | Backend | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
             )
             sections.append("|---|---|---|---|---|---|---|---|---|")
-            for r in sorted(groups[ds], key=lambda x: -(x.get("qps") or 0)):
+            for r in sorted(groups[ds], key=lambda x: -(_comparable_qps(x) or 0)):
                 iv = r.get("index")
                 raw = r.get("index_type") or (iv.get("type") if isinstance(iv, dict) else iv) or "-"
                 idx = _quant_label(raw, default="f32")
                 sections.append(
                     f"| {_eng_label(r.get('engine'))} | {idx} | {r.get('device', 'cpu')} | "
-                    f"{r.get('recall_at_k')} | {r.get('qps')} | "
+                    f"{r.get('recall_at_k')} | {_comparable_qps(r)} | "
                     f"{r.get('p50_ms')} | {r.get('p99_ms')} | {r.get('build_s')} | {r.get('index_mb')} |"
                 )
+            sections.append("")
+            sections.append(
+                "BenoStreamDB rows report **index-only** QPS (`pure_index_qps`). Every"
+                " competitor adapter returns ids without fetching the row payload, so"
+                " its `qps` is already ids-only; using our full search+fetch number here"
+                " would compare different amounts of work (§4.1). Recall is *not* held at"
+                " parity across engines in this table — a row with lower recall is doing"
+                " less work per query, and rows within one dataset are directly"
+                " comparable only on (recall, QPS) pairs."
+            )
             sections.append("")
 
     if graph:
