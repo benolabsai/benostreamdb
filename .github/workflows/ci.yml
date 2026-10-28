@@ -385,7 +385,7 @@ jobs:
           - connector: trino
             label: "482 (band d)"
             java: "25"
-            mvn-args: "-Dtrino.version=482 -Dtrino.band=d -Dmaven.legacyLocalRepo=true"
+            mvn-args: "-Dtrino.version=482 -Dtrino.band=d"
           - connector: trino
             label: "484 (band e)"
             java: "25"
@@ -423,6 +423,18 @@ jobs:
         # `--features java` is required: without it src/core/ffi.rs is not
         # compiled and the bridge fails at the first native call.
         run: cargo build --features java
+
+      # The restored `~/.m2` can hold Trino coordinates recorded against a
+      # repository that no longer exists in the build ("cached from a remote
+      # repository ID that is unavailable"). Trino's `check-spi-dependencies`
+      # then cannot tell SPI-provided artifacts (airlift slice, opentelemetry)
+      # from plugin dependencies and fails the build. Purging the Trino/Airlift/
+      # OTel coordinates forces a clean metadata re-resolution (~20 s) instead of
+      # trusting a poisoned cache.
+      - name: Purge stale Trino metadata from the Maven cache
+        if: matrix.connector == 'trino'
+        run: |
+          rm -rf ~/.m2/repository/io/trino ~/.m2/repository/io/airlift ~/.m2/repository/io/opentelemetry
 
       - name: Run Trino connector tests
         if: matrix.connector == 'trino'

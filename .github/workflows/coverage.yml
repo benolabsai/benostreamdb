@@ -12,6 +12,13 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # llvm-cov instruments every frame, which multiplies stack usage. Without
+  # headroom, `server::tests::test_mcp_ingest_csv_tsv_psv_tables` (CSV/TSV/PSV
+  # ingest through the engine) overflows libtest's default 2 MiB test-thread
+  # stack and aborts the whole coverage run with SIGABRT. The plain `cargo test`
+  # job is unaffected, so this is instrumentation headroom, not a stack-size
+  # requirement of the code under test.
+  RUST_MIN_STACK: 8388608
 
 jobs:
   coverage:
