@@ -510,12 +510,12 @@ jobs:
           java-version: '17'
       - name: Save Java 17 Home
         run: echo "JAVA_17_HOME=$JAVA_HOME" >> $GITHUB_ENV
-      - name: Setup Java 23 (for Trino)
+      - name: Setup Java 25 (for Trino)
         uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
-          java-version: '23'
-      - name: Save Java 23 Home
+          java-version: '25'
+      - name: Save Java 25 Home
         run: echo "JAVA_TRINO_HOME=$JAVA_HOME" >> $GITHUB_ENV
       - name: Build Java Connectors (Spark, Trino)
         shell: bash

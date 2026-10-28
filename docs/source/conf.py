@@ -30,8 +30,8 @@ except ModuleNotFoundError:
     release = _match.group(1) if _match else '0.14.0'
 
 project = 'BenoStreamDB'
-copyright = '2026, BenoStream Team'
-author = 'BenoStream Team'
+copyright = '2026, Beno Labs and BenoStreamDB Contributors'
+author = 'Beno Labs and BenoStreamDB Contributors'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

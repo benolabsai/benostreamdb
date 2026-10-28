@@ -90,20 +90,20 @@ build_with_java() {
 JAVA_17_HOME="${JAVA_17_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
 JAVA_21_HOME="$(pwd)/${JDK_21_DIR}"
 
-# The Trino 482+ SPI is compiled for Java 23 (class file version 67), so the
-# connector must be *compiled* with a JDK >= 23. A JDK 21 compiler cannot read
-# the SPI and fails with "class file has wrong version 67.0, should be 65.0".
-# Prefer a system JDK 23+. The bytecode target stays 23 (the pom default), so no
+# The Trino 482+ SPI is compiled for Java 25 (class file version 69), so the
+# connector must be *compiled* with a JDK >= 25. A JDK 23 compiler cannot read
+# the SPI and fails with "class file has wrong version 69.0, should be 67.0".
+# Prefer a system JDK 25+. The bytecode target stays 23 (the pom default), so no
 # java.release override is passed for this module.
 if [ -z "${JAVA_TRINO_HOME:-}" ]; then
     JAVA_TRINO_HOME=""
-    for cand in /usr/lib/jvm/java-25-openjdk-amd64 /usr/lib/jvm/java-24-openjdk-amd64 /usr/lib/jvm/java-23-openjdk-amd64; do
+    for cand in /usr/lib/jvm/java-25-openjdk-amd64; do
         if [ -x "$cand/bin/javac" ]; then JAVA_TRINO_HOME="$cand"; break; fi
     done
 fi
 if [ -z "$JAVA_TRINO_HOME" ]; then
-    echo "ERROR: the Trino connector's SPI requires JDK >= 23 to compile." >&2
-    echo "       Install a JDK 23+ (e.g. /usr/lib/jvm/java-25-openjdk-amd64) and re-run." >&2
+    echo "ERROR: the Trino connector's SPI requires JDK >= 25 to compile." >&2
+    echo "       Install a JDK 25+ (e.g. /usr/lib/jvm/java-25-openjdk-amd64) and re-run." >&2
     exit 1
 fi
 echo "Trino connector will be compiled with: $JAVA_TRINO_HOME"
