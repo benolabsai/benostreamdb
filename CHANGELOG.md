@@ -1,5 +1,3 @@
-## [Unreleased]
-
 ## [0.14.0] - 2026-10-28
 
 > **This is the developer-preview release.** 0.14.0 is the line we are calling the
