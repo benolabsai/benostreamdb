@@ -57,6 +57,7 @@ COMPARABLE_KEYS = (
     "governor",
     "cpu_freq_limits",
     "dimm_config",
+    "dimm_timings",
     "engine_version",
 )
 
@@ -148,51 +149,136 @@ def _package_power_limits() -> dict[str, Any] | None:
     }
 
 
-def _dimm_config() -> str | None:
-    """DIMM speed and configured timings, as a single comparable string.
+DMI_FIELD = re.compile(r"^\s*([A-Za-z0-9 #()\-/]+?):\s*(.+?)\s*$")
 
-    `dmidecode` needs root; `lshw` usually works unprivileged but reports less.
-    When neither is available this is None and the report says so — the point is
-    to never *assume* the memory subsystem did not change.
+
+def parse_dmidecode_memory(text: str) -> str | None:
+    """Compact, comparable summary of the installed modules.
+
+    DMI exposes size, rated and *configured* speed, part number, rank and
+    voltage — but **not** the primary timings (tCL/tRCD/tRP), which live in the
+    SPD and are what a manual tuning change actually alters. So this string can be
+    identical across two different timing configurations; that is exactly why the
+    calibration probes exist. Pure so it can be tested against captured output.
+    """
+    devices: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for line in text.splitlines():
+        if line.startswith("Memory Device"):
+            current = {}
+            devices.append(current)
+            continue
+        if current is None:
+            continue
+        if re.match(r"^\s*(Handle|Physical Memory Array)", line):
+            current = None
+            continue
+        match = DMI_FIELD.match(line)
+        if match:
+            current[match.group(1).strip()] = match.group(2).strip()
+
+    installed = [
+        device
+        for device in devices
+        if device.get("Size", "").lower() not in {"", "no module installed", "none"}
+    ]
+    if not installed:
+        return None
+
+    sizes = sorted({value for device in installed if (value := device.get("Size"))})
+    speeds = sorted(
+        {
+            value
+            for device in installed
+            if (value := (device.get("Configured Memory Speed") or device.get("Speed")))
+            and value.lower() != "unknown"
+        }
+    )
+    parts = sorted({value for device in installed if (value := device.get("Part Number"))})
+    ranks = sorted({value for device in installed if (value := device.get("Rank"))})
+    voltages = sorted(
+        {value for device in installed if (value := device.get("Configured Voltage"))}
+    )
+    types = sorted({value for device in installed if (value := device.get("Type"))})
+    locators = [value for device in installed if (value := device.get("Locator"))]
+
+    signature = [f"{len(installed)}× {' / '.join(sizes)}"]
+    if types:
+        signature.append(" ".join(types))
+    if speeds:
+        signature.append("@ " + ", ".join(speeds))
+    details = [
+        ", ".join(ranks) + "R" if ranks else "",
+        ", ".join(voltages) if voltages else "",
+        ", ".join(parts) if parts else "",
+    ]
+    details = [item for item in details if item]
+    summary = " ".join(signature)
+    if details:
+        summary += " (" + " — ".join(details) + ")"
+    if locators:
+        summary += " [" + "/".join(locators) + "]"
+    return summary
+
+
+def _dimm_config() -> str | None:
+    """Installed module signature from DMI (needs root); None when unavailable.
+
+    `lshw` without root only reports the total size ("130GiB System memory"),
+    which is not a timing signal — accepting it would make two different memory
+    configurations look identical. Only a real per-module description counts;
+    otherwise this records None so the reader knows to check.
     """
     dmidecode = _run(["dmidecode", "-t", "memory"], timeout=10.0)
     if dmidecode:
-        speeds = sorted(
-            {
-                match.group(1).strip()
-                for match in re.finditer(r"Configured Memory Speed:\s*(.+)", dmidecode)
-            }
-        )
-        speeds += sorted(
-            {
-                match.group(1).strip()
-                for match in re.finditer(r"Speed:\s*(\d+ MT/s|Unknown)", dmidecode)
-            }
-        )
-        parts = sorted(
-            {
-                " ".join(match.groups())
-                for match in re.finditer(r"(?:Configured )?Memory Speed:\s*(.+)", dmidecode)
-            }
-        )
-        if parts:
-            return "; ".join(parts)
-        if speeds:
-            return "; ".join(dict.fromkeys(speeds))
-    # `lshw` without root only reports the total size ("130GiB System memory"),
-    # which is not a timing signal — accepting it would make two different memory
-    # configurations look identical. Only a line that states a clock or a size per
-    # module counts; otherwise record "unknown" so the reader knows to check.
+        summary = parse_dmidecode_memory(dmidecode)
+        if summary:
+            return summary
     lshw = _run(["lshw", "-C", "memory"], timeout=10.0)
     if lshw:
         modules = [
             line.strip()
             for line in lshw.splitlines()
-            if re.search(r"(clock:|size:\s*\d+\s*(MiB|GiB)\s*$)", line) and "System memory" not in line
+            if re.search(r"(clock:|size:\s*\d+\s*(MiB|GiB)\s*$)", line)
+            and "System memory" not in line
         ]
         if any("clock:" in line for line in modules):
             return " | ".join(dict.fromkeys(modules))
     return None
+
+
+# `decode-dimms` prints "Timings: 18-22-22-42 (tCL-tRCD-tRP-tRAS)"; some kernels
+# emit the labels without the packed line, so both shapes are accepted.
+DECODE_DIMMS_TIMINGS_LINE = re.compile(
+    r"Timings:\s*(\d+)\s*-\s*(\d+)\s*-\s*(\d+)", re.IGNORECASE
+)
+DECODE_DIMMS_TIMINGS_LABELLED = re.compile(
+    r"tCL[^\d]*(\d+)[^\d]+tRCD[^\d]*(\d+)[^\d]+tRP[^\d]*(\d+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_decode_dimms_timings(text: str) -> str | None:
+    """Primary timings (tCL-tRCD-tRP) from `decode-dimms` output, deduped.
+
+    This is the only way to see a manual timing change: DMI has no CL field and
+    reports the same `Configured Memory Speed` for two different tCL settings.
+    Requires the `i2c-dev` module and root, so None is the common case.
+    """
+    timings = {
+        "-".join(match.groups()) for match in DECODE_DIMMS_TIMINGS_LINE.finditer(text)
+    }
+    if not timings:
+        timings = {
+            "-".join(match.groups())
+            for match in DECODE_DIMMS_TIMINGS_LABELLED.finditer(text)
+        }
+    return ", ".join(sorted(timings)) if timings else None
+
+
+def _dimm_timings() -> str | None:
+    output = _run(["decode-dimms"], timeout=30.0)
+    return parse_decode_dimms_timings(output) if output else None
 
 
 def _engine_version() -> str | None:
@@ -437,10 +523,18 @@ def verify(ledger: dict[str, Any] | None = None) -> tuple[str | None, list[tuple
 def describe_fingerprint(fp: dict[str, Any]) -> list[str]:
     """Human-readable machine-state lines for the report header."""
     memory = fp.get("mem_total_bytes")
+    timings = fp.get("dimm_timings")
     lines = [
         f"CPU: {fp.get('cpu_model')} ({fp.get('cpu_cores')} threads)",
         f"Memory: {f'{memory / 2**30:.1f} GiB' if memory else 'unknown'} — "
         f"DIMMs: {fp.get('dimm_config') or 'unknown (needs root: dmidecode -t memory)'}",
+        "DIMM timings: "
+        + (
+            str(timings)
+            if timings
+            else "not readable (needs root + i2c-dev: decode-dimms) — a manual "
+            "tCL/tRCD/tRP change is only visible in the calibration probes"
+        ),
         f"Kernel: {fp.get('kernel')} — governor: {fp.get('governor') or 'unknown'}",
     ]
     limits = fp.get("cpu_freq_limits") or {}

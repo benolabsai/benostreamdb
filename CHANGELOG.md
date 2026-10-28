@@ -17,11 +17,20 @@
 ### Added
 - **Benchmark sessions record the machine state** —
   `benchmarks/session_provenance.py` fingerprints the host a sweep ran on (CPU
-  model/threads, DIMM speed and timings, governor, frequency driver and limits,
-  RAPL package limit, kernel, engine version) and samples three calibration
-  probes (random-gather latency, triad bandwidth, fixed fp64 matmul) once per
-  stamped section, so the first and last sample bracket the sweep and thermal or
-  power-limit drift inside a session is visible as well as between sessions.
+  model/threads, DIMM configuration, primary timings, governor, frequency driver
+  and limits, RAPL package limit, kernel, engine version) and samples three
+  calibration probes (random-gather latency, triad bandwidth, fixed fp64 matmul)
+  once per stamped section, so the first and last sample bracket the sweep and
+  thermal or power-limit drift inside a session is visible as well as between
+  sessions. The DIMM signature comes from `dmidecode -t memory` — module count,
+  size, type, *configured* speed, rank, voltage, part number and slot — parsed by
+  a pure function covered by `tests/python/test_bench_session_provenance.py`
+  against real output from the benchmark host
+  (`4× 32 GB DDR4 @ 3600 MT/s (2R — 1.2 V — F4-3600C18-32GVK) [DIMM_A1/…]`).
+  DMI carries no tCL/tRCD/tRP, so `decode-dimms` timings are recorded separately
+  when available (`i2c-dev` + root), and when they are not the header says so —
+  a manual timing change at the same configured speed is then only visible in the
+  calibration probes, which is what they are for.
   `generate_summary.py` writes that fingerprint, the calibration envelope and a
   per-section session table into the report header, and **refuses to emit a
   report whose sections were measured in different sessions** (exit 2;
