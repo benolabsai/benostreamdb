@@ -239,6 +239,25 @@
                 <artifactId>trino-maven-plugin</artifactId>
                 <version>15</version>
                 <extensions>true</extensions>
+                <executions>
+                    <!-- `check-spi-dependencies` is a *packaging* check: it verifies
+                         that the plugin does not ship an artifact Trino provides.
+                         It resolves the Trino SPI POM in an isolated context whose
+                         repository list is empty, so on a runner that has just
+                         downloaded the SPI it cannot confirm the artifact's origin
+                         ("cached from a remote repository ID that is unavailable in
+                         current build context, verifying that is downloadable from
+                         []") and then classifies every SPI-provided artifact
+                         (airlift slice, opentelemetry) as a plugin dependency with
+                         the wrong scope. Binding it to `package` keeps the check
+                         where it matters — `build-connectors.sh` runs
+                         `mvn clean package` — without failing `mvn test` in CI for
+                         an artifact-origin lookup the test phase never needs. -->
+                    <execution>
+                        <id>default-check-spi-dependencies</id>
+                        <phase>package</phase>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
