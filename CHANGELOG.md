@@ -10,6 +10,14 @@ needed to publish the resulting numbers honestly.
   matrix has been re-measured against the corrected behaviour. The recall numbers
   in `benchmarks/results/BENCHMARK_REPORT.md` are regenerated from those runs;
   treat earlier angular rows as superseded.
+- **A concurrently truncated WAL segment is no longer "corruption"** — replay
+  scans the log directory and then opens each segment; a commit that truncates the
+  log in between made `File::open` return `NotFound`, which the table builder
+  reported as `WAL Recovery Error … The WAL is corrupted. Manual intervention
+  required`, failing `tests/integration/test_concurrent_access.py::test_concurrent_compaction`
+  intermittently. A vanished segment is a *completed* one (the truncation happens
+  after the commit), so replay now skips it and keeps the corruption error for
+  actual decode failures; the directory scan handles the same race.
 - **`test_vector_metrics_parity` now compiles** — the parallel cluster search
   changed `HnswIvfIndex::search` from four parameters to five (adding
   `ef_search`), and the parity test still passed four. The workspace (and the

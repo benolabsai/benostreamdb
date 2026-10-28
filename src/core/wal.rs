@@ -526,8 +526,28 @@ impl WriteAheadLog {
         let mut all_iterators = Vec::new();
 
         for path in wal_files {
-            let file = File::open(&path)?;
-            if file.metadata()?.len() == 0 {
+            // A concurrent commit truncates the log after applying it, so a
+            // segment can disappear between the directory scan above and this
+            // open. That is a *completed* segment, not corruption — reporting it
+            // as corruption told the caller to intervene manually in a scenario
+            // the multi-process tests exercise routinely.
+            let file = match File::open(&path) {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    tracing::debug!(
+                        path = %path.display(),
+                        "WAL segment vanished before replay (concurrently truncated); skipping"
+                    );
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let length = match file.metadata() {
+                Ok(metadata) => metadata.len(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if length == 0 {
                 continue;
             }
 
@@ -556,7 +576,14 @@ impl WriteAheadLog {
         // Return paths for cleanup (simplified for now)
         let mut paths = Vec::new();
         if self.dir.exists() {
-            for entry in std::fs::read_dir(&self.dir)? {
+            // Same race as `replay_stream`: a concurrent truncate can remove the
+            // directory between the existence check and the scan.
+            let entries = match std::fs::read_dir(&self.dir) {
+                Ok(entries) => Some(entries),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e.into()),
+            };
+            for entry in entries.into_iter().flatten() {
                 let entry = entry?;
                 let path = entry.path();
                 if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("arrow") {
