@@ -1,9 +1,9 @@
 {
   "engine": "benostreamdb",
   "workload": "maintenance_saturation",
-  "concurrency": 4,
-  "baseline_p99_ms": 968.04,
-  "maintenance_p99_ms": 872.12,
-  "inflation_factor": 0.9,
-  "queries_during_compaction": 153
+  "concurrency": 8,
+  "baseline_p99_ms": 1281.65,
+  "maintenance_p99_ms": 1094.31,
+  "inflation_factor": 0.85,
+  "queries_during_compaction": 228
 }

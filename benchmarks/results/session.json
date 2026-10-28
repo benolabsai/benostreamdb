@@ -1,0 +1,348 @@
+{
+  "schema": 1,
+  "sections": {
+    "beir": {
+      "artifacts": [
+        "beir/results/benostreamdb_arguana_lexical_bm25_cpu.json",
+        "beir/results/benostreamdb_nfcorpus_lexical_bm25_cpu.json",
+        "beir/results/benostreamdb_scifact_lexical_bm25_cpu.json",
+        "beir/results/tantivy_arguana_lexical_bm25_cpu.json",
+        "beir/results/tantivy_nfcorpus_lexical_bm25_cpu.json",
+        "beir/results/tantivy_scifact_lexical_bm25_cpu.json"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 234.0262,
+        "measured_at": "2026-10-28T17:51:19Z",
+        "random_gather_ns_per_access": 7.2827,
+        "triad_gbs": 14.9069
+      },
+      "captured_at": "2026-10-28T17:51:19Z",
+      "note": null,
+      "session": "ca3f0760eaeb"
+    },
+    "filters": {
+      "artifacts": [
+        "results/production_filters.json",
+        "results/production_filters.md"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 222.0827,
+        "measured_at": "2026-10-28T17:51:39Z",
+        "random_gather_ns_per_access": 8.7357,
+        "triad_gbs": 11.4966
+      },
+      "captured_at": "2026-10-28T17:51:39Z",
+      "note": null,
+      "session": "ca3f0760eaeb"
+    },
+    "gpu_cdist": {
+      "artifacts": [
+        "results/gpu_cdist.json"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 225.4835,
+        "measured_at": "2026-10-28T17:21:56Z",
+        "random_gather_ns_per_access": 6.7025,
+        "triad_gbs": 15.0137
+      },
+      "captured_at": "2026-10-28T17:21:56Z",
+      "note": null,
+      "session": "ca3f0760eaeb"
+    },
+    "graph": {
+      "artifacts": [
+        "graph/results/graph_snap_roadnet_ca.md",
+        "graph/results/graph_snap_web_google.md",
+        "graph/results/graph_synth_10k.md"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 229.3179,
+        "measured_at": "2026-10-28T17:24:34Z",
+        "random_gather_ns_per_access": 7.1551,
+        "triad_gbs": 13.4389
+      },
+      "captured_at": "2026-10-28T17:24:34Z",
+      "note": null,
+      "session": "ca3f0760eaeb"
+    },
+    "production": {
+      "artifacts": [
+        "results/production_concurrency.md",
+        "results/production_concurrent.json",
+        "results/production_maintenance.json"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 283.3145,
+        "measured_at": "2026-10-28T17:25:45Z",
+        "random_gather_ns_per_access": 6.6828,
+        "triad_gbs": 13.6323
+      },
+      "captured_at": "2026-10-28T17:25:45Z",
+      "note": null,
+      "session": "ca3f0760eaeb"
+    },
+    "sql": {
+      "artifacts": [
+        "sql/results/clickbench_500k.md"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 133.8338,
+        "measured_at": "2026-10-28T17:24:36Z",
+        "random_gather_ns_per_access": 7.1445,
+        "triad_gbs": 14.668
+      },
+      "captured_at": "2026-10-28T17:24:36Z",
+      "note": null,
+      "session": "ca3f0760eaeb"
+    },
+    "vector_ann": {
+      "artifacts": [
+        "ann_benchmarks/results/fashion-mnist-784-euclidean_20k.json",
+        "ann_benchmarks/results/fashion-mnist-784-euclidean_20k.md",
+        "ann_benchmarks/results/fashion-mnist-784-euclidean_20k_tq8.json",
+        "ann_benchmarks/results/fashion-mnist-784-euclidean_20k_tq8.md",
+        "ann_benchmarks/results/gist-960-euclidean_20k.json",
+        "ann_benchmarks/results/gist-960-euclidean_20k.md",
+        "ann_benchmarks/results/gist-960-euclidean_20k_tq8.json",
+        "ann_benchmarks/results/gist-960-euclidean_20k_tq8.md",
+        "ann_benchmarks/results/glove-100-angular_20k.json",
+        "ann_benchmarks/results/glove-100-angular_20k.md",
+        "ann_benchmarks/results/glove-100-angular_20k_tq8.json",
+        "ann_benchmarks/results/glove-100-angular_20k_tq8.md",
+        "ann_benchmarks/results/glove-200-angular_20k.json",
+        "ann_benchmarks/results/glove-200-angular_20k.md",
+        "ann_benchmarks/results/glove-200-angular_20k_tq8.json",
+        "ann_benchmarks/results/glove-200-angular_20k_tq8.md",
+        "ann_benchmarks/results/lastfm-64-dot_20k.json",
+        "ann_benchmarks/results/lastfm-64-dot_20k.md",
+        "ann_benchmarks/results/lastfm-64-dot_20k_tq8.json",
+        "ann_benchmarks/results/lastfm-64-dot_20k_tq8.md",
+        "ann_benchmarks/results/mnist-784-euclidean_20k.json",
+        "ann_benchmarks/results/mnist-784-euclidean_20k.md",
+        "ann_benchmarks/results/mnist-784-euclidean_20k_tq8.json",
+        "ann_benchmarks/results/mnist-784-euclidean_20k_tq8.md",
+        "ann_benchmarks/results/nytimes-256-angular_20k.json",
+        "ann_benchmarks/results/nytimes-256-angular_20k.md",
+        "ann_benchmarks/results/nytimes-256-angular_20k_tq8.json",
+        "ann_benchmarks/results/nytimes-256-angular_20k_tq8.md",
+        "ann_benchmarks/results/sift-128-euclidean_20k.json",
+        "ann_benchmarks/results/sift-128-euclidean_20k.md",
+        "ann_benchmarks/results/sift-128-euclidean_20k_tq8.json",
+        "ann_benchmarks/results/sift-128-euclidean_20k_tq8.md"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 275.3877,
+        "measured_at": "2026-10-28T17:55:03Z",
+        "random_gather_ns_per_access": 6.9344,
+        "triad_gbs": 14.5626
+      },
+      "captured_at": "2026-10-28T17:55:03Z",
+      "note": null,
+      "session": "ca3f0760eaeb"
+    },
+    "vector_matrix": {
+      "artifacts": [
+        "competitors/results/benostreamdb_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_tq8_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_sift-128-euclidean_cpu.json",
+        "competitors/results/faiss_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/faiss_gist-960-euclidean_cpu.json",
+        "competitors/results/faiss_glove-100-angular_cpu.json",
+        "competitors/results/faiss_glove-200-angular_cpu.json",
+        "competitors/results/faiss_lastfm-64-dot_cpu.json",
+        "competitors/results/faiss_mnist-784-euclidean_cpu.json",
+        "competitors/results/faiss_nytimes-256-angular_cpu.json",
+        "competitors/results/faiss_sift-128-euclidean_cpu.json",
+        "competitors/results/hnswlib_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/hnswlib_gist-960-euclidean_cpu.json",
+        "competitors/results/hnswlib_glove-100-angular_cpu.json",
+        "competitors/results/hnswlib_glove-200-angular_cpu.json",
+        "competitors/results/hnswlib_lastfm-64-dot_cpu.json",
+        "competitors/results/hnswlib_mnist-784-euclidean_cpu.json",
+        "competitors/results/hnswlib_nytimes-256-angular_cpu.json",
+        "competitors/results/hnswlib_sift-128-euclidean_cpu.json",
+        "competitors/results/lancedb_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_gist-960-euclidean_cpu.json",
+        "competitors/results/lancedb_glove-100-angular_cpu.json",
+        "competitors/results/lancedb_glove-200-angular_cpu.json",
+        "competitors/results/lancedb_hnsw_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_hnsw_gist-960-euclidean_cpu.json",
+        "competitors/results/lancedb_hnsw_glove-100-angular_cpu.json",
+        "competitors/results/lancedb_hnsw_glove-200-angular_cpu.json",
+        "competitors/results/lancedb_hnsw_lastfm-64-dot_cpu.json",
+        "competitors/results/lancedb_hnsw_mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_hnsw_nytimes-256-angular_cpu.json",
+        "competitors/results/lancedb_hnsw_sift-128-euclidean_cpu.json",
+        "competitors/results/lancedb_lastfm-64-dot_cpu.json",
+        "competitors/results/lancedb_mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_nytimes-256-angular_cpu.json",
+        "competitors/results/lancedb_sift-128-euclidean_cpu.json",
+        "competitors/results/milvus_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/milvus_gist-960-euclidean_cpu.json",
+        "competitors/results/milvus_glove-100-angular_cpu.json",
+        "competitors/results/milvus_glove-200-angular_cpu.json",
+        "competitors/results/milvus_lastfm-64-dot_cpu.json",
+        "competitors/results/milvus_mnist-784-euclidean_cpu.json",
+        "competitors/results/milvus_nytimes-256-angular_cpu.json",
+        "competitors/results/milvus_sift-128-euclidean_cpu.json",
+        "competitors/results/opensearch_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/opensearch_gist-960-euclidean_cpu.json",
+        "competitors/results/opensearch_glove-100-angular_cpu.json",
+        "competitors/results/opensearch_glove-200-angular_cpu.json",
+        "competitors/results/opensearch_lastfm-64-dot_cpu.json",
+        "competitors/results/opensearch_mnist-784-euclidean_cpu.json",
+        "competitors/results/opensearch_nytimes-256-angular_cpu.json",
+        "competitors/results/opensearch_sift-128-euclidean_cpu.json",
+        "competitors/results/pgvector_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/pgvector_gist-960-euclidean_cpu.json",
+        "competitors/results/pgvector_glove-100-angular_cpu.json",
+        "competitors/results/pgvector_glove-200-angular_cpu.json",
+        "competitors/results/pgvector_lastfm-64-dot_cpu.json",
+        "competitors/results/pgvector_mnist-784-euclidean_cpu.json",
+        "competitors/results/pgvector_nytimes-256-angular_cpu.json",
+        "competitors/results/pgvector_sift-128-euclidean_cpu.json",
+        "competitors/results/qdrant_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/qdrant_gist-960-euclidean_cpu.json",
+        "competitors/results/qdrant_glove-100-angular_cpu.json",
+        "competitors/results/qdrant_glove-200-angular_cpu.json",
+        "competitors/results/qdrant_lastfm-64-dot_cpu.json",
+        "competitors/results/qdrant_mnist-784-euclidean_cpu.json",
+        "competitors/results/qdrant_nytimes-256-angular_cpu.json",
+        "competitors/results/qdrant_sift-128-euclidean_cpu.json",
+        "competitors/results/weaviate_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/weaviate_gist-960-euclidean_cpu.json",
+        "competitors/results/weaviate_glove-100-angular_cpu.json",
+        "competitors/results/weaviate_glove-200-angular_cpu.json",
+        "competitors/results/weaviate_lastfm-64-dot_cpu.json",
+        "competitors/results/weaviate_mnist-784-euclidean_cpu.json",
+        "competitors/results/weaviate_nytimes-256-angular_cpu.json",
+        "competitors/results/weaviate_sift-128-euclidean_cpu.json"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 79.5519,
+        "measured_at": "2026-10-28T18:58:10Z",
+        "random_gather_ns_per_access": 7.6324,
+        "triad_gbs": 13.528
+      },
+      "captured_at": "2026-10-28T18:58:10Z",
+      "note": null,
+      "session": "ca3f0760eaeb"
+    }
+  },
+  "sessions": {
+    "ca3f0760eaeb": {
+      "calibrations": [
+        {
+          "available": true,
+          "matmul_gflops": 225.4835,
+          "measured_at": "2026-10-28T17:21:56Z",
+          "random_gather_ns_per_access": 6.7025,
+          "triad_gbs": 15.0137
+        },
+        {
+          "available": true,
+          "matmul_gflops": 229.3179,
+          "measured_at": "2026-10-28T17:24:34Z",
+          "random_gather_ns_per_access": 7.1551,
+          "triad_gbs": 13.4389
+        },
+        {
+          "available": true,
+          "matmul_gflops": 133.8338,
+          "measured_at": "2026-10-28T17:24:36Z",
+          "random_gather_ns_per_access": 7.1445,
+          "triad_gbs": 14.668
+        },
+        {
+          "available": true,
+          "matmul_gflops": 283.3145,
+          "measured_at": "2026-10-28T17:25:45Z",
+          "random_gather_ns_per_access": 6.6828,
+          "triad_gbs": 13.6323
+        },
+        {
+          "available": true,
+          "matmul_gflops": 234.0262,
+          "measured_at": "2026-10-28T17:51:19Z",
+          "random_gather_ns_per_access": 7.2827,
+          "triad_gbs": 14.9069
+        },
+        {
+          "available": true,
+          "matmul_gflops": 222.0827,
+          "measured_at": "2026-10-28T17:51:39Z",
+          "random_gather_ns_per_access": 8.7357,
+          "triad_gbs": 11.4966
+        },
+        {
+          "available": true,
+          "matmul_gflops": 275.3877,
+          "measured_at": "2026-10-28T17:55:03Z",
+          "random_gather_ns_per_access": 6.9344,
+          "triad_gbs": 14.5626
+        },
+        {
+          "available": true,
+          "matmul_gflops": 79.5519,
+          "measured_at": "2026-10-28T18:58:10Z",
+          "random_gather_ns_per_access": 7.6324,
+          "triad_gbs": 13.528
+        }
+      ],
+      "fingerprint": {
+        "cpu_cores": 32,
+        "cpu_freq_limits": {
+          "boost_disabled": false,
+          "driver": "amd-pstate-epp",
+          "hw_max_khz": 4981510,
+          "hw_min_khz": 570173,
+          "policy_max_khz": 4981510,
+          "policy_min_khz": 1740528
+        },
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "dimm_config": null,
+        "engine_version": "0.14.1",
+        "governor": "powersave",
+        "hostname": "desktop",
+        "kernel": "7.0.0-38-generic",
+        "mem_total_bytes": 130400083968,
+        "package_power_limits": null,
+        "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "first_seen": "2026-10-28T17:21:56Z",
+      "last_seen": "2026-10-28T18:58:10Z",
+      "sections": [
+        "gpu_cdist",
+        "graph",
+        "sql",
+        "production",
+        "beir",
+        "filters",
+        "vector_ann",
+        "vector_matrix"
+      ]
+    }
+  }
+}

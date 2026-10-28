@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-21T01:11:22Z",
+  "generated_at": "2026-10-28T17:21:55Z",
   "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
   "python": "3.14.4",
   "gpu": [
@@ -12,52 +12,52 @@
       "vectors": 50000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 511.35,
-      "cpu_mdist_s": 50.1,
-      "cuda_ms": 15.14,
-      "cuda_mdist_s": 1691.3,
-      "speedup": 33.78
+      "cpu_ms": 408.84,
+      "cpu_mdist_s": 62.6,
+      "cuda_ms": 12.92,
+      "cuda_mdist_s": 1981.7,
+      "speedup": 31.65
     },
     {
       "queries": 2048,
       "vectors": 50000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 2485.67,
-      "cpu_mdist_s": 41.2,
-      "cuda_ms": 49.72,
-      "cuda_mdist_s": 2059.4,
-      "speedup": 49.99
+      "cpu_ms": 1784.33,
+      "cpu_mdist_s": 57.4,
+      "cuda_ms": 43.1,
+      "cuda_mdist_s": 2375.9,
+      "speedup": 41.4
     },
     {
       "queries": 1024,
       "vectors": 200000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 4956.71,
-      "cpu_mdist_s": 41.3,
-      "cuda_ms": 109.18,
-      "cuda_mdist_s": 1875.8,
-      "speedup": 45.4
+      "cpu_ms": 3706.43,
+      "cpu_mdist_s": 55.3,
+      "cuda_ms": 90.44,
+      "cuda_mdist_s": 2264.5,
+      "speedup": 40.98
     },
     {
       "queries": 512,
       "vectors": 50000,
       "dim": 100,
       "metric": "cosine",
-      "cpu_ms": 1099.03,
-      "cpu_mdist_s": 23.3,
-      "cuda_ms": 14.87,
-      "cuda_mdist_s": 1721.2,
-      "speedup": 73.89
+      "cpu_ms": 754.5,
+      "cpu_mdist_s": 33.9,
+      "cuda_ms": 12.23,
+      "cuda_mdist_s": 2093.8,
+      "speedup": 61.71
     }
   ],
   "dual_gpu": {
     "queries": 8192,
     "vectors": 20000,
     "dim": 2048,
-    "single_ms": 351.02,
-    "dual_ms": 220.66,
+    "single_ms": 322.5,
+    "dual_ms": 203.05,
     "speedup": 1.59
   }
 }

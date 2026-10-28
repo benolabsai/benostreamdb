@@ -120,3 +120,5 @@ scratch_mem_test
 
 # Blog article drafts (unpublished)
 blog/articles/drafts/
+# Quarantined pre-sweep benchmark artifacts (see benchmarks/run_sweep.py).
+benchmarks/results/stale/

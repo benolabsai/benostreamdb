@@ -189,7 +189,16 @@ def run_benchmark(rows: int = 200_000, warm_runs: int = 3) -> Dict[str, Any]:
             duck_res_arrow = None
             for i in range(warm_runs + 1):
                 t0 = time.perf_counter()
-                res = con.execute(sql).arrow().read_all()
+                # The DuckDB arrow accessor has been renamed twice:
+                # `arrow().read_all()` (<=0.10) → `fetch_arrow_table()` (0.10-1.x)
+                # → `to_arrow_table()` (2.x). Accept whichever this install has.
+                cursor = con.execute(sql)
+                if hasattr(cursor, "fetch_arrow_table"):
+                    res = cursor.fetch_arrow_table()
+                elif hasattr(cursor, "to_arrow_table"):
+                    res = cursor.to_arrow_table()
+                else:  # very old duckdb
+                    res = cursor.arrow().read_all()
                 elapsed_ms = (time.perf_counter() - t0) * 1000.0
                 if i > 0:
                     duck_warm.append(elapsed_ms)

@@ -81,28 +81,56 @@ def _docker_bench() -> str:
 def build_sections(cpus: str, mem: str, envelope: list[str] | None = None) -> list[Section]:
     """The sweep, in report order.
 
-    `envelope` is `--cpus`/`--mem`; it is passed to every containerized section so
-    all engines run under the same limits (the like-for-like rule).
+    Each command writes the artifact the report actually reads. Several harnesses
+    only write with an explicit `--out` (the ANN runner prints to stdout otherwise),
+    so the output path is always spelled out here rather than left to a default —
+    a section that exits 0 without producing its artifact is now a failure.
     """
     env = envelope or ["--cpus", cpus, "--mem", mem]
     docker = _docker_bench()
 
+    # §1: engine self-characterization, f32 and tq8, per dataset.
+    ann_commands = []
+    for dataset in VECTOR_DATASETS:
+        for index, suffix in (("hnsw", ""), ("hnsw_tq8", "_tq8")):
+            ann_commands.append(
+                [
+                    sys.executable,
+                    "benchmarks/ann_benchmarks/run.py",
+                    "--dataset", dataset,
+                    "--index", index,
+                    "--limit", "20000",
+                    "--queries", "500",
+                    "--out", f"benchmarks/ann_benchmarks/results/{dataset}_20k{suffix}.json",
+                ]
+            )
+
+    # §9: competitor matrix, one containerized run per dataset (CPU and GPU pass).
     vector_commands = [
-        [docker, "--both", *env, "--dataset", dataset, "--limit", "20000", "--queries", "500"]
+        [docker, "--build-wheel", "--both", *env,
+         "--dataset", dataset, "--limit", "20000", "--queries", "500"]
         for dataset in VECTOR_DATASETS
     ]
+
+    # §2: graph, synthetic plus the named SNAP datasets the report quotes.
+    graph_common = ["--engines", "benostreamdb,networkx",
+                    "--algorithms", "pagerank,connected_components,shortest_path"]
     graph_commands = [
-        [
-            docker,
-            "--workload",
-            "graph",
-            *env,
-            "--graph-engines",
-            "networkx neo4j cugraph benostreamdb",
-            "--algorithm",
-            algorithm,
-        ]
-        for algorithm in GRAPH_ALGORITHMS
+        [sys.executable, "benchmarks/graph/run.py", "--nodes", "10000", "--edges", "50000",
+         *graph_common, "--out", "benchmarks/graph/results/graph_synth_10k.md"],
+        [sys.executable, "benchmarks/graph/run.py", "--dataset", "snap-web-google",
+         *graph_common, "--out", "benchmarks/graph/results/graph_snap_web_google.md"],
+        [sys.executable, "benchmarks/graph/run.py", "--dataset", "snap-roadnet-ca",
+         *graph_common, "--out", "benchmarks/graph/results/graph_snap_roadnet_ca.md"],
+    ]
+
+    # §4: BEIR lexical/hybrid, three datasets, competitor included when installed.
+    beir_commands = [
+        [sys.executable, "benchmarks/beir/run.py", "--dataset", dataset,
+         "--engines", "benostreamdb,tantivy",
+         # Without this the runner prints results and writes no record.
+         "--json-dir", "benchmarks/beir/results"]
+        for dataset in ("scifact", "nfcorpus", "arguana")
     ]
 
     return [
@@ -111,35 +139,27 @@ def build_sections(cpus: str, mem: str, envelope: list[str] | None = None) -> li
             [[sys.executable, "benchmarks/gpu_cdist_bench.py"]],
             ["results/gpu_cdist.json"],
         ),
-        Section(
-            "vector_ann",
-            [[sys.executable, "benchmarks/ann_benchmarks/run.py", "--limit", "20000", "--queries", "500"]],
-            ["ann_benchmarks/results/*"],
-        ),
+        Section("vector_ann", ann_commands, ["ann_benchmarks/results/*"]),
         Section("vector_matrix", vector_commands, ["competitors/results/*.json"]),
         Section("graph", graph_commands, ["graph/results/*"]),
         Section(
             "sql",
-            [[docker, "--workload", "sql", *env, "--sql-engines",
-              "duckdb datafusion clickhouse benostreamdb", "--sql-rows", "500000"]],
+            [[sys.executable, "benchmarks/sql/run.py", "--rows", "500000",
+              "--engines", "benostreamdb,duckdb,datafusion",
+              "--out", "benchmarks/sql/results/clickbench_500k.md"]],
             ["sql/results/*"],
         ),
-        Section(
-            "beir",
-            [[sys.executable, "benchmarks/beir/run.py"]],
-            ["beir/results/*"],
-        ),
+        Section("beir", beir_commands, ["beir/results/*"]),
         Section(
             "filters",
-            [[sys.executable, "benchmarks/filters/run.py"]],
+            [[sys.executable, "benchmarks/filters/run.py", "--rows", "200000"]],
             ["results/production_filters.*"],
         ),
         Section(
             "production",
             # Both workloads: `concurrent` writes the QPS/latency ladder (with
             # `--sweep` for the concurrency series), `maintenance` writes the
-            # compaction/vacuum record. The old single command omitted the required
-            # `--workload` flag and exited 2 without measuring anything.
+            # compaction/vacuum record.
             [
                 [sys.executable, "benchmarks/production_workload.py",
                  "--workload", "concurrent", "--sweep"],
@@ -178,18 +198,51 @@ def _fresh_artifacts(patterns: list[str], started: float, tolerance: float = 5.0
     return fresh
 
 
+def _quarantine_stale(patterns: list[str], sweep_started: float, stamp: str) -> int:
+    """Move artifacts predating this sweep out of the section's glob.
+
+    A section's glob is what the report reads; files left over from an earlier run
+    would silently mix sessions *inside* one section, which the section-level
+    guard cannot see. Anything older than the sweep start is moved to
+    `results/stale/<stamp>/<section>/` (recoverable) so the section reports only
+    what it just measured.
+    """
+    moved = 0
+    for relative in _expand_artifacts(patterns):
+        absolute = os.path.join(BASE_DIR, relative)
+        try:
+            modified = os.path.getmtime(absolute)
+        except OSError:
+            continue
+        if modified >= sweep_started - 5.0:
+            continue
+        destination = os.path.join(BASE_DIR, "results", "stale", stamp, relative)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        os.replace(absolute, destination)
+        moved += 1
+    return moved
+
+
 def run_sections(
     sections: list[Section],
     keep_going: bool,
     dry_run: bool,
+    clean: bool = True,
 ) -> int:
     failures: list[tuple[str, int]] = []
+    sweep_started = time.time()
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     for index, section in enumerate(sections, start=1):
         print(f"\n=== [{index}/{len(sections)}] {section.name}", flush=True)
         for command in section.resolved():
             print(f"    $ {command}", flush=True)
         if dry_run:
             continue
+
+        if clean:
+            moved = _quarantine_stale(section.artifacts, sweep_started, f"{stamp}-{section.name}")
+            if moved:
+                print(f"    quarantined {moved} artifact(s) older than this sweep", flush=True)
 
         started = time.time()
         section_failed = False
@@ -258,6 +311,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="override a section's command(s); repeatable, use '&&' to chain",
     )
     parser.add_argument("--keep-going", action="store_true", help="continue after a failing section")
+    parser.add_argument(
+        "--no-clean",
+        action="store_true",
+        help=(
+            "do not quarantine artifacts that predate this sweep (they would be "
+            "mixed into their section's report tables)"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     parser.add_argument(
         "--no-report",
@@ -305,7 +366,9 @@ def main(argv: list[str]) -> int:
             print(f"  {line}")
         print()
 
-    code = run_sections(sections, keep_going=args.keep_going, dry_run=args.dry_run)
+    code = run_sections(
+        sections, keep_going=args.keep_going, dry_run=args.dry_run, clean=not args.no_clean
+    )
     if code != 0 or args.dry_run or args.no_report:
         return code
 

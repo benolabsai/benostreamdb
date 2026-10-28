@@ -52,6 +52,14 @@ needed to publish the resulting numbers honestly.
   `dmidecode -t memory` into one signature (count, size, type, *configured* speed,
   rank, voltage, part number, slots); SPD timings are recorded from `decode-dimms`
   when available, because DMI has no tCL/tRCD/tRP field.
+- **The report is regenerated from a full single-session sweep** — all eight
+  sections (GPU cdist, vector self-characterization, competitor matrix, graph,
+  SQL, BEIR, filters, production) were re-measured after the recall fix and the
+  cluster-search change, stamped into one session, and the report was rebuilt from
+  exactly those artifacts. Sections quarantine artifacts that predate the sweep
+  rather than letting them leak into the tables, and the reviewed numbers show the
+  recall restored (f32 recall@10 0.99 on SIFT, 0.96–0.99 on the angular sets with
+  `tq8` at 0.84–0.96) and query rates of 500–1900 QPS at a 20k-vector index size.
 - **`benchmarks/run_sweep.py`** — one command for the whole sweep: run each
   section, stamp it with the artifacts it produced, then regenerate the report
   under the session guard. `--dry-run` prints the exact plan; `--only` and

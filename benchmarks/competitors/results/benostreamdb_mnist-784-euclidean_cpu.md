@@ -12,13 +12,13 @@
 | ef_construction (quality) | 200 |
 | ef_search | 200 |
 | Cores | 8 |
-| RAM (GB) | 16.0 |
-| recall@10 | 0.9790 |
-| QPS | 502.9 |
-| Build time | 2.7s |
-| Index size | 191.6 MB |
-| p50 latency | 1.63 ms |
-| p99 latency | 2.39 ms |
-| Pure Index QPS | 928.4 |
-| Pure Index p50 latency | 1.06 ms |
-| Pure Index p99 latency | 1.37 ms |
+| RAM (GB) | default |
+| recall@10 | 0.9818 |
+| QPS | 493.7 |
+| Build time | 2.4s |
+| Index size | 195.2 MB |
+| p50 latency | 1.76 ms |
+| p99 latency | 2.46 ms |
+| Pure Index QPS | 792.1 |
+| Pure Index p50 latency | 1.23 ms |
+| Pure Index p99 latency | 1.74 ms |
