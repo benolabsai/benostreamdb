@@ -14,7 +14,7 @@ belong in the announcement.
 
 ## 1. The reproducibility contract
 
-Every published result must satisfy all four:
+Every published result must satisfy all five:
 
 1. **One command.** The result is produced by a committed script, not a REPL
    session. The command is recorded next to the number.
@@ -31,6 +31,59 @@ Every published result must satisfy all four:
    invalid.
 4. **A correctness oracle.** The index must not change the answer. Exact indexes
    are checked against a full scan; ANN indexes are checked for recall. See §7.
+5. **One machine state, recorded.** See below.
+
+### 1.1 Machine state and session integrity
+
+The machine state is part of the measurement. DIMM timings, a CPU undervolt,
+frequency-limit changes (`amd-pstate`/`intel_pstate`, RAPL), and the kernel move
+**every engine in a table at once** — competitor rows included — because they all
+run on the same host. They do not move everything *equally*: HNSW/IVF query
+throughput is latency-bound and moves most, SQL/Parquet scans are bandwidth-bound
+and move less, and the discrete-GPU rows in §1b do not move at all. A swapped
+memory kit or a new undervolt therefore invalidates the whole comparison, not one
+column of it.
+
+The rule that follows: **numbers are comparable only within one session**, and a
+session is the set of sections measured in one machine state. A partial re-run
+cannot be spliced into an older report.
+
+The suite records the state for you. Before/after each section of a sweep:
+
+```bash
+python benchmarks/session_provenance.py capture --section vector \
+    --artifact competitors/results/vector_matrix.json
+```
+
+That writes `benchmarks/results/session.json` with:
+
+- a **fingerprint** — CPU model, threads, total RAM, DIMM speed/timings
+  (`dmidecode -t memory`; needs root, otherwise recorded as unknown rather than
+  guessed), governor, frequency driver and limits, RAPL package limit, kernel,
+  and the engine version from `Cargo.toml`;
+- **calibration probes** — random-gather latency (ns/access), triad bandwidth
+  (GB/s), and a fixed fp64 matmul (GFLOPS), sampled once per stamp. The first and
+  last sample bracket the sweep, so thermal or power-limit drift *inside* a session
+  is visible too;
+- a **section → session** map, which `generate_summary.py` enforces.
+
+`generate_summary.py` **refuses to write the report** when stamped sections come
+from different sessions (exit 2, listing them). `--allow-mixed-sessions` emits a
+historical report that labels them instead. Fingerprints are compared on the
+fields that change a number — CPU, memory, kernel, governor/frequency limits, DIMM
+config, engine version — never on hostname, PID or timestamps.
+
+Two practical consequences:
+
+- After changing RAM timings or the CPU voltage/frequency curve, re-run the
+  **whole** sweep, competitors included. Re-running only BenoStreamDB produces a
+  table that cannot be read.
+- Compare versions by interleaving builds on the *current* state (A/B/A/B), not
+  by diffing a fresh run against stored artifacts from an older state.
+
+Calibration numbers are not results. They exist so a later reader can tell "this
+column moved because memory latency moved 12%" from "this column moved because
+the code changed".
 
 ---
 
@@ -215,6 +268,18 @@ previous dataset or device are never double-counted. The rollup uses
 The narrative report is [`benchmarks/results/BENCHMARK_REPORT.md`](../benchmarks/results/BENCHMARK_REPORT.md);
 `benchmarks/generate_summary.py` renders the summary tables.
 
+```bash
+python benchmarks/session_provenance.py verify          # exit 1 on mixed sessions
+python benchmarks/generate_summary.py                   # refuses on mixed sessions
+python benchmarks/generate_summary.py --allow-mixed-sessions   # historical report
+```
+
+The generator writes the machine-state fingerprint, the calibration envelope and
+a per-section session table into the report header, so a reader never has to
+guess which state a number came from. Artifacts produced before provenance
+stamping have no session: the report labels them accordingly and treats their
+mtime table as the only provenance.
+
 ---
 
 ## 9. How to read the numbers
@@ -234,6 +299,15 @@ The narrative report is [`benchmarks/results/BENCHMARK_REPORT.md`](../benchmarks
   scale: millions of vectors, large batch queries, dense/flat or IVF-PQ search.
 - **Overlay indexes trade build cost and storage for query speed and
   reconstructibility.** The report must state where we lose.
+- **Read the session, not just the section.** Before comparing two numbers, check
+  they share a session id in the report header. If they do not, the difference
+  includes a machine-state term and is not a code result. Calibration probes
+  quantify that term: a `random gather` or `triad` shift of more than ~5 % between
+  sessions is enough to explain a visible QPS delta on memory-bound workloads.
+- **A `powersave` governor is a confounder.** Check `governor` and the
+  `policy`/`hw` frequency range in the header before treating a small delta as
+  code. Pin the governor (and record it) for any run whose numbers will be
+  published.
 
 ---
 

@@ -11,12 +11,19 @@ And generates a comprehensive executive summary in benchmarks/results/BENCHMARK_
 
 from __future__ import annotations
 
+import argparse
 import glob
 import json
 import os
 import platform
 import re
+import sys
 import time
+
+try:
+    import session_provenance
+except ImportError:  # imported as `benchmarks.generate_summary`
+    from benchmarks import session_provenance  # type: ignore[no-redef]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
@@ -216,20 +223,117 @@ def _date_range(patterns):
     return lo if lo == hi else f"{lo} – {hi}"
 
 
-def generate_summary():
+def _session_header(ledger: dict, primary: str | None, mismatches: list[tuple[str, str]]) -> list[str]:
+    """Machine state, calibration and session-integrity lines for the report."""
+    lines: list[str] = []
+    sessions = ledger.get("sessions", {})
+    state = (sessions.get(primary, {}) or {}).get("fingerprint")
+
+    lines += ["## Machine state (part of the measurement)", ""]
+    if state:
+        lines.append(
+            f"Session `{primary}` — every stamped section below was measured on this "
+            "host in this state."
+        )
+        lines.append("")
+        lines += [f"- {entry}" for entry in session_provenance.describe_fingerprint(state)]
+    else:
+        lines.append(
+            "No session was recorded for these artifacts: they predate provenance "
+            "stamping, so comparability rests on the mtime table above. Re-run the "
+            "full sweep to produce an attributable report."
+        )
+    lines.append("")
+
+    calibrations = (sessions.get(primary, {}) or {}).get("calibrations", [])
+    lines += ["### Calibration (drift normalizers)", ""]
+    if calibrations:
+        rows = session_provenance.describe_calibration_pair(calibrations)
+        lines += ["| Probe | First | Last |", "|---|---|---|"]
+        lines += [f"| {name} | {before} | {after} |" for name, before, after in rows]
+        lines.append("")
+        lines.append(
+            f"Probes are cheap and machine-state sensitive, not engine benchmarks: "
+            f"they move when DIMM timings or CPU voltage/frequency limits change, "
+            f"which is how a future run's drift can be separated from a code change. "
+            f"{len(calibrations)} sample(s) taken across this sweep."
+        )
+    else:
+        lines.append(
+            "Not recorded. Calibration is captured by "
+            "`benchmarks/session_provenance.py capture --section <name>`."
+        )
+    lines.append("")
+
+    lines += ["### Session integrity", ""]
+    if primary is None:
+        lines.append(
+            "- No stamps: sections are compared by artifact mtime only. Treat the "
+            "numbers as a historical snapshot, not as a baseline for a new run."
+        )
+    elif mismatches:
+        lines.append(
+            "- **This table mixes machine states.** The following sections were "
+            "measured in a different session and must be re-measured before any "
+            "cross-run comparison:"
+        )
+        lines += [f"  - `{name}` (session `{session}`)" for name, session in mismatches]
+    else:
+        lines.append("- All stamped sections were measured in the same session.")
+    lines += [
+        "",
+        "- **Rule.** Numbers are comparable *within* one session. RAM timings, CPU "
+        "voltage/frequency limits and the kernel move every engine in the "
+        "comparison at once — competitor rows included — while the GPU section "
+        "does not move at all. So a partial re-run cannot be spliced into this "
+        "report: re-run the whole sweep, or leave it alone.",
+        "",
+    ]
+    return lines
+
+
+def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None = None) -> None:
     os.makedirs(RESULTS_DIR, exist_ok=True)
     report_path = os.path.join(RESULTS_DIR, "BENCHMARK_REPORT.md")
+
+    ledger = session_provenance.load_ledger(ledger_path)
+    primary, mismatches = session_provenance.verify(ledger)
+    if mismatches and not allow_mixed_sessions:
+        print(
+            "refusing to generate a report from sections measured in different "
+            "machine states:",
+            file=sys.stderr,
+        )
+        for name, session in mismatches:
+            print(f"  {name}: session {session}", file=sys.stderr)
+        print(
+            f"primary session: {primary}\n"
+            "Re-run the affected sections in one sitting, or pass "
+            "--allow-mixed-sessions to emit a historical report that labels them.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    engine_version = (
+        (ledger.get("sessions", {}).get(primary, {}) or {})
+        .get("fingerprint", {})
+        .get("engine_version")
+    ) or session_provenance._engine_version()
 
     sections = [
         "# BenoStreamDB Comprehensive Benchmark Report",
         "",
         f"- **Generated At**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}",
+        f"- **Engine version**: {engine_version or 'unknown'}",
         f"- **Platform**: {platform.platform()}",
         f"- **Python**: {platform.python_version()}",
+        f"- **Session**: {primary or 'unrecorded'}",
         "",
         "> **Read this first.** The sections were measured at different times. The",
         "> table below records each group's artifact mtimes; do not read the",
         "> generated-at timestamp as the measurement date for every section.",
+        "> Numbers are only comparable **within one machine state** — see "
+        "“Machine state” and “Session integrity” below.",
         "",
         "## Data provenance & scope",
         "",
@@ -242,6 +346,7 @@ def generate_summary():
         f"| §5, §7, §8 production / resilience / soak | 8–32 threads; 60 s soak | {_date_range([os.path.join(RESULTS_DIR, 'production_*')])} |",
         f"| §9 vector matrix | 20k vectors, 500 queries; competitors CPU-only | {_date_range([os.path.join(BASE_DIR, 'competitors', 'results', '*.json')])} |",
         "",
+        *_session_header(ledger, primary, mismatches),
         "**Scope and limitations**",
         "",
         "- Single host (AMD Ryzen 9 5900XT, 32 cores / 121 GB, 2× RTX 5070 Ti); no",
@@ -678,5 +783,29 @@ def generate_summary():
     print(f"Generated comprehensive report at {report_path}")
 
 
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build benchmarks/results/BENCHMARK_REPORT.md from the result artifacts."
+    )
+    parser.add_argument(
+        "--allow-mixed-sessions",
+        action="store_true",
+        help=(
+            "emit the report even when sections were measured in different machine "
+            "states (historical reports; the sections are labelled)"
+        ),
+    )
+    parser.add_argument(
+        "--ledger",
+        default=None,
+        help="session ledger path (default: benchmarks/results/session.json)",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    generate_summary()
+    arguments = _parse_args(sys.argv[1:])
+    generate_summary(
+        allow_mixed_sessions=arguments.allow_mixed_sessions,
+        ledger_path=arguments.ledger,
+    )

@@ -1,3 +1,29 @@
+## [Unreleased]
+
+### Added
+- **Benchmark sessions record the machine state** —
+  `benchmarks/session_provenance.py` fingerprints the host a sweep ran on (CPU
+  model/threads, DIMM speed and timings, governor, frequency driver and limits,
+  RAPL package limit, kernel, engine version) and samples three calibration
+  probes (random-gather latency, triad bandwidth, fixed fp64 matmul) once per
+  stamped section, so the first and last sample bracket the sweep and thermal or
+  power-limit drift inside a session is visible as well as between sessions.
+  `generate_summary.py` writes that fingerprint, the calibration envelope and a
+  per-section session table into the report header, and **refuses to emit a
+  report whose sections were measured in different sessions** (exit 2;
+  `--allow-mixed-sessions` produces a labelled historical report instead).
+  Reason: every number in the comparison is measured on one host, so RAM timings,
+  a CPU undervolt or a frequency-limit change move BenoStreamDB *and* every
+  competitor at once — and the discrete-GPU section not at all — which makes a
+  partial re-run unreadable. `docs/BENCHMARKING.md` gains the rule (compare only
+  within a session; re-run the whole sweep or leave it alone; compare versions by
+  interleaving builds on the current state) and a note that a `powersave`
+  governor is a confounder that must be pinned and recorded.
+- The committed benchmark report is regenerated from the current artifacts, so it
+  no longer disagrees with the JSON records it summarizes; its provenance table
+  now shows those artifacts were measured 2026-10-26, and its header states
+  explicitly that they predate stamping (no session recorded).
+
 ## [0.14.0] - 2026-10-27
 
 > **This is the developer-preview release.** 0.14.0 is the line we are calling the

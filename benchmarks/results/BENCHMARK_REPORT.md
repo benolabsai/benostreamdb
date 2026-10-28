@@ -1,12 +1,15 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-21 01:30:42 UTC
+- **Generated At**: 2026-10-28 10:29:32 UTC
+- **Engine version**: 0.14.0
 - **Platform**: Linux-7.0.0-38-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
+- **Session**: unrecorded
 
 > **Read this first.** The sections were measured at different times. The
 > table below records each group's artifact mtimes; do not read the
 > generated-at timestamp as the measurement date for every section.
+> Numbers are only comparable **within one machine state** — see “Machine state” and “Session integrity” below.
 
 ## Data provenance & scope
 
@@ -14,10 +17,24 @@
 |---|---|---|
 | §1b GPU cdist | 4 shapes + 1 dual-GPU split | 2026-10-21 |
 | §2 Graph | 10k–500k edges, CPU-only engines | 2026-10-11 |
-| §3 SQL, §6 filters | 200k–500k rows | 2026-10-11 |
-| §4 BEIR | 3.6k–8.7k documents | 2026-10-11 |
-| §5, §7, §8 production / resilience / soak | 8–32 threads; 60 s soak | 2026-10-11 |
-| §9 vector matrix | 20k vectors, 500 queries; competitors CPU-only | 2026-10-11 – 2026-10-21 |
+| §3 SQL, §6 filters | 200k–500k rows | 2026-10-26 |
+| §4 BEIR | 3.6k–8.7k documents | 2026-10-26 |
+| §5, §7, §8 production / resilience / soak | 8–32 threads; 60 s soak | 2026-10-26 |
+| §9 vector matrix | 20k vectors, 500 queries; competitors CPU-only | 2026-10-11 – 2026-10-26 |
+
+## Machine state (part of the measurement)
+
+No session was recorded for these artifacts: they predate provenance stamping, so comparability rests on the mtime table above. Re-run the full sweep to produce an attributable report.
+
+### Calibration (drift normalizers)
+
+Not recorded. Calibration is captured by `benchmarks/session_provenance.py capture --section <name>`.
+
+### Session integrity
+
+- No stamps: sections are compared by artifact mtime only. Treat the numbers as a historical snapshot, not as a baseline for a new run.
+
+- **Rule.** Numbers are comparable *within* one session. RAM timings, CPU voltage/frequency limits and the kernel move every engine in the comparison at once — competitor rows included — while the GPU section does not move at all. So a partial re-run cannot be spliced into this report: re-run the whole sweep, or leave it alone.
 
 **Scope and limitations**
 
@@ -118,49 +135,49 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Engine | Layer | Device | Load (s) | Execution (s) | Result size |
 |---|---|---|---|---|---|
-| **benostreamdb** | embedded (in-process Rust) | cpu | 4.413 | 0.096 | 291629 |
-| memgraph | memgraph MAGE (native engine) | cpu | 5.665 | 0.201 | 291629 |
-| neo4j | neo4j GDS (native JVM) | cpu | 12.087 | 0.296 | 291629 |
+| **benostreamdb** | embedded (in-process Rust) | cpu | 1.81 | 0.122 | 291629 |
+| memgraph | memgraph MAGE (native engine) | cpu | 6.432 | 0.253 | 291629 |
+| neo4j | neo4j GDS (native JVM) | cpu | 17.533 | 0.473 | 291629 |
 | kuzu | embedded (in-process C++) | cpu | 1026.579 | 0.511 | 291629 |
-| networkx | embedded (in-process Python) | cpu | - | 1.135 | 291629 |
+| networkx | embedded (in-process Python) | cpu | - | 0.948 | 291629 |
 
 ### Graph — `snap-roadnet-ca_500000` (pagerank)
 
 | Engine | Layer | Device | Load (s) | Execution (s) | Result size |
 |---|---|---|---|---|---|
-| memgraph | memgraph MAGE (native engine) | cpu | 5.294 | 0.153 | 183395 |
-| **benostreamdb** | embedded (in-process Rust) | cpu | 2.124 | 0.215 | 183395 |
-| neo4j | neo4j GDS (native JVM) | cpu | 9.843 | 0.3 | 183395 |
+| memgraph | memgraph MAGE (native engine) | cpu | 5.809 | 0.191 | 183395 |
+| neo4j | neo4j GDS (native JVM) | cpu | 10.768 | 0.212 | 183395 |
+| **benostreamdb** | embedded (in-process Rust) | cpu | 1.805 | 0.219 | 183395 |
 | kuzu | embedded (in-process C++) | cpu | 782.472 | 0.348 | 183395 |
-| networkx | embedded (in-process Python) | cpu | - | 0.571 | 183395 |
+| networkx | embedded (in-process Python) | cpu | - | 0.461 | 183395 |
 
 ### Graph — `snap-web-google_500000` (pagerank)
 
 | Engine | Layer | Device | Load (s) | Execution (s) | Result size |
 |---|---|---|---|---|---|
-| **benostreamdb** | embedded (in-process Rust) | cpu | 2.147 | 0.123 | 158508 |
-| memgraph | memgraph MAGE (native engine) | cpu | 5.617 | 0.13 | 158508 |
+| **benostreamdb** | embedded (in-process Rust) | cpu | 1.837 | 0.161 | 158508 |
+| memgraph | memgraph MAGE (native engine) | cpu | 5.811 | 0.168 | 158508 |
+| neo4j | neo4j GDS (native JVM) | cpu | 11.229 | 0.173 | 158508 |
 | kuzu | embedded (in-process C++) | cpu | 778.778 | 0.256 | 158508 |
-| neo4j | neo4j GDS (native JVM) | cpu | 11.48 | 0.277 | 158508 |
-| networkx | embedded (in-process Python) | cpu | - | 0.806 | 158508 |
+| networkx | embedded (in-process Python) | cpu | - | 0.684 | 158508 |
 
 ### Graph — `synth_10000_50000` (pagerank)
 
 | Engine | Layer | Device | Load (s) | Execution (s) | Result size |
 |---|---|---|---|---|---|
-| memgraph | memgraph MAGE (native engine) | cpu | 165.892 | 0.011 | 10000 |
-| **benostreamdb** | embedded (in-process Rust) | cpu | 0.224 | 0.017 | 10000 |
-| neo4j | neo4j GDS (native JVM) | cpu | 1.382 | 0.073 | 10000 |
-| kuzu | embedded (in-process C++) | cpu | 9.692 | 0.091 | 10000 |
+| **benostreamdb** | embedded (in-process Rust) | cpu | 0.181 | 0.023 | 10000 |
+| memgraph | memgraph MAGE (native engine) | cpu | 0.633 | 0.024 | 10000 |
+| neo4j | neo4j GDS (native JVM) | cpu | 1.278 | 0.061 | 10000 |
+| kuzu | embedded (in-process C++) | cpu | 12.478 | 0.112 | 10000 |
 | cugraph | embedded (in-process GPU) | cpu | 0.142 | 0.124 | 10000 |
-| networkx | embedded (in-process Python) | cpu | - | 0.674 | 10000 |
+| networkx | embedded (in-process Python) | cpu | - | 0.136 | 10000 |
 
 ### Graph — `synth_10000_50000` (shortest_path)
 
 | Engine | Layer | Device | Load (s) | Execution (s) | Result size |
 |---|---|---|---|---|---|
-| networkx | embedded (in-process Python) | cpu | - | 0.016 | 10000 |
-| neo4j | neo4j GDS (native JVM) | cpu | 1.992 | 0.091 | 1 |
+| networkx | embedded (in-process Python) | cpu | - | 0.01 | 10000 |
+| neo4j | neo4j GDS (native JVM) | cpu | 1.292 | 0.048 | 1 |
 
 
 ## 3. SQL OLAP Performance (ClickBench Q0–Q9: BenoStreamDB vs DuckDB vs DataFusion)
@@ -177,24 +194,24 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Query | benostreamdb | duckdb | datafusion |
 |---| --- | --- | --- |
-| **Q0 (count)** | 2.1 ms | 0.3 ms | 0.6 ms |
-| **Q1 (filter count)** | 6.7 ms | 2.8 ms | 2.6 ms |
-| **Q2 (multi-agg)** | 9.8 ms | 3.4 ms | 3.2 ms |
-| **Q3 (avg int)** | 4.4 ms | 3.8 ms | 3.4 ms |
-| **Q4 (distinct user)** | 11.5 ms | 27.6 ms | 10.1 ms |
-| **Q5 (distinct phrase)** | 14.9 ms | 5.0 ms | 4.3 ms |
-| **Q6 (min/max date)** | 5.4 ms | 0.3 ms | 0.5 ms |
-| **Q7 (group by agg)** | 6.8 ms | 3.0 ms | 3.6 ms |
-| **Q8 (group by distinct)** | 18.1 ms | 33.6 ms | 14.5 ms |
-| **Q9 (string filter group)** | 24.9 ms | 57.2 ms | 16.7 ms |
+| **Q0 (count)** | 2.5 ms | 0.6 ms | 0.8 ms |
+| **Q1 (filter count)** | 8.2 ms | 3.8 ms | 3.3 ms |
+| **Q2 (multi-agg)** | 10.7 ms | 4.1 ms | 4.0 ms |
+| **Q3 (avg int)** | 5.5 ms | 5.1 ms | 4.8 ms |
+| **Q4 (distinct user)** | 13.4 ms | 34.7 ms | 10.1 ms |
+| **Q5 (distinct phrase)** | 18.2 ms | 6.2 ms | 3.9 ms |
+| **Q6 (min/max date)** | 6.7 ms | 0.5 ms | 0.6 ms |
+| **Q7 (group by agg)** | 8.0 ms | 4.5 ms | 4.4 ms |
+| **Q8 (group by distinct)** | 19.5 ms | 42.3 ms | 16.2 ms |
+| **Q9 (string filter group)** | 27.1 ms | 52.4 ms | 18.5 ms |
 
 ### Ingestion & Total Execution Time
 
 | Engine | Ingestion (s) | Total Warm SQL Time (ms) | Status |
 |---|---|---|---|
-| benostreamdb | 0.21s | 104.5 ms | ✅ Pass |
-| duckdb | Direct Parquet Scan | 137.2 ms | ✅ Pass |
-| datafusion | Direct Parquet Scan | 59.4 ms | ✅ Pass |
+| benostreamdb | 0.24s | 119.7 ms | ✅ Pass |
+| duckdb | Direct Parquet Scan | 154.3 ms | ✅ Pass |
+| datafusion | Direct Parquet Scan | 66.4 ms | ✅ Pass |
 
 
 ## 4. Lexical & Hybrid Search Performance (BEIR SciFact: BM25 vs Tantivy & Hybrid RRF)
@@ -203,17 +220,18 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Engine | Index Precision | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| tantivy | - | cpu | lexical_bm25 | arguana | 0.67 | 0.3226 | 0.2137 | 381.6 | 2.486 | 5.285 | 0.202 | 10.44 |
-| opensearch | - | cpu | lexical_bm25 | arguana | 0.7461 | 0.3557 | 0.233 | 136.4 | 6.432 | 22.422 | 0.852 | 7.9 |
-| **benostreamdb** | - | cpu | lexical_bm25 | arguana | 0.6558 | 0.3086 | 0.1995 | 58.0 | 16.525 | 29.505 | 0.459 | 4.08 |
-| tantivy | - | cpu | lexical_bm25 | nfcorpus | 0.1452 | 0.3001 | 0.5096 | 8180.4 | 0.071 | 0.344 | 0.137 | 6.21 |
-| opensearch | - | cpu | lexical_bm25 | nfcorpus | 0.1532 | 0.3215 | 0.5187 | 1495.3 | 0.687 | 0.906 | 0.522 | 4.85 |
-| **benostreamdb** | - | cpu | lexical_bm25 | nfcorpus | 0.1491 | 0.3069 | 0.5151 | 1059.9 | 0.706 | 1.654 | 0.282 | 2.46 |
-| tantivy | - | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 3750.4 | 0.218 | 0.497 | 0.189 | 8.34 |
-| opensearch | - | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 1218.2 | 0.805 | 1.134 | 0.661 | 6.62 |
-| **benostreamdb** | - | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 422.6 | 2.239 | 3.94 | 0.364 | 3.31 |
-| lancedb | f32 | cpu | hybrid_rrf | scifact | 0.8201 | 0.6626 | 0.6186 | 195.9 | 4.744 | 5.956 | 0.865 | 14.34 |
-| **benostreamdb** | f32 | cpu | hybrid_rrf | scifact | 0.8493 | 0.69 | 0.6437 | 178.2 | 5.482 | 7.363 | 0.547 | 11.68 |
+| tantivy | - | cpu | lexical_bm25 | arguana | 0.67 | 0.3226 | 0.2137 | 281.2 | 3.388 | 7.113 | 0.138 | 10.45 |
+| opensearch | - | cpu | lexical_bm25 | arguana | 0.7461 | 0.3557 | 0.233 | 100.9 | 8.665 | 32.391 | 1.439 | 7.99 |
+| **benostreamdb** | - | cpu | lexical_bm25 | arguana | 0.6558 | 0.3086 | 0.1995 | 43.4 | 22.215 | 39.419 | 0.562 | 4.08 |
+| tantivy | - | cpu | lexical_bm25 | nfcorpus | 0.1438 | 0.2992 | 0.5088 | 8825.0 | 0.065 | 0.222 | 0.083 | 6.23 |
+| opensearch | - | cpu | lexical_bm25 | nfcorpus | 0.1532 | 0.3215 | 0.5187 | 801.1 | 1.213 | 1.99 | 0.74 | 4.85 |
+| **benostreamdb** | - | cpu | lexical_bm25 | nfcorpus | 0.1491 | 0.3069 | 0.5151 | 756.4 | 1.008 | 2.294 | 0.339 | 2.46 |
+| tantivy | - | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 1988.1 | 0.402 | 0.937 | 0.096 | 8.35 |
+| opensearch | - | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 734.4 | 1.316 | 2.09 | 0.953 | 6.62 |
+| **benostreamdb** | - | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 301.7 | 3.058 | 5.812 | 0.469 | 3.31 |
+| lancedb | f32 | cpu | hybrid_rrf | scifact | 0.8281 | 0.6699 | 0.6245 | 180.7 | 5.227 | 6.825 | 0.972 | 14.41 |
+| **benostreamdb** | f32 | cuda | hybrid_rrf | scifact | 0.836 | 0.6734 | 0.6261 | 137.7 | 7.121 | 9.303 | 1.085 | 11.8 |
+| **benostreamdb** | f32 | cpu | hybrid_rrf | scifact | 0.8343 | 0.6693 | 0.6222 | 131.0 | 7.445 | 9.906 | 1.164 | 11.8 |
 
 ### Results from `arguana_bm25_competitors_cpu.md`
 
@@ -224,15 +242,15 @@ from the per-engine JSON records). This page describes how to read it.
 - **Evaluated Queries**: 1,406
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
-- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
-- **GPUs**: none (CPU-only host)
+- **Resource Envelope**: unconstrained (host)
+- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB, NVIDIA GeForce RTX 5070 Ti, 16303 MiB
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **tantivy** | `cpu` | ✅ Pass | 0.20s | 10.4 MB | **381.6** | **2.49 ms** | 5.28 ms | 0.6700 | 0.3226 |
-| **opensearch** | `cpu` | ✅ Pass | 0.85s | 7.9 MB | **136.4** | **6.43 ms** | 22.42 ms | 0.7461 | 0.3557 |
-| **benostreamdb** | `cpu` | ✅ Pass | 0.46s | 4.1 MB | **58.0** | **16.53 ms** | 29.50 ms | 0.6558 | 0.3086 |
+| **tantivy** | `cpu` | ✅ Pass | 0.14s | 10.4 MB | **281.2** | **3.39 ms** | 7.11 ms | 0.6700 | 0.3226 |
+| **opensearch** | `cpu` | ✅ Pass | 1.44s | 8.0 MB | **100.9** | **8.67 ms** | 32.39 ms | 0.7461 | 0.3557 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 4.1 MB | **43.4** | **22.22 ms** | 39.42 ms | 0.6558 | 0.3086 |
 
 ### Differential Oracle & Result Agreement
 
@@ -249,15 +267,15 @@ from the per-engine JSON records). This page describes how to read it.
 - **Evaluated Queries**: 323
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
-- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
-- **GPUs**: none (CPU-only host)
+- **Resource Envelope**: unconstrained (host)
+- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB, NVIDIA GeForce RTX 5070 Ti, 16303 MiB
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **tantivy** | `cpu` | ✅ Pass | 0.14s | 6.2 MB | **8180.4** | **0.07 ms** | 0.34 ms | 0.1452 | 0.3001 |
-| **opensearch** | `cpu` | ✅ Pass | 0.52s | 4.8 MB | **1495.3** | **0.69 ms** | 0.91 ms | 0.1532 | 0.3215 |
-| **benostreamdb** | `cpu` | ✅ Pass | 0.28s | 2.5 MB | **1059.9** | **0.71 ms** | 1.65 ms | 0.1491 | 0.3069 |
+| **tantivy** | `cpu` | ✅ Pass | 0.08s | 6.2 MB | **8825.0** | **0.07 ms** | 0.22 ms | 0.1438 | 0.2992 |
+| **opensearch** | `cpu` | ✅ Pass | 0.74s | 4.8 MB | **801.1** | **1.21 ms** | 1.99 ms | 0.1532 | 0.3215 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.34s | 2.5 MB | **756.4** | **1.01 ms** | 2.29 ms | 0.1491 | 0.3069 |
 
 ### Differential Oracle & Result Agreement
 
@@ -274,15 +292,15 @@ from the per-engine JSON records). This page describes how to read it.
 - **Evaluated Queries**: 300
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
-- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
-- **GPUs**: none (CPU-only host)
+- **Resource Envelope**: unconstrained (host)
+- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB, NVIDIA GeForce RTX 5070 Ti, 16303 MiB
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **tantivy** | `cpu` | ✅ Pass | 0.19s | 8.3 MB | **3750.4** | **0.22 ms** | 0.50 ms | 0.7812 | 0.6517 |
-| **opensearch** | `cpu` | ✅ Pass | 0.66s | 6.6 MB | **1218.2** | **0.81 ms** | 1.13 ms | 0.8196 | 0.6821 |
-| **benostreamdb** | `cpu` | ✅ Pass | 0.36s | 3.3 MB | **422.6** | **2.24 ms** | 3.94 ms | 0.7909 | 0.6617 |
+| **tantivy** | `cpu` | ✅ Pass | 0.10s | 8.3 MB | **1988.1** | **0.40 ms** | 0.94 ms | 0.7812 | 0.6517 |
+| **opensearch** | `cpu` | ✅ Pass | 0.95s | 6.6 MB | **734.4** | **1.32 ms** | 2.09 ms | 0.8196 | 0.6821 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.47s | 3.3 MB | **301.7** | **3.06 ms** | 5.81 ms | 0.7909 | 0.6617 |
 
 ### Differential Oracle & Result Agreement
 
@@ -302,29 +320,29 @@ from the per-engine JSON records). This page describes how to read it.
 - **Fusion Algorithm**: Reciprocal Rank Fusion (RRF, `k=60`)
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
-- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
-- **GPUs**: none (CPU-only host)
+- **Resource Envelope**: unconstrained (host)
+- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB, NVIDIA GeForce RTX 5070 Ti, 16303 MiB
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 ### Competitor Comparison (Hybrid Dense + Sparse RRF)
 
 | Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.55s | 11.7 MB | **178.2** | **5.48 ms** | 7.36 ms | **0.8493** | **0.6900** | 0.6437 |
-| **lancedb** | `cpu` | ✅ Pass | 0.86s | 14.3 MB | **195.9** | **4.74 ms** | 5.96 ms | **0.8201** | **0.6626** | 0.6186 |
+| **benostreamdb** | `cpu` | ✅ Pass | 1.16s | 11.8 MB | **131.0** | **7.45 ms** | 9.91 ms | **0.8343** | **0.6693** | 0.6222 |
+| **lancedb** | `cpu` | ✅ Pass | 0.97s | 14.4 MB | **180.7** | **5.23 ms** | 6.82 ms | **0.8281** | **0.6699** | 0.6245 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **47.6%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- **Top-10 Jaccard Overlap**: **46.6%** between BenoStreamDB Hybrid and LanceDB Hybrid.
 - High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
 
 ### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Dense (Vector Only)** | 0.0 MB | 1132.4 | 0.76 ms | 0.7767 | 0.6383 | 0.5982 |
-| **Sparse (BM25 Only)** | 11.7 MB | 417.3 | 2.27 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Hybrid (Dense + BM25 RRF)** | 11.7 MB | 178.2 | 5.48 ms | **0.8493** | **0.6900** | **0.6437** |
+| **Dense (Vector Only)** | 0.0 MB | 928.5 | 0.92 ms | 0.7317 | 0.6057 | 0.5694 |
+| **Sparse (BM25 Only)** | 11.8 MB | 305.1 | 3.14 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Hybrid (Dense + BM25 RRF)** | 11.8 MB | 131.0 | 7.45 ms | **0.8343** | **0.6693** | **0.6222** |
 
 
 ## 5. Production Workload & Concurrency Performance
@@ -334,16 +352,16 @@ from the per-engine JSON records). This page describes how to read it.
 - **Engine**: BenoStreamDB
 - **Host**: x86_64 (Linux)
 - **Workload**: Concurrent ANN Vector Queries (HNSW-TQ8, Top-10)
-- **Queries per Concurrency Tier**: 1,000
+- **Queries per Concurrency Tier**: 500
 
 | Concurrency (Threads) | Throughput (QPS) | Scaling Speedup | p50 Latency | p90 Latency | p99 Latency |
 |---|---|---|---|---|---|
-| **1** | **1132.2** | **1.00x** | 0.85 ms | 0.96 ms | 1.22 ms |
-| **2** | **2108.0** | **1.86x** | 0.90 ms | 1.06 ms | 1.30 ms |
-| **4** | **2792.7** | **2.47x** | 1.37 ms | 1.71 ms | 2.03 ms |
-| **8** | **2512.3** | **2.22x** | 3.03 ms | 3.98 ms | 5.08 ms |
-| **16** | **2318.6** | **2.05x** | 4.38 ms | 7.76 ms | 10.77 ms |
-| **32** | **2059.3** | **1.82x** | 4.59 ms | 11.02 ms | 19.62 ms |
+| **1** | **909.9** | **1.00x** | 1.05 ms | 1.17 ms | 1.50 ms |
+| **2** | **1725.4** | **1.90x** | 1.09 ms | 1.31 ms | 1.62 ms |
+| **4** | **2385.7** | **2.62x** | 1.60 ms | 1.94 ms | 2.42 ms |
+| **8** | **2222.0** | **2.44x** | 3.40 ms | 4.31 ms | 6.26 ms |
+| **16** | **1996.1** | **2.19x** | 7.21 ms | 10.01 ms | 13.05 ms |
+| **32** | **1838.3** | **2.02x** | 4.49 ms | 7.37 ms | 13.49 ms |
 
 # Production Crash Injection & Recovery Benchmark
 
@@ -354,17 +372,17 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Injection Boundary | Operation Result | Rows Visible | Recovery Time (ms) | Atomicity | Zero Data Loss | Status |
 |---|---|---|---|---|---|---|
-| `wal_append` | Clean Rollback | 1000 | **1.82 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `wal_flush` | WAL Replayed | 1500 | **1.42 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `wal_truncate` | WAL Replayed | 1500 | **3.66 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `data_upload` | WAL Replayed | 1500 | **1.41 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `index_upload` | Committed | 1500 | **3.32 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `manifest_commit` | WAL Replayed | 1500 | **1.32 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `manifest_visible` | WAL Replayed | 1500 | **3.47 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `compaction_start` | Committed | 1500 | **3.30 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `compaction_manifest_swap` | Committed | 1500 | **3.23 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `vacuum_start` | Committed | 1500 | **3.54 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
-| `vacuum_delete` | Committed | 1500 | **3.29 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `wal_append` | Clean Rollback | 1000 | **0.70 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `wal_flush` | WAL Replayed | 1500 | **0.59 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `wal_truncate` | WAL Replayed | 1500 | **1.17 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `data_upload` | WAL Replayed | 1500 | **0.55 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `index_upload` | Committed | 1500 | **0.86 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `manifest_commit` | WAL Replayed | 1500 | **0.55 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `manifest_visible` | WAL Replayed | 1500 | **0.89 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `compaction_start` | Committed | 1500 | **0.97 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `compaction_manifest_swap` | Committed | 1500 | **0.87 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `vacuum_start` | Committed | 1500 | **0.94 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
+| `vacuum_delete` | Committed | 1500 | **0.88 ms** | ✅ Yes | ✅ Yes | ✅ PASS |
 
 ### Recovery Invariants Verified
 - **Atomicity**: Re-opened table always observes either the pre-crash snapshot or the post-commit snapshot, never a torn state.
@@ -379,11 +397,11 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Scenario | Injected Throttling | Write p50 | Write p99 | Δ Write p99 | Read p50 | Read p99 | Δ Read p99 | Harness 503 Retries | Engine OCC Retries | Row Content Integrity | Status |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| **T1 (Quiescent Baseline)** | None (Quiescent) | **6.09 ms** | 7.81 ms | **+0 ms** | **15.83 ms** | 23.53 ms | **+0 ms** | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **T2 (Moderate Throttling 10ms)** | 10ms delay | **85.27 ms** | 87.49 ms | **+79.68 ms** | **15.88 ms** | 633.26 ms | **+609.73 ms** | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **T3 (Severe Throttling 25ms)** | 25ms delay | **190.79 ms** | 192.58 ms | **+184.77 ms** | **11.94 ms** | 1142.30 ms | **+1118.77 ms** | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **T4 (Transient 503 Rejections 20%)** | 20% 503 SlowDown | **6.02 ms** | 23.47 ms | **+15.66 ms** | **16.39 ms** | 22.30 ms | **-1.23 ms** | 12 | 0 | ✅ 100% Match | ✅ PASS |
-| **T5 (Chaos: 15ms Delay + 10% 503)** | 15ms delay + 10% 503s | **120.70 ms** | 185.49 ms | **+177.68 ms** | **12.53 ms** | 713.31 ms | **+689.78 ms** | 4 | 0 | ✅ 100% Match | ✅ PASS |
+| **T1 (Quiescent Baseline)** | None (Quiescent) | **1.19 ms** | 2.38 ms | **+0 ms** | **1.82 ms** | 5.86 ms | **+0 ms** | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **T2 (Moderate Throttling 10ms)** | 10ms delay | **68.15 ms** | 78.81 ms | **+76.43 ms** | **1.85 ms** | 115.52 ms | **+109.66 ms** | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **T3 (Severe Throttling 25ms)** | 25ms delay | **158.27 ms** | 183.68 ms | **+181.3 ms** | **1.50 ms** | 263.21 ms | **+257.35 ms** | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **T4 (Transient 503 Rejections 20%)** | 20% 503 SlowDown | **1.25 ms** | 13.82 ms | **+11.44 ms** | **1.76 ms** | 2.78 ms | **-3.08 ms** | 12 | 0 | ✅ 100% Match | ✅ PASS |
+| **T5 (Chaos: 15ms Delay + 10% 503)** | 15ms delay + 10% 503s | **98.21 ms** | 158.94 ms | **+156.56 ms** | **1.53 ms** | 163.69 ms | **+157.83 ms** | 4 | 0 | ✅ 100% Match | ✅ PASS |
 
 ### Resilience Invariants & Methodology Notes
 1. **Row Content Verification**: Unlike superficial row-count checks, every run extracts the full primary key space (`read_all_ids`) and validates 100% set equivalence ($0..N-1$) with zero missing keys and zero duplicates.
@@ -397,11 +415,11 @@ from the per-engine JSON records). This page describes how to read it.
 |---|---|
 | engine | benostreamdb |
 | workload | maintenance_saturation |
-| concurrency | 8 |
-| baseline_p99_ms | 1361.68 |
-| maintenance_p99_ms | 1245.83 |
-| inflation_factor | 0.91 |
-| queries_during_compaction | 199 |
+| concurrency | 4 |
+| baseline_p99_ms | 968.04 |
+| maintenance_p99_ms | 872.12 |
+| inflation_factor | 0.9 |
+| queries_during_compaction | 153 |
 
 # Multi-Writer Concurrency Correctness Benchmark (§7.7)
 
@@ -411,13 +429,13 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Scenario | Concurrent Threads | Total Ops | Throughput (Ops/sec) | Duration (ms) | Expected vs Actual Rows | Lost Rows | Duplicates | Torn Reads | Row Content Integrity | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **C1.2 (Concurrent Writers: 2)** | 2 | 20 | **167.3** | 119.54 ms | 101 / 101 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **C1.4 (Concurrent Writers: 4)** | 4 | 40 | **155.5** | 257.24 ms | 201 / 201 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **C1.8 (Concurrent Writers: 8)** | 8 | 80 | **144.8** | 552.54 ms | 401 / 401 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **C1.16 (Concurrent Writers: 16)** | 16 | 160 | **98.0** | 1632.10 ms | 801 / 801 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **C2 (Inserts + Concurrent Compaction)** | 9 | 80 | **73.9** | 1082.20 ms | 401 / 401 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **C3 (Inserts + Position Deletes)** | 8 | 80 | **67.0** | 1193.59 ms | 337 / 337 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
-| **C4 (Readers + Writers Isolation)** | 8 | 160 | **235.6** | 679.11 ms | 410 / 410 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **C1.2 (Concurrent Writers: 2)** | 2 | 20 | **806.2** | 24.81 ms | 101 / 101 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **C1.4 (Concurrent Writers: 4)** | 4 | 40 | **629.6** | 63.53 ms | 201 / 201 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **C1.8 (Concurrent Writers: 8)** | 8 | 80 | **501.3** | 159.57 ms | 401 / 401 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **C1.16 (Concurrent Writers: 16)** | 16 | 160 | **657.3** | 243.43 ms | 801 / 801 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **C2 (Inserts + Concurrent Compaction)** | 9 | 80 | **533.3** | 150.02 ms | 401 / 401 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **C3 (Inserts + Position Deletes)** | 8 | 80 | **241.6** | 331.19 ms | 337 / 337 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
+| **C4 (Readers + Writers Isolation)** | 8 | 160 | **1194.8** | 133.91 ms | 410 / 410 | 0 | 0 | 0 | ✅ 100% Match | ✅ PASS |
 
 ### Concurrency Invariants Verified
 - **Row Content & Key Integrity**: Unlike superficial row-count checks, every scenario reads the full primary key space and asserts 100% mathematical set equivalence against the expected set of active keys with zero lost keys, zero duplicate keys, and zero resurrected deleted keys.
@@ -433,20 +451,20 @@ from the per-engine JSON records). This page describes how to read it.
 - **Competitor Oracle**: DuckDB (in-process analytical SQL)
 - **Dataset**: ClickBench schema with 200,000 rows (multi-column mixed types)
 - **Host**: x86_64 (Linux)
-- **Measured DataFusion Session & Planning Overhead**: **0.60 ms** per query
+- **Measured DataFusion Session & Planning Overhead**: **0.91 ms** per query
 
 | Filter Test Case | Selectivity | BenoStreamDB Total | Session / Plan Overhead | Pure Compute / Scan | DuckDB p50 | Differential Oracle Match | Status |
 |---|---|---|---|---|---|---|---|
-| **F1 (Ultra-Selective 0.01%)** | 0.0% | **7.60 ms** | 0.60 ms | **7.00 ms** | 1.69 ms | ✅ 100% Agreement | ✅ PASS |
-| **F2 (Moderate Filter 5%)** | 4.98% | **7.99 ms** | 0.60 ms | **7.39 ms** | 1.68 ms | ✅ 100% Agreement | ✅ PASS |
-| **F3 (Pathological Low-Selectivity 99.5%)** | 100.0% | **6.46 ms** | 0.60 ms | **5.86 ms** | 0.91 ms | ✅ 100% Agreement | ✅ PASS |
-| **F4 (High-Cardinality IN List 50 items)** | 15.82% | **2.93 ms** | 0.60 ms | **2.33 ms** | 1.47 ms | ✅ 100% Agreement | ✅ PASS |
-| **F5 (Compound Negation & Range)** | 8.33% | **7.10 ms** | 0.60 ms | **6.50 ms** | 1.15 ms | ✅ 100% Agreement | ✅ PASS |
-| **F6 (Prefix String Filter)** | 16.7% | **4.76 ms** | 0.60 ms | **4.16 ms** | 0.89 ms | ✅ 100% Agreement | ✅ PASS |
-| **F7 (Unanchored Substring Filter)** | 14.32% | **5.18 ms** | 0.60 ms | **4.58 ms** | 0.83 ms | ✅ 100% Agreement | ✅ PASS |
+| **F1 (Ultra-Selective 0.01%)** | 0.0% | **10.67 ms** | 0.91 ms | **9.76 ms** | 2.12 ms | ✅ 100% Agreement | ✅ PASS |
+| **F2 (Moderate Filter 5%)** | 4.98% | **10.41 ms** | 0.91 ms | **9.50 ms** | 2.48 ms | ✅ 100% Agreement | ✅ PASS |
+| **F3 (Pathological Low-Selectivity 99.5%)** | 100.0% | **8.65 ms** | 0.91 ms | **7.74 ms** | 1.06 ms | ✅ 100% Agreement | ✅ PASS |
+| **F4 (High-Cardinality IN List 50 items)** | 15.82% | **4.05 ms** | 0.91 ms | **3.14 ms** | 2.37 ms | ✅ 100% Agreement | ✅ PASS |
+| **F5 (Compound Negation & Range)** | 8.33% | **10.93 ms** | 0.91 ms | **10.02 ms** | 1.60 ms | ✅ 100% Agreement | ✅ PASS |
+| **F6 (Prefix String Filter)** | 16.7% | **7.02 ms** | 0.91 ms | **6.11 ms** | 1.11 ms | ✅ 100% Agreement | ✅ PASS |
+| **F7 (Unanchored Substring Filter)** | 14.32% | **7.20 ms** | 0.91 ms | **6.28 ms** | 1.07 ms | ✅ 100% Agreement | ✅ PASS |
 
 ### DataFusion Execution & Overhead Analysis
-1. **Per-Query Session Overhead (0.60 ms)**: In the current Python API (`table.sql()`), each query instantiates a new DataFusion `SessionContext` and registers all standard scalar/aggregate functions, vector operators, and graph UDFs from scratch before planning begins.
+1. **Per-Query Session Overhead (0.91 ms)**: In the current Python API (`table.sql()`), each query instantiates a new DataFusion `SessionContext` and registers all standard scalar/aggregate functions, vector operators, and graph UDFs from scratch before planning begins.
 2. **Morsel Execution vs Async Channels**: DuckDB executes queries synchronously using C++ morsel work-stealing, whereas DataFusion routes batches across 32 async Tokio channels (`RoundRobinBatch(32)`), introducing channel serialization overhead on sub-million row tables.
 3. **Differential Oracle Invariance**: Across all selective, low-selectivity (99.5%), high-cardinality `IN` lists (50 items), and string wildcards, BenoStreamDB achieves 100% mathematical equality against DuckDB with no pathological performance cliff.
 
@@ -462,14 +480,14 @@ from the per-engine JSON records). This page describes how to read it.
 ### 1. Graph Degree Skew (Power-Law / Scale-Free Network)
 
 - **Dataset**: Scale-free network (20,000 nodes, 99,975 edges, max node degree = 667)
-- **Global PageRank (20 iterations)**: **16.43 ms**
+- **Global PageRank (20 iterations)**: **23.83 ms**
 
 | Degree Stratum | Avg Degree | 2-Hop Subgraph p50 | 2-Hop Subgraph p99 | Expanded Edges | Shortest Path p50 | Shortest Path p99 |
 |---|---|---|---|---|---|---|
-| **Low Degree (p25)** | 5.0 | **33.93 ms** | 42.60 ms | 239.0 | 0.05 ms | 2.48 ms |
-| **Median Degree (p50)** | 6.5 | **33.03 ms** | 36.40 ms | 347.0 | 0.05 ms | 0.07 ms |
-| **High Degree (p90)** | 10.6 | **34.15 ms** | 42.15 ms | 564.0 | 0.07 ms | 1.14 ms |
-| **Supernode Hub (p99+)** | 92.9 | **34.06 ms** | 38.79 ms | 5,676.0 | 2.51 ms | 4.44 ms |
+| **Low Degree (p25)** | 5.0 | **40.62 ms** | 49.84 ms | 239.0 | 0.06 ms | 2.03 ms |
+| **Median Degree (p50)** | 6.5 | **38.86 ms** | 43.05 ms | 347.0 | 0.06 ms | 0.09 ms |
+| **High Degree (p90)** | 10.6 | **40.27 ms** | 47.14 ms | 564.0 | 0.09 ms | 1.40 ms |
+| **Supernode Hub (p99+)** | 92.9 | **39.72 ms** | 44.59 ms | 5,676.0 | 3.43 ms | 6.18 ms |
 
 ### 2. Relational Filter Skew (Zipfian 80/20 Hot-Key Workload)
 
@@ -478,9 +496,9 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Query Pattern | Selectivity / Match Density | p50 Latency | p90 Latency | p99 Latency | Tail Inflation (p99/p50) | Status |
 |---|---|---|---|---|---|---|
-| **Hot-Key Point Filter** | Dense (Heavy Aggregation) | **5.30 ms** | - | 6.73 ms | 1.27x | ✅ PASS |
-| **Cold-Key Point Filter** | Sparse (Pruned Scans) | **4.57 ms** | - | 5.53 ms | 1.21x | ✅ PASS |
-| **Production Workload Mix (80/20)** | 80% Hot / 20% Cold | **4.91 ms** | 5.23 ms | **5.58 ms** | **1.14x** | ✅ PASS |
+| **Hot-Key Point Filter** | Dense (Heavy Aggregation) | **6.64 ms** | - | 9.16 ms | 1.38x | ✅ PASS |
+| **Cold-Key Point Filter** | Sparse (Pruned Scans) | **5.90 ms** | - | 6.63 ms | 1.12x | ✅ PASS |
+| **Production Workload Mix (80/20)** | 80% Hot / 20% Cold | **6.64 ms** | 7.11 ms | **8.15 ms** | **1.23x** | ✅ PASS |
 
 ### Skew Resilience Invariants Verified
 - **CSR Graph Supernode Traversal**: 2-hop neighborhood expansion on high-degree supernodes expands thousands of edges in low single-digit milliseconds without thrashing memory.
@@ -494,70 +512,30 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Field | Value |
 |---|---|
-| Soak duration | 60s & 600s |
+| Started | 2026-10-21T02:07:00Z |
+| Finished | 2026-10-21T02:29:00Z |
+| Soak duration | 600s per test |
 | Result | PASSED |
-| Peak RSS (60s Single-Writer Churn) | 1,365 MB |
-| Peak RSS (600s Single-Writer Churn) | 4,674–5,346 MB |
-| Multi-Writer Peak Throughput | 8,111 ops / 60s |
 
 ## Soak stats
 
-### Post-Fix Verification Soak (600s Extended Endurance)
 ```
-[soak-stats] test=maintenance_churn_soak rounds=1013 duration_s=600 rows=1000 peak_rss_mb=5346
-[soak-stats] test=mixed_workload_soak writes=1022 duration_s=600 rows=12000 peak_rss_mb=4674
-```
-
-### Post-Fix Verification Soak (60s Gate)
-```
-[soak-stats] test=maintenance_churn_soak rounds=217 duration_s=60 rows=1000 peak_rss_mb=1365
-[soak-stats] test=mixed_workload_soak writes=560 duration_s=60 rows=10000 peak_rss_mb=1383
-[soak-stats] test=multi_writer_soak writers=8 ops=8111 duration_s=60 rows=14749 peak_rss_mb=5117
-```
-
-### Pre-Remediation 600s Endurance Run (Before Heap & Cache Fixes)
-```
-[soak-stats] test=maintenance_churn_soak rounds=1053 duration_s=600 rows=1000 peak_rss_mb=6162
 [soak-stats] test=mixed_workload_soak writes=1026 duration_s=600 rows=16000 peak_rss_mb=5821
+[soak-stats] test=maintenance_churn_soak rounds=1053 duration_s=600 rows=1000 peak_rss_mb=6162
+[soak-stats] test=multi_writer_soak writers=8 ops=24776 duration_s=600 rows=44425
 ```
 
-### Initial Historical Baseline Soak (60s)
-```
-[soak-stats] test=mixed_workload_soak writes=294 duration_s=60 rows=24000 peak_rss_mb=605
-[soak-stats] test=maintenance_churn_soak rounds=64 duration_s=60 rows=1000 peak_rss_mb=609
-[soak-stats] test=multi_writer_soak writers=8 ops=2524 duration_s=60 rows=4585
-```
+## Notes
 
-## Memory Growth Investigation & Remediation
-
-During initial 600-second endurance testing, peak resident memory climbed to 5,821–6,162 MB. While all correctness invariants held (no panics, zero data loss, exact MVCC time-travel), the memory growth was diagnosed and resolved:
-
-### Root Causes
-1. **Unbounded Cache Retention on Deleted/Compacted Segments**:
-   - `BLOCK_CACHE` (1 GB cap), `PARQUET_BYTES_CACHE` (512 MB cap), and `BYTE_CACHE` (512 MB cap) cache data by file/object path.
-   - When compactions and vacuums deleted obsolete parquet and delete files, the underlying paths were not proactively evicted from moka caches. They lingered in RAM until their 10–30 minute idle TTL expired.
-2. **Jemalloc Arena Page Retention**:
-   - `tikv-jemallocator` background worker threads were unconfigured, and `trim_heap()` was a no-op returning `false`. Jemalloc maintained dirty pages within thread arenas without active purging.
-3. **Compiler Memory Pressure**:
-   - `[profile.release]` enabled `lto = "thin"` across 16 codegen units without thread limits, consuming 30+ GB during link-time optimization of DataFusion and Arrow.
-
-### Remediation Applied
-1. **Proactive Cache Eviction**:
-   - Implemented `invalidate_file_caches(root_uri, path)` across all memory caches (`BLOCK_CACHE`, `PARQUET_BYTES_CACHE`, `PARQUET_META_CACHE`, `BYTE_CACHE`, `INDEX_CACHE`, `BLOOM_FILTER_CACHE`, `HNSW_CACHE`, and delete caches).
-   - Hooked cache eviction into `ManifestManager::vacuum`, `Compactor::rewrite_data_files`, and `Table::delete_async`.
-2. **Jemalloc Background Purge & Arena Decay**:
-   - Implemented `init_jemalloc()` to start 4 background threads (`tikv_jemalloc_ctl::background_thread::write(true)`) on `TableBuilder::build_async()`.
-   - Implemented `trim_heap()` via `tikv_jemalloc_ctl::epoch::advance()` and `tikv_jemalloc_sys::mallctl` on `arena.4096.purge` and `arena.4096.decay` (`MALLCTL_ARENAS_ALL`) to decommit dirty pages back to the kernel.
-3. **Compiler Resource Bounds**:
-   - Set `lto = false` in `[profile.release]` in `Cargo.toml`.
-   - Set `jobs = 4` in `.cargo/config.toml` to bound rustc memory during release builds.
-
-### Post-Fix Performance & Memory Improvements
-- **600s Soak Peak RSS**: Reduced by **816–1,147 MB** down to 4,674–5,346 MB, comfortably below the 8 GiB ceiling.
-- **`maintenance_churn_soak`**: Completed **217 rounds** (+239% vs. 64 rounds baseline).
-- **`mixed_workload_soak`**: Completed **560 writes** (+90% vs. 294 writes baseline).
-- **`multi_writer_soak`**: Completed **8,111 operations** across 8 concurrent writers (+221% vs. 2,524 ops baseline).
-- **Zero Invariant Violations**: Zero panics, zero torn reads, zero row loss across all tests.
+- All three soaks ran for **600s** (10x the previous 60s run) and passed their
+  invariants: no lost or duplicated rows, no torn snapshots, and compaction /
+  vacuum / time-travel remained consistent throughout.
+- Peak RSS is now **5.8–6.2 GB** for the single-writer soaks, versus ~605 MB in
+  the earlier 60s run. The growth tracks soak duration closely enough to warrant
+  a dedicated memory-retention investigation; this run does not prove a leak,
+  but it no longer supports a "flat memory" claim.
+- The multi-writer soak (8 writers) completed 24,776 operations and ended with
+  44,425 rows, a valid serialization of the committed writes.
 
 
 ## 9. Docker Competitor Matrix (shared hardware envelope)
