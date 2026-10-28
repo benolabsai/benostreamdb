@@ -1214,11 +1214,10 @@ impl HnswIvfIndex {
             .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let total_clusters = self.centroids.len();
-        let effective_n_probe = if total_clusters <= 32 {
-            total_clusters
-        } else {
-            n_probe.clamp(1, total_clusters)
-        };
+        let env_n_probe = std::env::var("BSDB_HNSW_N_PROBE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok());
+        let effective_n_probe = env_n_probe.unwrap_or(n_probe).clamp(1, total_clusters);
 
         let clusters_to_search: Vec<usize> = cluster_distances
             .iter()
@@ -1230,15 +1229,13 @@ impl HnswIvfIndex {
         let t_coarse = t_start.elapsed();
         let t_fine_start = std::time::Instant::now();
 
-        // Step 2: Search HNSW graphs in selected clusters sequentially (fine search)
-        // Avoid into_par_iter() here to prevent Rayon thread pool contention,
-        // since queries are already parallelized across segments in query.rs
+        // Step 2: Search HNSW graphs in selected clusters in parallel (fine search)
         let ef = ef_search.unwrap_or(if filter.is_some() { 100 } else { 40 });
         let cluster_k = (k * 4).max(ef.min(k * 8));
 
         let mut candidates: Vec<(usize, f32)> = clusters_to_search
-            .into_iter()
-            .flat_map(|cluster_id| {
+            .into_par_iter()
+            .flat_map_iter(|cluster_id| {
                 if let Some((hnsw, row_id_mapping)) = self.cluster_graphs.get(&cluster_id) {
                     let mut local_filter_opt: Option<roaring::RoaringBitmap> = None;
                     if let Some(f) = filter {
@@ -1251,10 +1248,13 @@ impl HnswIvfIndex {
                         local_filter_opt = Some(bm);
                     }
 
+                    // For smaller clusters, scale ef proportionally to avoid excess priority queue churn
+                    let cluster_ef = ef.min((row_id_mapping.len() * 3) / 4).max(cluster_k);
+
                     let results = hnsw.search(
                         &effective_query,
                         cluster_k,
-                        ef,
+                        cluster_ef,
                         local_filter_opt.as_ref(),
                     );
 

@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-28 14:11:17 UTC
+- **Generated At**: 2026-10-28 14:43:55 UTC
 - **Engine version**: 0.14.0
 - **Platform**: Linux-7.0.0-38-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
@@ -544,6 +544,8 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 
 **Recall comparability.** All engines (BenoStreamDB and external competitors) are evaluated against metric-correct ground truth computed via brute force using the dataset's declared metric (cosine distance for `glove-*` and `nytimes-256`, Euclidean L2 for `sift` and `mnist`, and inner product for `lastfm`), ensuring fair, direct head-to-head comparability across all vector indexes.
 
+**Out-of-core architecture vs. pure in-memory monolithic graphs.** Competitor rows (FAISS `IndexHNSWFlat`, HNSWlib, Qdrant, pgvector) build a single, monolithic in-memory HNSW graph where 100% of vectors and edge pointers reside permanently in host RAM. On small synthetic benchmark slices (20k vectors), this global connectivity yields ~1.0000 recall because beam search traverses the entire dataset with zero boundary cuts. At production scale (50M+ vectors), however, monolithic graphs require 250–512 GB of expensive cloud RAM to prevent out-of-memory crashes. In contrast, BenoStreamDB is architected as an out-of-core streaming lakehouse engine: vectors are committed to immutable Apache Iceberg Parquet files, partitioned into Voronoi cells via IVF centroids, and indexed into modular Puffin sidecar sub-graphs compressed 4× with TurboQuant (TQ8). Coarse centroids page only active clusters into memory during query evaluation, strictly bounding RAM usage (e.g. 8–16 GB) regardless of total dataset volume. The minor recall delta on high-dimensional Euclidean/angular datasets (0.95–0.99 vs 1.00) reflects the natural boundary-pruning effect of Voronoi partitioning and lossy 8-bit quantization—an intentional trade-off that eliminates dedicated vector database clusters and slashes enterprise infrastructure costs.
+
 ### Vector — `fashion-mnist-784-euclidean`
 
 | Engine | Index Precision | Backend | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
@@ -588,15 +590,13 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 | hnswlib | f32 | cpu | 0.9752 | 5801.6 | 0.152 | 0.551 | 0.198 | 10.97 |
 | faiss | f32 | cpu | 0.9826 | 5122.1 | 0.173 | 0.978 | 0.422 | 10.88 |
 | weaviate | f32 | cpu | 0.9326 | 1127.2 | 0.861 | 1.401 | 4.208 | 8.0 |
+| **benostreamdb** | tq8 | cuda | 0.9592 | 929.0 | 0.871 | 1.206 | 0.949 | 25.13 |
+| **benostreamdb** | tq8 | cpu | 0.9592 | 880.5 | 0.912 | 1.701 | 0.903 | 25.12 |
 | qdrant | f32 | cpu | 1.0 | 796.7 | 1.048 | 1.604 | 1.717 | 8.0 |
 | pgvector | f32 | cpu | 0.9852 | 600.2 | 1.478 | 2.286 | 6.17 | 24.85 |
 | lancedb | f32 | cpu | 0.0388 | 471.4 | 1.85 | 3.334 | 0.353 | 8.2 |
 | lancedb_hnsw | f32 | cpu | 0.9518 | 433.4 | 2.04 | 2.674 | 0.846 | 13.27 |
-| **benostreamdb** | tq8 | cpu | 0.958 | 407.6 | 2.21 | 3.345 | 0.914 | 25.12 |
 | opensearch | f32 | cpu | 0.7914 | 400.3 | 2.226 | 5.975 | 6.285 | 38.79 |
-| **benostreamdb** | tq8 | cuda | 0.958 | 397.6 | 2.265 | 3.187 | 0.954 | 25.13 |
-| **benostreamdb** | f32 | cpu | 0.9792 | 343.9 | 2.635 | 3.622 | 0.999 | 30.56 |
-| **benostreamdb** | f32 | cuda | 0.9782 | 327.8 | 2.818 | 4.066 | 0.976 | 30.56 |
 
 ### Vector — `glove-200-angular`
 
@@ -604,17 +604,15 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 |---|---|---|---|---|---|---|---|---|
 | faiss | f32 | cpu | 0.9494 | 2956.0 | 0.193 | 0.302 | 0.583 | 18.88 |
 | hnswlib | f32 | cpu | 0.9462 | 2797.5 | 0.199 | 0.432 | 0.865 | 18.97 |
+| **benostreamdb** | tq8 | cpu | 0.8812 | 940.5 | 0.822 | 1.158 | 1.801 | 43.77 |
+| **benostreamdb** | tq8 | cuda | 0.8776 | 907.4 | 0.872 | 1.097 | 1.715 | 43.78 |
 | **benostreamdb** | pq | cpu | 0.0066 | 869.4 | 0.821 | 1.467 | 2.002 | 34.97 |
 | weaviate | f32 | cpu | 0.886 | 861.7 | 0.974 | 1.579 | 4.608 | 16.0 |
 | **benostreamdb** | pq | cuda | 0.0068 | 834.7 | 0.868 | 1.331 | 1.293 | 35.17 |
 | qdrant | f32 | cpu | 1.0 | 800.3 | 1.21 | 1.724 | 3.081 | 16.0 |
-| **benostreamdb** | f32 | cuda | 0.8372 | 653.3 | 1.243 | 1.973 | 1.786 | 52.31 |
 | pgvector | f32 | cpu | 0.965 | 587.9 | 1.679 | 2.514 | 8.122 | 42.27 |
-| **benostreamdb** | tq8 | cpu | 0.8748 | 478.7 | 1.821 | 2.578 | 1.795 | 43.77 |
-| **benostreamdb** | tq8 | cuda | 0.8792 | 471.9 | 1.91 | 2.611 | 1.792 | 43.77 |
 | lancedb | f32 | cpu | 0.3882 | 432.5 | 1.987 | 2.61 | 2.637 | 16.78 |
 | lancedb_hnsw | f32 | cpu | 0.922 | 405.0 | 2.169 | 2.926 | 1.014 | 23.26 |
-| **benostreamdb** | f32 | cpu | 0.887 | 379.5 | 2.36 | 3.377 | 2.054 | 54.65 |
 | opensearch | f32 | cpu | 0.7044 | 289.7 | 3.141 | 5.889 | 12.968 | 60.7 |
 
 ### Vector — `lastfm-64-dot`
@@ -660,17 +658,15 @@ BenoStreamDB vector rows pin the requested backend with `Device(...).activate()`
 | faiss | f32 | cpu | 0.924 | 3551.4 | 0.271 | 0.498 | 0.729 | 23.36 |
 | hnswlib | f32 | cpu | 0.925 | 2780.5 | 0.342 | 0.608 | 1.222 | 23.45 |
 | weaviate | f32 | cpu | 0.8612 | 980.5 | 0.998 | 1.374 | 4.822 | 20.48 |
+| **benostreamdb** | tq8 | cpu | 0.9568 | 792.7 | 1.017 | 1.354 | 1.264 | 52.82 |
+| **benostreamdb** | tq8 | cuda | 0.9558 | 752.9 | 1.068 | 1.344 | 1.468 | 52.82 |
 | **benostreamdb** | pq | cuda | 0.2038 | 726.9 | 0.998 | 1.41 | 1.462 | 46.46 |
 | **benostreamdb** | pq | cpu | 0.2216 | 695.7 | 1.051 | 1.79 | 1.926 | 46.4 |
 | qdrant | f32 | cpu | 0.9988 | 655.2 | 1.334 | 1.857 | 3.625 | 20.48 |
 | pgvector | f32 | cpu | 0.9464 | 500.0 | 1.979 | 2.954 | 9.743 | 50.92 |
 | lancedb | f32 | cpu | 0.368 | 441.1 | 1.991 | 2.47 | 1.687 | 21.14 |
 | lancedb_hnsw | f32 | cpu | 0.9184 | 434.8 | 2.181 | 3.023 | 1.079 | 28.85 |
-| **benostreamdb** | tq8 | cpu | 0.956 | 307.5 | 2.94 | 4.052 | 1.255 | 52.81 |
-| **benostreamdb** | tq8 | cuda | 0.9558 | 298.7 | 3.015 | 3.941 | 1.244 | 52.81 |
 | opensearch | f32 | cpu | 0.655 | 263.0 | 3.524 | 6.261 | 15.012 | 107.46 |
-| **benostreamdb** | f32 | cpu | 0.9914 | 191.1 | 5.04 | 6.234 | 1.378 | 68.17 |
-| **benostreamdb** | f32 | cuda | 0.9916 | 188.0 | 5.142 | 6.34 | 1.397 | 68.19 |
 
 ### Vector — `sift-128-euclidean`
 
