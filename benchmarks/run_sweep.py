@@ -136,7 +136,16 @@ def build_sections(cpus: str, mem: str, envelope: list[str] | None = None) -> li
         ),
         Section(
             "production",
-            [[sys.executable, "benchmarks/production_workload.py"]],
+            # Both workloads: `concurrent` writes the QPS/latency ladder (with
+            # `--sweep` for the concurrency series), `maintenance` writes the
+            # compaction/vacuum record. The old single command omitted the required
+            # `--workload` flag and exited 2 without measuring anything.
+            [
+                [sys.executable, "benchmarks/production_workload.py",
+                 "--workload", "concurrent", "--sweep"],
+                [sys.executable, "benchmarks/production_workload.py",
+                 "--workload", "maintenance"],
+            ],
             ["results/production_*"],
         ),
     ]
@@ -147,6 +156,26 @@ def _expand_artifacts(patterns: list[str]) -> list[str]:
     for pattern in patterns:
         found.extend(sorted(glob.glob(os.path.join(BASE_DIR, pattern))))
     return [os.path.relpath(path, BASE_DIR) for path in found]
+
+
+def _fresh_artifacts(patterns: list[str], started: float, tolerance: float = 5.0) -> list[str]:
+    """Artifacts the section actually wrote, i.e. modified since it started.
+
+    Stamping a section whose command exited 0 but wrote nothing is worse than
+    failing it: the report would claim those numbers came from this session while
+    they are the previous run's. Filesystem mtime is the only signal the harness
+    exposes, so every produced artifact must be newer than the section start
+    (minus a small tolerance for coarse timestamps).
+    """
+    fresh: list[str] = []
+    for relative in _expand_artifacts(patterns):
+        try:
+            modified = os.path.getmtime(os.path.join(BASE_DIR, relative))
+        except OSError:
+            continue
+        if modified >= started - tolerance:
+            fresh.append(relative)
+    return fresh
 
 
 def run_sections(
@@ -178,11 +207,26 @@ def run_sections(
                 return 1
             continue
 
-        artifacts = _expand_artifacts(section.artifacts)
-        entry = session_provenance.stamp(section.name, artifacts)
+        fresh = _fresh_artifacts(section.artifacts, started)
+        if not fresh:
+            # Exit 0 with no new artifact means the command did nothing useful
+            # (wrong flags, missing engine, output path the report does not read).
+            # Never stamp that: it would attribute the previous run's files to this
+            # session, which is exactly the splice the guard exists to prevent.
+            failures.append((section.name, -1))
+            print(
+                f"    {section.name}: NO FRESH ARTIFACTS after {elapsed:.0f}s "
+                f"(looked for {', '.join(section.artifacts)}) — not stamped",
+                flush=True,
+            )
+            if not keep_going:
+                return 1
+            continue
+
+        entry = session_provenance.stamp(section.name, fresh)
         print(
             f"    {section.name}: ok in {elapsed:.0f}s, stamped session "
-            f"{entry['session']} with {len(artifacts)} artifact(s)",
+            f"{entry['session']} with {len(fresh)} artifact(s)",
             flush=True,
         )
 
