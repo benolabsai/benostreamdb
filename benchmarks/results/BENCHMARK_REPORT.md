@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-28 18:59:12 UTC
+- **Generated At**: 2026-10-28 20:14:49 UTC
 - **Engine version**: 0.14.1
 - **Platform**: Linux-7.0.0-38-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
@@ -68,7 +68,7 @@ Probes are cheap and machine-state sensitive, not engine benchmarks: they move w
 
 ## 1. Vector ANN Performance (BenoStreamDB internal characterization)
 
-Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant `hnsw_tq8`, IVF-PQ) with **no competitor**. Head-to-head vector comparison is in **§9**; raw results are under `benchmarks/competitors/results/`.
+Index-variant characterization for BenoStreamDB itself (HNSW and TurboQuant `hnsw_tq8`) with **no competitor**. Head-to-head vector comparison is in **§9**; raw results are under `benchmarks/competitors/results/`.
 
 **Ground truth.** The HDF5 `neighbors` field is only valid for the full train set, so the 20k-vector runs recompute exact neighbours by brute force. That recomputation uses the dataset metric (L2, cosine, or inner product). An earlier report used L2 for every dataset, which inverted the expected order on angular data; with metric-correct truth recall is monotonic (`f32` > `tq8`) on every supported dataset.
 
@@ -79,7 +79,7 @@ Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant `hnsw_t
 - **Pro — same HNSW graph / API.** The graph and query surface are unchanged; only the stored codes differ, so no schema/DDL difference.
 - **Con — lower recall.** Quantization is lossy: the stored codes no longer rank the exact neighbours, so recall@k drops (recovers only partially by raising `ef_search`, at a latency cost).
 - **Con — approximate distances for reranking.** Scores are approximate, so use the index for candidate discovery and rerank from the float payload where exactness matters.
-- **Default.** Full-precision `hnsw` is the default; `hnsw_tq8` is opt-in for workloads that will trade recall for size/latency. §9 reports the `benostreamdb` engine once per precision, with the **Index Precision** column (`f32`/`tq8`) making the trade-off explicit; holding several precisions on one column and selecting per query is on the roadmap (Theme 6). The product-quantized variant (`hnsw_pq`) is not measured: it is being removed with the 4-bit TurboQuant engine option in v0.15.
+- **Default.** Full-precision `hnsw` is the default; `hnsw_tq8` is opt-in for workloads that will trade recall for size/latency. §9 reports the `benostreamdb` engine once per precision, with the **Index Precision** column (`f32`/`tq8`) making the trade-off explicit; holding several precisions on one column and selecting per query is on the roadmap (Theme 6).
 
 ### GPU distance kernel (`bsdb.cdist`)
 

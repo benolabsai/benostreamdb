@@ -374,8 +374,8 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
     sections.append("## 1. Vector ANN Performance (BenoStreamDB internal characterization)")
     sections.append("")
     sections.append(
-        "Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant "
-        "`hnsw_tq8`, IVF-PQ) with **no competitor**. Head-to-head vector "
+        "Index-variant characterization for BenoStreamDB itself (HNSW and "
+        "TurboQuant `hnsw_tq8`) with **no competitor**. Head-to-head vector "
         "comparison is in **§9**; raw results are under "
         "`benchmarks/competitors/results/`."
     )
@@ -412,8 +412,7 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
         "`benostreamdb` engine once per precision, with the **Index Precision** "
         "column (`f32`/`tq8`) making the trade-off explicit; holding several "
         "precisions on one column and selecting per query is on the roadmap "
-        "(Theme 6). The product-quantized variant (`hnsw_pq`) is not measured: it "
-        "is being removed with the 4-bit TurboQuant engine option in v0.15."
+        "(Theme 6)."
     )
     sections.append("")
 
