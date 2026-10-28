@@ -310,6 +310,40 @@ impl HnswGraph {
             )) as Box<dyn std::error::Error>),
         }
     }
+
+    pub fn set_extend_candidates(&mut self, flag: bool) {
+        match self {
+            HnswGraph::L2(h) => h.set_extend_candidates(flag),
+            HnswGraph::Cosine(h) => h.set_extend_candidates(flag),
+            HnswGraph::Dot(h) => h.set_extend_candidates(flag),
+            HnswGraph::L1(h) => h.set_extend_candidates(flag),
+            HnswGraph::Hamming(h) => h.set_extend_candidates(flag),
+            HnswGraph::Jaccard(h) => h.set_extend_candidates(flag),
+            HnswGraph::BinaryHamming(h) => h.set_extend_candidates(flag),
+            HnswGraph::TurboQuant8(h) => h.set_extend_candidates(flag),
+            HnswGraph::TurboQuant4(h) => h.set_extend_candidates(flag),
+            HnswGraph::Pq(h) => h.set_extend_candidates(flag),
+            HnswGraph::SparseDot(h) => h.set_extend_candidates(flag),
+            _ => {}
+        }
+    }
+
+    pub fn set_keeping_pruned(&mut self, flag: bool) {
+        match self {
+            HnswGraph::L2(h) => h.set_keeping_pruned(flag),
+            HnswGraph::Cosine(h) => h.set_keeping_pruned(flag),
+            HnswGraph::Dot(h) => h.set_keeping_pruned(flag),
+            HnswGraph::L1(h) => h.set_keeping_pruned(flag),
+            HnswGraph::Hamming(h) => h.set_keeping_pruned(flag),
+            HnswGraph::Jaccard(h) => h.set_keeping_pruned(flag),
+            HnswGraph::BinaryHamming(h) => h.set_keeping_pruned(flag),
+            HnswGraph::TurboQuant8(h) => h.set_keeping_pruned(flag),
+            HnswGraph::TurboQuant4(h) => h.set_keeping_pruned(flag),
+            HnswGraph::Pq(h) => h.set_keeping_pruned(flag),
+            HnswGraph::SparseDot(h) => h.set_keeping_pruned(flag),
+            _ => {}
+        }
+    }
 }
 
 /// HNSW-IVF Hybrid Index
@@ -492,6 +526,9 @@ fn build_bucket_graph(
             )),
         }
     };
+
+    hnsw.set_extend_candidates(true);
+    hnsw.set_keeping_pruned(true);
 
     if let Some(q) = quantizer {
         let encoded = q.encode_batch(&c_vectors);
@@ -676,10 +713,10 @@ impl HnswIvfIndex {
 
         let quantizer = match algo {
             IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::TurboQuant(
-                TurboQuantEncoder::train(&vectors_sampled, 8)?,
+                TurboQuantEncoder::train(&vectors_sampled, 8, metric)?,
             )),
             IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::TurboQuant(
-                TurboQuantEncoder::train(&vectors_sampled, 4)?,
+                TurboQuantEncoder::train(&vectors_sampled, 4, metric)?,
             )),
             IndexAlgorithm::HnswPq { compression, .. } => {
                 let subspaces = dim / compression;
@@ -896,10 +933,10 @@ impl HnswIvfIndex {
         // Step 2: Train Quantizer if requested
         let quantizer = match algo {
             IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::TurboQuant(
-                TurboQuantEncoder::train(&vectors, 8)?,
+                TurboQuantEncoder::train(&vectors, 8, metric)?,
             )),
             IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::TurboQuant(
-                TurboQuantEncoder::train(&vectors, 4)?,
+                TurboQuantEncoder::train(&vectors, 4, metric)?,
             )),
             IndexAlgorithm::HnswPq { compression, .. } => {
                 let subspaces = dim / compression;
@@ -955,7 +992,7 @@ impl HnswIvfIndex {
                 let ef_construction = (hnsw_m * 2).max(40);
 
                 // Determine HNSW node type and distance metric
-                let hnsw = if let Some(q) = quantizer.as_ref() {
+                let mut hnsw = if let Some(q) = quantizer.as_ref() {
                     match q {
                         QuantizerImpl::TurboQuant(tq) => {
                             if tq.bits() == 4 {
@@ -1036,6 +1073,9 @@ impl HnswIvfIndex {
                     }
                 };
 
+                hnsw.set_extend_candidates(true);
+                hnsw.set_keeping_pruned(true);
+
                 // Build locally sequential
                 for (local_id, (vec, _)) in vecs.iter().enumerate() {
                     if let Some(q) = q_ref {
@@ -1084,6 +1124,7 @@ impl HnswIvfIndex {
         k: usize,
         n_probe: usize,
         filter: Option<&roaring::RoaringBitmap>,
+        ef_search: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
         let t_start = std::time::Instant::now();
         let query_f32 = match query {
@@ -1100,40 +1141,11 @@ impl HnswIvfIndex {
                 let mut q_vec = query_f32.to_vec();
                 if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
                 {
-                    // SDC suffers from clamping if the query norm vastly exceeds the quantizer's trained range.
-                    // For IP/Cosine, query magnitude doesn't affect ranking. We scale the query
-                    // to perfectly fit the quantizer's valid range in the FWHT domain to maximize precision.
-                    let mut rotated = q_vec.clone();
-                    if !rotated.len().is_power_of_two() {
-                        rotated.resize(rotated.len().next_power_of_two(), 0.0);
-                    }
-                    crate::core::index::turboquant::fwht(&mut rotated);
-
-                    let mut q_min = f32::MAX;
-                    let mut q_max = f32::MIN;
-                    for &v in &rotated {
-                        if v < q_min {
-                            q_min = v;
-                        }
-                        if v > q_max {
-                            q_max = v;
-                        }
-                    }
-
-                    let quantizer_min = q.offset;
-                    let quantizer_max = q.offset + ((1 << q.bits()) - 1) as f32 / q.scale;
-
-                    let mut c = f32::MAX;
-                    if q_min < -1e-6 && quantizer_min <= 0.0 {
-                        c = c.min(quantizer_min / q_min);
-                    }
-                    if q_max > 1e-6 && quantizer_max >= 0.0 {
-                        c = c.min(quantizer_max / q_max);
-                    }
-                    if c != f32::MAX && c > 0.0 {
-                        c *= 0.99; // Safety margin
+                    let norm = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    if norm > 1e-12 {
+                        let inv = 1.0 / norm;
                         for v in &mut q_vec {
-                            *v *= c;
+                            *v *= inv;
                         }
                     }
                 }
@@ -1201,9 +1213,16 @@ impl HnswIvfIndex {
         cluster_distances
             .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
+        let total_clusters = self.centroids.len();
+        let effective_n_probe = if total_clusters <= 32 {
+            total_clusters
+        } else {
+            n_probe.clamp(1, total_clusters)
+        };
+
         let clusters_to_search: Vec<usize> = cluster_distances
             .iter()
-            .take(n_probe)
+            .take(effective_n_probe)
             .map(|(i, _)| *i)
             .collect();
         tracing::debug!("Sorted cluster distances: {:?}", cluster_distances);
@@ -1214,13 +1233,13 @@ impl HnswIvfIndex {
         // Step 2: Search HNSW graphs in selected clusters sequentially (fine search)
         // Avoid into_par_iter() here to prevent Rayon thread pool contention,
         // since queries are already parallelized across segments in query.rs
+        let ef = ef_search.unwrap_or(if filter.is_some() { 100 } else { 40 });
+        let cluster_k = (k * 4).max(ef.min(k * 8));
+
         let mut candidates: Vec<(usize, f32)> = clusters_to_search
             .into_iter()
             .flat_map(|cluster_id| {
                 if let Some((hnsw, row_id_mapping)) = self.cluster_graphs.get(&cluster_id) {
-                    let cluster_k = if filter.is_some() { k * 4 } else { k * 2 };
-                    let ef_search = if filter.is_some() { 100 } else { 40 };
-
                     let mut local_filter_opt: Option<roaring::RoaringBitmap> = None;
                     if let Some(f) = filter {
                         let mut bm = roaring::RoaringBitmap::new();
@@ -1235,7 +1254,7 @@ impl HnswIvfIndex {
                     let results = hnsw.search(
                         &effective_query,
                         cluster_k,
-                        ef_search,
+                        ef,
                         local_filter_opt.as_ref(),
                     );
 
@@ -2041,7 +2060,7 @@ mod tests {
         let query = VectorValue::Float32(vectors[50].clone());
 
         // Unfiltered search (should find ID 50 easily since it's an exact match)
-        let results_unfiltered = index.search(&query, 5, 40, None).unwrap();
+        let results_unfiltered = index.search(&query, 5, 40, None, None).unwrap();
         assert!(!results_unfiltered.is_empty(), "Should return results");
 
         let mut found_50 = false;
@@ -2062,7 +2081,7 @@ mod tests {
         filter.insert(52);
         filter.insert(53);
 
-        let results_filtered = index.search(&query, 3, 40, Some(&filter)).unwrap();
+        let results_filtered = index.search(&query, 3, 40, Some(&filter), None).unwrap();
         assert!(
             !results_filtered.is_empty(),
             "Filtered search should return results"

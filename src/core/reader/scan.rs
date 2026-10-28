@@ -2430,7 +2430,7 @@ impl HybridReader {
         k: usize,
         allowed_bitmap: &Option<RoaringBitmap>,
         _metric: VectorMetric,
-        _ef_search: Option<usize>,
+        ef_search: Option<usize>,
         use_mmap: bool,
     ) -> Result<Vec<(usize, f32)>> {
         let idx_path_str = idx_info.file_path.clone();
@@ -2470,14 +2470,26 @@ impl HybridReader {
         let hnsw_ivf_clone = hnsw_ivf.clone();
 
         // Determine n_probe based on filtering or session config
-        let n_probe = if allowed_bitmap.is_some() { 20 } else { 10 };
+        let n_probe_env = std::env::var("BSDB_HNSW_N_PROBE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok());
+        let n_probe = n_probe_env.unwrap_or_else(|| {
+            if allowed_bitmap.is_some() {
+                20
+            } else if let Some(ef) = ef_search {
+                if ef >= 100 { 32 } else { 16 }
+            } else {
+                10
+            }
+        });
         tracing::debug!(
-            "search_hnsw_ivf allowed_bitmap is_some={}",
-            allowed_bitmap.is_some()
+            "search_hnsw_ivf allowed_bitmap is_some={}, n_probe={}",
+            allowed_bitmap.is_some(),
+            n_probe
         );
 
         let matches = tokio::task::spawn_blocking(move || {
-            hnsw_ivf_clone.search(&query_clone, k, n_probe, allowed_bm_clone.as_ref())
+            hnsw_ivf_clone.search(&query_clone, k, n_probe, allowed_bm_clone.as_ref(), ef_search)
         })
         .await??;
 

@@ -28,7 +28,7 @@ without it, and without the embedder.
 > (`--load-chunk-rows` / `BSDB_LOAD_CHUNK_ROWS` to override) — in-process
 > HNSW/TQ8 builders strand freed memory in glibc's main heap (~4.5 GB per
 > million rows measured), so a new process per chunk resets the high-water
-> mark. On this 121 GB box: 10M-row chunks ≈ 30 GB peak at 12.6k rows/s; an
+> mark. On this 128 GB box: 10M-row chunks ≈ 30 GB peak at 12.6k rows/s; an
 > 8 GB laptop auto-selects ~250k-row chunks; 500k-row chunks ≈ 3-4 GB
 > (serverless-task sized). Chunks must be ≥ ~10 flush-segments (750k rows
 > each) so index builds overlap writes instead of serializing into a tail.
@@ -155,7 +155,7 @@ Alternatively, put the same keys under `[llm]` in the repo-root
 
 ## Timings & system stats (measured on this machine)
 
-Reference hardware: **32-core x86-64 Linux, 121 GB RAM, NVMe** (`/tmp` is a
+Reference hardware: **32-core x86-64 Linux, 128 GB RAM, NVMe** (`/tmp` is a
 61 GB tmpfs). Dataset: the **whole** `enwiki` current-pages dump — 66.1M raw
 pages / 498M raw links → **51.8M live pages / 383M clean int64 edges** after
 redirect filtering and endpoint resolution.

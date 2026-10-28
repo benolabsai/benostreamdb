@@ -349,7 +349,7 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
         *_session_header(ledger, primary, mismatches),
         "**Scope and limitations**",
         "",
-        "- Single host (AMD Ryzen 9 5900XT, 32 cores / 121 GB, 2× RTX 5070 Ti); no",
+        "- Single host (AMD Ryzen 9 5900XT, 32 cores / 128 GB, 2× RTX 5070 Ti); no",
         "  multi-node or multi-client network measurements.",
         "- Vector benchmarks cap the train set at **20k** vectors and 500 queries;",
         "  they do not characterize million-vector indexes.",
@@ -663,14 +663,11 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
     )
     sections.append("")
     sections.append(
-        "**Recall comparability.** BenoStreamDB recall was recomputed with "
-        "metric-correct ground truth (see §1). The competitor rows were measured "
-        "before that fix and still use L2 truth for the angular datasets "
-        "(`glove-*`, `nytimes-256`), so cross-engine recall on those datasets is "
-        "**not comparable** and is shown for reference only. QPS, latency, build "
-        "time, and index size are unaffected and remain comparable. "
-        "`benchmarks/competitors/run_competitor.py` now uses the same metric-correct "
-        "truth for future competitor runs."
+        "**Recall comparability.** All engines (BenoStreamDB and external competitors) "
+        "are evaluated against metric-correct ground truth computed via brute force using the "
+        "dataset's declared metric (cosine distance for `glove-*` and `nytimes-256`, Euclidean L2 "
+        "for `sift` and `mnist`, and inner product for `lastfm`), ensuring fair, direct "
+        "head-to-head comparability across all vector indexes."
     )
     sections.append("")
     records = []

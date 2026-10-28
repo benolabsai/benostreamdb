@@ -992,7 +992,7 @@ fn vector_search_impl(
         let query_vec = crate::core::index::VectorValue::Float32(query_slice.to_vec());
 
         // Spawn blocking because HnswIvfIndex::search can be CPU intensive
-        tokio::task::spawn_blocking(move || hnsw_ivf.search(&query_vec, k as usize, 10, None))
+        tokio::task::spawn_blocking(move || hnsw_ivf.search(&query_vec, k as usize, 10, None, None))
             .await
             .unwrap_or_else(|e| Err(anyhow::anyhow!("Task panicked: {}", e)))
     }) {
