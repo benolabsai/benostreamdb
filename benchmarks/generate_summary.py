@@ -129,8 +129,6 @@ def _quant_label(idx, default: str = "-") -> str:
         return default
     if "tq8" in s:
         return "tq8"
-    if "pq" in s:
-        return "pq"
     # Lexical-only (BM25) has no vector index; hybrid (bm25+hnsw) is f32.
     if "hnsw" in s or "vector" in s or "dense" in s:
         return "f32"
@@ -385,13 +383,10 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
     sections.append(
         "**Ground truth.** The HDF5 `neighbors` field is only valid for the full "
         "train set, so the 20k-vector runs recompute exact neighbours by brute "
-        "force. That recomputation now uses the dataset metric (L2, cosine, or "
-        "inner product). The previous report used L2 for every dataset, which "
-        "inverted the expected order on angular data; with metric-correct truth "
-        "recall is monotonic (`f32` > `tq8` > `pq`) on every supported dataset. "
-        "`hnsw_pq` is unsupported on `glove-100`/`lastfm` (no result), and its "
-        "`glove-200` result collapses to recall ≈0.007 — treat that row as a "
-        "configuration defect, not a quality measurement."
+        "force. That recomputation uses the dataset metric (L2, cosine, or inner "
+        "product). An earlier report used L2 for every dataset, which inverted the "
+        "expected order on angular data; with metric-correct truth recall is "
+        "monotonic (`f32` > `tq8`) on every supported dataset."
     )
     sections.append("")
     sections.append("### TurboQuant trade-off (pros and cons)")
@@ -412,12 +407,13 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
         "- **Con — approximate distances for reranking.** Scores are approximate, "
         "so use the index for candidate discovery and rerank from the float "
         "payload where exactness matters.\n"
-        "- **Default.** Full-precision `hnsw` is the default; `hnsw_tq8`/"
-        "`hnsw_pq` are opt-in for workloads that will trade recall for size/latency. "
-        "§9 reports the `benostreamdb` engine once per precision, with the "
-        "**Index Precision** column (`f32`/`tq8`/`pq`) making the trade-off "
-        "explicit; holding several precisions on one column and selecting per query "
-        "is on the roadmap (Theme 6)."
+        "- **Default.** Full-precision `hnsw` is the default; `hnsw_tq8` is opt-in "
+        "for workloads that will trade recall for size/latency. §9 reports the "
+        "`benostreamdb` engine once per precision, with the **Index Precision** "
+        "column (`f32`/`tq8`) making the trade-off explicit; holding several "
+        "precisions on one column and selecting per query is on the roadmap "
+        "(Theme 6). The product-quantized variant (`hnsw_pq`) is not measured: it "
+        "is being removed with the 4-bit TurboQuant engine option in v0.15."
     )
     sections.append("")
 

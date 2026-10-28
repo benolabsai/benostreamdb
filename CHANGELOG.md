@@ -10,6 +10,11 @@ needed to publish the resulting numbers honestly.
   matrix has been re-measured against the corrected behaviour. The recall numbers
   in `benchmarks/results/BENCHMARK_REPORT.md` are regenerated from those runs;
   treat earlier angular rows as superseded.
+- **`test_vector_metrics_parity` now compiles** — the parallel cluster search
+  changed `HnswIvfIndex::search` from four parameters to five (adding
+  `ef_search`), and the parity test still passed four. The workspace (and the
+  coverage job's `--workspace --all-targets` build) therefore failed with
+  `E0061` while `cargo check --lib` and the connector jobs stayed green.
 - **Trino connector build in the release pipeline** — the connectors workflow
   compiles Trino against Java 25, matching the release's `java.release = 23`
   target (the previous JDK could not compile the band sources).
@@ -19,6 +24,15 @@ needed to publish the resulting numbers honestly.
   concurrently instead of one after another, which raises search QPS at the same
   recall. The out-of-core architecture (what stays resident, what is mmap'd, what
   is streamed) is now documented alongside it.
+
+### Removed
+- **Product quantization is out of the benchmark suite** — the `hnsw_pq` engine
+  label is gone from `docker_bench.sh` (CPU and GPU engine lists),
+  `run_bench.sh`, and the ANN self-characterization, and its stored competitor
+  artifacts are deleted. The variant is being removed from the engine with the
+  4-bit TurboQuant option in v0.15, so measuring it advertises a path that is
+  going away; lancedb's `IVF_PQ` stays, because that is a competitor's index, not
+  ours. The report's precision comparison is now `f32` vs `tq8`.
 
 ### Added
 - **Benchmark sessions record the machine state** — `benchmarks/session_provenance.py`

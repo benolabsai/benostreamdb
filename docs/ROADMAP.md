@@ -134,7 +134,7 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
 
 Themes are ordered by priority.
 
-### Theme 1: Deprecate & Remove TQ4 Quantization Engine Option — 🔴 **Highest Priority**
+### Theme 1: Deprecate & Remove TQ4 and PQ Quantization Engine Options — 🔴 **Highest Priority**
 *Retire 4-bit TurboQuant (`hnsw_tq4` / `tq4`) across the engine, APIs, and Puffin sidecars.*
 
 > **Rationale & Benchmark Findings.** Comprehensive benchmarking demonstrated that 4-bit TurboQuant (`tq4`) performs significantly worse in recall compared to full-precision `hnsw` and 8-bit TurboQuant (`tq8`), without delivering any compelling added value or Pareto efficiency. `tq8` already provides ~4× compression with resilient recall, and product quantization (`pq`) serves extreme compression use cases far more effectively.
