@@ -21,8 +21,8 @@ use std::sync::Arc;
 use tracing;
 
 use super::ivf::simple_kmeans_with_seed;
+use super::benoquant::BenoQuantEncoder;
 use super::pq::{PqConfig, PqEncoder};
-use super::turboquant::TurboQuantEncoder;
 use super::{Quantizer, QuantizerImpl, VectorMetric, VectorValue};
 use crate::core::index::hnsw_rs::prelude::*;
 use crate::core::manifest::IndexAlgorithm;
@@ -448,7 +448,7 @@ fn build_bucket_graph(
 
     let mut hnsw = if let Some(q) = quantizer {
         match q {
-            QuantizerImpl::TurboQuant(tq) => {
+            QuantizerImpl::BenoQuant(tq) => {
                 if tq.bits() == 4 {
                     HnswGraph::TurboQuant4(Hnsw::new(
                         hnsw_m,
@@ -466,6 +466,15 @@ fn build_bucket_graph(
                         crate::core::index::distance::DistL2u8,
                     ))
                 }
+            }
+            QuantizerImpl::Sq(_) => {
+                HnswGraph::TurboQuant8(Hnsw::new(
+                    hnsw_m,
+                    c_vectors.len(),
+                    max_layers,
+                    ef_construction,
+                    crate::core::index::distance::DistL2u8,
+                ))
             }
             QuantizerImpl::Pq(pq) => {
                 let dist = crate::core::index::pq::DistPqSdc {
@@ -707,16 +716,23 @@ impl HnswIvfIndex {
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
             })
+            .or_else(|| match algo {
+                IndexAlgorithm::Hnsw { complexity, .. }
+                | IndexAlgorithm::HnswTq8 { complexity, .. }
+                | IndexAlgorithm::HnswTq4 { complexity, .. }
+                | IndexAlgorithm::HnswPq { complexity, .. } => Some(*complexity),
+                _ => None,
+            })
             .unwrap_or(16);
 
         let (centroids, _) = simple_kmeans_with_seed(&vectors_sampled, n_lists, 10, seed)?;
 
         let quantizer = match algo {
-            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::TurboQuant(
-                TurboQuantEncoder::train(&vectors_sampled, 8, metric)?,
+            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(
+                BenoQuantEncoder::train(&vectors_sampled, 8, metric)?,
             )),
-            IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::TurboQuant(
-                TurboQuantEncoder::train(&vectors_sampled, 4, metric)?,
+            IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(
+                BenoQuantEncoder::train(&vectors_sampled, 4, metric)?,
             )),
             IndexAlgorithm::HnswPq { compression, .. } => {
                 let subspaces = dim / compression;
@@ -826,6 +842,13 @@ impl HnswIvfIndex {
         let ef_construction = std::env::var("BSDB_HNSW_EF_CONSTRUCTION")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
+            .or_else(|| match algo {
+                IndexAlgorithm::Hnsw { quality, .. }
+                | IndexAlgorithm::HnswTq8 { quality, .. }
+                | IndexAlgorithm::HnswTq4 { quality, .. }
+                | IndexAlgorithm::HnswPq { quality, .. } => Some(*quality),
+                _ => None,
+            })
             .unwrap_or((hnsw_m * 2).max(40));
         let max_layers = 16;
 
@@ -916,7 +939,20 @@ impl HnswIvfIndex {
             .min(n_vectors / 10)
             .max(1);
 
-        let hnsw_m = hnsw_m.unwrap_or(16);
+        let hnsw_m = hnsw_m
+            .or_else(|| {
+                std::env::var("BSDB_HNSW_M")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .or_else(|| match algo {
+                IndexAlgorithm::Hnsw { complexity, .. }
+                | IndexAlgorithm::HnswTq8 { complexity, .. }
+                | IndexAlgorithm::HnswTq4 { complexity, .. }
+                | IndexAlgorithm::HnswPq { complexity, .. } => Some(*complexity),
+                _ => None,
+            })
+            .unwrap_or(16);
 
         tracing::info!(
             "Building HNSW-IVF index: {} vectors, {} clusters, algo={:?}",
@@ -932,11 +968,11 @@ impl HnswIvfIndex {
 
         // Step 2: Train Quantizer if requested
         let quantizer = match algo {
-            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::TurboQuant(
-                TurboQuantEncoder::train(&vectors, 8, metric)?,
+            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(
+                BenoQuantEncoder::train(&vectors, 8, metric)?,
             )),
-            IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::TurboQuant(
-                TurboQuantEncoder::train(&vectors, 4, metric)?,
+            IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(
+                BenoQuantEncoder::train(&vectors, 4, metric)?,
             )),
             IndexAlgorithm::HnswPq { compression, .. } => {
                 let subspaces = dim / compression;
@@ -989,12 +1025,22 @@ impl HnswIvfIndex {
             .into_par_iter()
             .map(|(cluster_id, vecs): (usize, Vec<(Vec<f32>, usize)>)| {
                 let max_layers = 16;
-                let ef_construction = (hnsw_m * 2).max(40);
+                let ef_construction = std::env::var("BSDB_HNSW_EF_CONSTRUCTION")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .or_else(|| match algo {
+                        IndexAlgorithm::Hnsw { quality, .. }
+                        | IndexAlgorithm::HnswTq8 { quality, .. }
+                        | IndexAlgorithm::HnswTq4 { quality, .. }
+                        | IndexAlgorithm::HnswPq { quality, .. } => Some(*quality),
+                        _ => None,
+                    })
+                    .unwrap_or((hnsw_m * 2).max(40));
 
                 // Determine HNSW node type and distance metric
                 let mut hnsw = if let Some(q) = quantizer.as_ref() {
                     match q {
-                        QuantizerImpl::TurboQuant(tq) => {
+                        QuantizerImpl::BenoQuant(tq) => {
                             if tq.bits() == 4 {
                                 HnswGraph::TurboQuant4(Hnsw::new(
                                     hnsw_m,
@@ -1012,6 +1058,15 @@ impl HnswIvfIndex {
                                     crate::core::index::distance::DistL2u8,
                                 ))
                             }
+                        }
+                        QuantizerImpl::Sq(_) => {
+                            HnswGraph::TurboQuant8(Hnsw::new(
+                                hnsw_m,
+                                vecs.len(),
+                                max_layers,
+                                ef_construction,
+                                crate::core::index::distance::DistL2u8,
+                            ))
                         }
                         QuantizerImpl::Pq(pq) => {
                             let dist = crate::core::index::pq::DistPqSdc {
@@ -1137,10 +1192,9 @@ impl HnswIvfIndex {
 
         // Pre-quantize query if needed for faster graph traversal (SDC)
         let effective_query = match self.quantizer {
-            Some(QuantizerImpl::TurboQuant(ref q)) => {
+            Some(QuantizerImpl::BenoQuant(ref q)) => {
                 let mut q_vec = query_f32.to_vec();
-                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
-                {
+                if self.metric == VectorMetric::Cosine {
                     let norm = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
                     if norm > 1e-12 {
                         let inv = 1.0 / norm;
@@ -1150,6 +1204,9 @@ impl HnswIvfIndex {
                     }
                 }
                 VectorValue::Binary(q.encode(&q_vec))
+            }
+            Some(QuantizerImpl::Sq(ref q)) => {
+                VectorValue::Binary(q.encode(query_f32))
             }
             Some(QuantizerImpl::Pq(ref q)) => {
                 let mut q_vec = query_f32.to_vec();
@@ -1667,7 +1724,7 @@ impl HnswIvfIndex {
 
                 let hnsw = if let Some(q_impl) = quantizer_for_deser.clone() {
                     match q_impl {
-                        QuantizerImpl::TurboQuant(q) => {
+                        QuantizerImpl::BenoQuant(q) => {
                             if q.bits() == 4 {
                                 HnswGraph::TurboQuant4Arrow(
                                     match cb.graph {
@@ -1685,6 +1742,15 @@ impl HnswIvfIndex {
                                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                                 )
                             }
+                        }
+                        QuantizerImpl::Sq(_) => {
+                            HnswGraph::TurboQuant8Arrow(
+                                match cb.graph {
+                                    GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u8),
+                                    GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, crate::core::index::distance::DistL2u8),
+                                }
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                            )
                         }
                         QuantizerImpl::Pq(pq) => {
                             let dist = crate::core::index::pq::DistPqSdc {
@@ -1922,23 +1988,37 @@ impl HnswIvfIndex {
             graph_file.read_to_end(&mut graph_bytes)?;
 
             // Use the metric loaded from centroids metadata
-            let hnsw = if let Some(crate::core::index::QuantizerImpl::TurboQuant(q)) = &quantizer {
-                if q.bits == 4 {
-                    HnswGraph::TurboQuant4Arrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                            &graph_bytes,
-                            crate::core::index::distance::DistL2u4,
+            let hnsw = if let Some(q_impl) = &quantizer {
+                match q_impl {
+                    crate::core::index::QuantizerImpl::BenoQuant(q) => {
+                        if q.bits == 4 {
+                            HnswGraph::TurboQuant4Arrow(
+                                crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                                    &graph_bytes,
+                                    crate::core::index::distance::DistL2u4,
+                                )
+                                .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
+                            )
+                        } else {
+                            HnswGraph::TurboQuant8Arrow(
+                                crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                                    &graph_bytes,
+                                    crate::core::index::distance::DistL2u8,
+                                )
+                                .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
+                            )
+                        }
+                    }
+                    crate::core::index::QuantizerImpl::Sq(_) => {
+                        HnswGraph::TurboQuant8Arrow(
+                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                                &graph_bytes,
+                                crate::core::index::distance::DistL2u8,
+                            )
+                            .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                         )
-                        .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
-                    )
-                } else {
-                    HnswGraph::TurboQuant8Arrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                            &graph_bytes,
-                            crate::core::index::distance::DistL2u8,
-                        )
-                        .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
-                    )
+                    }
+                    _ => anyhow::bail!("Unsupported quantizer variant for legacy load"),
                 }
             } else {
                 match metric {

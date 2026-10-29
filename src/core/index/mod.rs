@@ -13,6 +13,7 @@ pub mod hnsw_rs;
 pub mod ivf;
 pub mod json_path;
 pub mod memory;
+pub mod benoquant;
 #[cfg(all(
     not(target_os = "macos"),
     not(all(target_os = "windows", target_arch = "aarch64")),
@@ -20,11 +21,14 @@ pub mod memory;
 ))]
 pub mod nvrtc;
 pub mod pq;
+pub mod sq;
 pub mod tokenizer;
 pub mod turboquant;
 
+pub use benoquant::{fwht, rademacher_sign, BenoQuantEncoder};
 pub use pq::PqEncoder;
-pub use turboquant::{fwht, TurboQuantEncoder};
+pub use sq::SqEncoder;
+pub use turboquant::TurboQuantEncoder;
 
 use anyhow::Result;
 use roaring::RoaringBitmap;
@@ -60,49 +64,57 @@ pub trait Quantizer: std::fmt::Debug + Send + Sync {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QuantizerImpl {
-    TurboQuant(turboquant::TurboQuantEncoder),
+    #[serde(alias = "TurboQuant")]
+    BenoQuant(benoquant::BenoQuantEncoder),
+    Sq(sq::SqEncoder),
     Pq(pq::PqEncoder),
 }
 
 impl Quantizer for QuantizerImpl {
     fn encode(&self, vector: &[f32]) -> Vec<u8> {
         match self {
-            QuantizerImpl::TurboQuant(q) => q.encode(vector),
+            QuantizerImpl::BenoQuant(q) => q.encode(vector),
+            QuantizerImpl::Sq(q) => q.encode(vector),
             QuantizerImpl::Pq(q) => q.encode(vector),
         }
     }
 
     fn decode(&self, bytes: &[u8]) -> Vec<f32> {
         match self {
-            QuantizerImpl::TurboQuant(q) => q.decode(bytes),
+            QuantizerImpl::BenoQuant(q) => q.decode(bytes),
+            QuantizerImpl::Sq(q) => q.decode(bytes),
             QuantizerImpl::Pq(q) => q.decode(bytes),
         }
     }
 
     fn distance_adc(&self, query: &[f32], encoded: &[u8]) -> f32 {
         match self {
-            QuantizerImpl::TurboQuant(q) => q.distance_adc(query, encoded),
+            QuantizerImpl::BenoQuant(q) => q.distance_adc(query, encoded),
+            QuantizerImpl::Sq(q) => q.distance_adc(query, encoded),
             QuantizerImpl::Pq(q) => q.distance_adc(query, encoded),
         }
     }
 
     fn name(&self) -> String {
         match self {
-            QuantizerImpl::TurboQuant(q) => q.name(),
+            QuantizerImpl::BenoQuant(q) => q.name(),
+            QuantizerImpl::Sq(q) => q.name(),
             QuantizerImpl::Pq(q) => q.name(),
         }
     }
 
     fn bits(&self) -> usize {
         match self {
-            QuantizerImpl::TurboQuant(q) => q.bits(),
+            QuantizerImpl::BenoQuant(q) => q.bits(),
+            QuantizerImpl::Sq(q) => q.bits(),
             QuantizerImpl::Pq(q) => q.bits(),
         }
     }
 
     fn dim(&self) -> usize {
         match self {
-            QuantizerImpl::TurboQuant(q) => q.dim(),
+            QuantizerImpl::BenoQuant(q) => q.dim(),
+            QuantizerImpl::Sq(q) => q.dim(),
             QuantizerImpl::Pq(q) => q.dim(),
         }
     }
