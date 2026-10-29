@@ -728,9 +728,21 @@ impl HnswIvfIndex {
         let (centroids, _) = simple_kmeans_with_seed(&vectors_sampled, n_lists, 10, seed)?;
 
         let quantizer = match algo {
-            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(
-                BenoQuantEncoder::train(&vectors_sampled, 8, metric)?,
-            )),
+            IndexAlgorithm::HnswTq8 { .. } => {
+                let use_sq = std::env::var("BSDB_USE_SQ")
+                    .ok()
+                    .map(|v| v == "1" || v.to_lowercase() == "true")
+                    .unwrap_or(false);
+                if use_sq {
+                    Some(QuantizerImpl::Sq(
+                        crate::core::index::sq::SqEncoder::train(&vectors_sampled, 8, metric)?,
+                    ))
+                } else {
+                    Some(QuantizerImpl::BenoQuant(
+                        BenoQuantEncoder::train(&vectors_sampled, 8, metric)?,
+                    ))
+                }
+            }
             IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(
                 BenoQuantEncoder::train(&vectors_sampled, 4, metric)?,
             )),
@@ -968,9 +980,21 @@ impl HnswIvfIndex {
 
         // Step 2: Train Quantizer if requested
         let quantizer = match algo {
-            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(
-                BenoQuantEncoder::train(&vectors, 8, metric)?,
-            )),
+            IndexAlgorithm::HnswTq8 { .. } => {
+                let use_sq = std::env::var("BSDB_USE_SQ")
+                    .ok()
+                    .map(|v| v == "1" || v.to_lowercase() == "true")
+                    .unwrap_or(false);
+                if use_sq {
+                    Some(QuantizerImpl::Sq(
+                        crate::core::index::sq::SqEncoder::train(&vectors, 8, metric)?,
+                    ))
+                } else {
+                    Some(QuantizerImpl::BenoQuant(
+                        BenoQuantEncoder::train(&vectors, 8, metric)?,
+                    ))
+                }
+            }
             IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(
                 BenoQuantEncoder::train(&vectors, 4, metric)?,
             )),

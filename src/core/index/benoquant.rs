@@ -16,6 +16,10 @@ pub fn rademacher_sign(i: usize) -> f32 {
     if (x & 1) == 0 { 1.0 } else { -1.0 }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// BenoQuant™ (Randomized Walsh-Hadamard Transform + Scalar Quantization)
 ///
 /// High-performance vector quantization engine that leverages deterministic
@@ -31,6 +35,8 @@ pub struct BenoQuantEncoder {
     pub scale: f32,
     #[serde(default)]
     pub metric: VectorMetric,
+    #[serde(default = "default_true")]
+    pub use_rademacher: bool,
 }
 
 /// Backward compatibility alias for the legacy TurboQuant name.
@@ -44,6 +50,7 @@ impl BenoQuantEncoder {
             offset,
             scale,
             metric: VectorMetric::L2,
+            use_rademacher: true,
         }
     }
 
@@ -52,8 +59,30 @@ impl BenoQuantEncoder {
         self
     }
 
+    pub fn with_rademacher(mut self, enabled: bool) -> Self {
+        self.use_rademacher = enabled;
+        self
+    }
+
     /// Train the quantizer by finding the min/max values across a sample of rotated vectors.
     pub fn train(vectors: &[Vec<f32>], bits: usize, metric: VectorMetric) -> Result<Self> {
+        let env_override = std::env::var("BSDB_USE_RADEMACHER")
+            .ok()
+            .map(|v| v != "0" && v.to_lowercase() != "false");
+        let use_rademacher = env_override.unwrap_or(true);
+        Self::train_configured(vectors, bits, metric, use_rademacher)
+    }
+
+    pub fn train_vanilla(vectors: &[Vec<f32>], bits: usize, metric: VectorMetric) -> Result<Self> {
+        Self::train_configured(vectors, bits, metric, false)
+    }
+
+    pub fn train_configured(
+        vectors: &[Vec<f32>],
+        bits: usize,
+        metric: VectorMetric,
+        use_rademacher: bool,
+    ) -> Result<Self> {
         let dim = vectors[0].len();
         let mut global_min = f32::MAX;
         let mut global_max = f32::MIN;
@@ -80,8 +109,10 @@ impl BenoQuantEncoder {
                 rotated.resize(next_pow2, 0.0);
             }
             // Deterministic Rademacher sign modulation: eliminates DC spike on non-negative domains
-            for (j, val) in rotated.iter_mut().enumerate() {
-                *val *= rademacher_sign(j);
+            if use_rademacher {
+                for (j, val) in rotated.iter_mut().enumerate() {
+                    *val *= rademacher_sign(j);
+                }
             }
             fwht(&mut rotated);
 
@@ -107,6 +138,7 @@ impl BenoQuantEncoder {
             offset: global_min,
             scale,
             metric,
+            use_rademacher,
         })
     }
 }
@@ -132,8 +164,10 @@ impl Quantizer for BenoQuantEncoder {
             rotated.resize(next_pow2, 0.0);
         }
         // Deterministic Rademacher sign modulation: eliminates DC spike on non-negative domains
-        for (j, val) in rotated.iter_mut().enumerate() {
-            *val *= rademacher_sign(j);
+        if self.use_rademacher {
+            for (j, val) in rotated.iter_mut().enumerate() {
+                *val *= rademacher_sign(j);
+            }
         }
         fwht(&mut rotated);
 
@@ -184,8 +218,10 @@ impl Quantizer for BenoQuantEncoder {
         rotated.iter_mut().for_each(|x| *x /= n);
 
         // Invert Rademacher sign modulation: s_j * s_j = 1
-        for (j, val) in rotated.iter_mut().enumerate() {
-            *val *= rademacher_sign(j);
+        if self.use_rademacher {
+            for (j, val) in rotated.iter_mut().enumerate() {
+                *val *= rademacher_sign(j);
+            }
         }
 
         // Truncate to original dimension
@@ -213,8 +249,10 @@ impl Quantizer for BenoQuantEncoder {
             let next_pow2 = rotated_query.len().next_power_of_two();
             rotated_query.resize(next_pow2, 0.0);
         }
-        for (j, val) in rotated_query.iter_mut().enumerate() {
-            *val *= rademacher_sign(j);
+        if self.use_rademacher {
+            for (j, val) in rotated_query.iter_mut().enumerate() {
+                *val *= rademacher_sign(j);
+            }
         }
         fwht(&mut rotated_query);
 
@@ -248,7 +286,11 @@ impl Quantizer for BenoQuantEncoder {
     }
 
     fn name(&self) -> String {
-        format!("benoquant_{}bit", self.bits)
+        if self.use_rademacher {
+            format!("benoquant_{}bit", self.bits)
+        } else {
+            format!("vanilla_turboquant_{}bit", self.bits)
+        }
     }
 
     fn bits(&self) -> usize {
