@@ -142,6 +142,12 @@ class VectorAdapter:
     ) -> np.ndarray:
         raise NotImplementedError
 
+    def search_full_row(
+        self, handle, queries: np.ndarray, k: int, ef_search: int, metric: str
+    ):
+        """Execute ANN search AND retrieve the full row payload."""
+        return self.search(handle, queries, k, ef_search, metric)
+
     def index_bytes(self, handle) -> int:
         return 0
 
@@ -160,8 +166,12 @@ def _dir_size(path: str) -> int:
 
 
 class FaissAdapter(VectorAdapter):
-    def __init__(self) -> None:
-        super().__init__(name="faiss", module="faiss")
+    def __init__(self, index_type: str = "flat") -> None:
+        name = "faiss_sq" if index_type in ("hnsw_sq", "sq") else "faiss"
+        super().__init__(name=name, module="faiss")
+        self.index_type = index_type
+        self.index_precision = "sq" if index_type in ("hnsw_sq", "sq") else "f32"
+        self._train: Optional[np.ndarray] = None
 
     def build(self, train, params, ctx):
         import faiss
@@ -173,14 +183,21 @@ class FaissAdapter(VectorAdapter):
             if metric in ("inner_product", "cosine")
             else faiss.METRIC_L2
         )
-        index = faiss.IndexHNSWFlat(dim, params["m"], faiss_metric)
-        index.hnsw.efConstruction = params["ef_construction"]
         data = np.ascontiguousarray(train)
         if metric == "cosine":
             faiss.normalize_L2(data)
-        index.add(data)
-        # Track whether the index actually landed on the GPU so the record's
-        # `device` reflects where the algorithm ran, not the pass it was in.
+
+        if self.index_type in ("hnsw_sq", "sq"):
+            index = faiss.IndexHNSWSQ(dim, faiss.ScalarQuantizer.QT_8bit, params["m"], faiss_metric)
+            index.hnsw.efConstruction = params["ef_construction"]
+            index.train(data)
+            index.add(data)
+        else:
+            index = faiss.IndexHNSWFlat(dim, params["m"], faiss_metric)
+            index.hnsw.efConstruction = params["ef_construction"]
+            index.add(data)
+
+        self._train = data
         self._used_gpu = False
         if ctx.get("device") == "gpu":
             # Requires faiss-gpu; falls back to the CPU index when unavailable.
@@ -190,25 +207,34 @@ class FaissAdapter(VectorAdapter):
                 self._used_gpu = True
             except Exception as exc:
                 print(f"faiss: GPU unavailable, using CPU index ({exc})", flush=True)
-        return index
+        return (index, data)
 
     def search(self, handle, queries, k, ef_search, metric):
         import faiss
 
-        handle.hnsw.efSearch = ef_search
+        index = handle[0] if isinstance(handle, tuple) else handle
+        index.hnsw.efSearch = ef_search
         q = np.ascontiguousarray(queries)
         if metric == "cosine":
             faiss.normalize_L2(q)
-        _, ids = handle.search(q, k)
+        _, ids = index.search(q, k)
+        return ids
+
+    def search_full_row(self, handle, queries, k, ef_search, metric):
+        index, data = handle if isinstance(handle, tuple) else (handle, self._train)
+        ids = self.search(index, queries, k, ef_search, metric)
+        if data is not None and len(ids) > 0:
+            return data[ids[0]]
         return ids
 
     def index_bytes(self, handle):
         import faiss
+        index = handle[0] if isinstance(handle, tuple) else handle
         try:
-            return int(len(faiss.serialize_index(handle)))
+            return int(len(faiss.serialize_index(index)))
         except Exception:
             try:
-                return int(handle.ntotal) * int(handle.d) * 4
+                return int(index.ntotal) * int(index.d) * 4
             except Exception:
                 return 0
 
@@ -238,6 +264,13 @@ class HnswlibAdapter(VectorAdapter):
     def search(self, handle, queries, k, ef_search, metric):
         handle.set_ef(ef_search)
         labels, _ = handle.knn_query(queries, k=k)
+        return labels
+
+    def search_full_row(self, handle, queries, k, ef_search, metric):
+        handle.set_ef(ef_search)
+        labels, _ = handle.knn_query(queries, k=k)
+        if len(labels) > 0:
+            return handle.get_items(labels[0])
         return labels
 
     def index_bytes(self, handle):
@@ -312,6 +345,23 @@ class PgvectorAdapter(VectorAdapter):
             out.append([r[0] for r in cur.fetchall()])
         return np.array(out)
 
+    def search_full_row(self, handle, queries, k, ef_search, metric):
+        op = {
+            "l2": "<->",
+            "cosine": "<=>",
+            "inner_product": "<#>",
+        }.get(metric, "<->")
+        cur = handle.cursor()
+        cur.execute(f"SET hnsw.ef_search = {int(ef_search)}")
+        out = []
+        for q in queries:
+            cur.execute(
+                f"SELECT id, embedding FROM bsdb_bench ORDER BY embedding {op} %s::vector LIMIT %s",
+                (_vec_literal(q), int(k)),
+            )
+            out.append(cur.fetchall())
+        return out
+
     def index_bytes(self, handle):
         cur = handle.cursor()
         cur.execute("SELECT pg_total_relation_size('bsdb_bench')")
@@ -327,15 +377,17 @@ class LanceDbAdapter(VectorAdapter):
     * ``ivf_pq``  — LanceDB's **default** disk-ANN index (IVF + product
       quantization). This is what ``create_index`` builds with no config, so it
       is the representative "what a LanceDB user gets" baseline.
-    * ``hnsw_sq`` — HNSW with scalar quantization, the closest LanceDB has to
-      the plain-float HNSW the other engines use (LanceDB has no plain-float
-      HNSW). Kept so the comparison can also be HNSW-vs-HNSW.
+    * ``hnsw_flat`` — LanceDB's uncompressed HNSW over raw float32 vectors
+      (Index Precision: f32). Parity with plain-float HNSW in FAISS/HNSWlib.
+    * ``hnsw_sq``   — LanceDB's HNSW with scalar quantization (8-bit integer vectors,
+      Index Precision: sq).
     """
 
-    def __init__(self, index_type: str = "ivf_pq") -> None:
-        name = "lancedb" if index_type == "ivf_pq" else "lancedb_hnsw"
+    def __init__(self, index_type: str = "hnsw_flat") -> None:
+        name = "lancedb" if index_type in ("hnsw_flat", "flat") else "lancedb_sq"
         super().__init__(name=name, module="lancedb")
         self.index_type = index_type
+        self.index_precision = "f32" if index_type in ("hnsw_flat", "flat") else "sq"
 
     def build(self, train, params, ctx):
         import lancedb
@@ -359,7 +411,18 @@ class LanceDbAdapter(VectorAdapter):
             "inner_product": "dot",
         }.get(params.get("metric"), "l2")
         # New unified API: the first positional arg is the vector column name.
-        if self.index_type == "hnsw_sq":
+        if self.index_type in ("hnsw_flat", "flat"):
+            from lancedb.index import HnswFlat
+
+            t.create_index(
+                "vector",
+                config=HnswFlat(
+                    distance_type=metric,
+                    m=int(params["m"]),
+                    ef_construction=int(params["ef_construction"]),
+                ),
+            )
+        elif self.index_type in ("hnsw_sq", "sq"):
             from lancedb.index import HnswSq
 
             t.create_index(
@@ -389,7 +452,7 @@ class LanceDbAdapter(VectorAdapter):
             # uses `ef`, IVF_PQ uses `nprobes`. Guarded so a client without
             # either method still runs instead of failing the whole engine.
             try:
-                if self.index_type == "hnsw_sq":
+                if self.index_type in ("hnsw_flat", "hnsw_sq", "flat", "sq"):
                     qb = qb.ef(int(ef_search))
                 else:
                     qb = qb.nprobes(max(1, int(ef_search) // 10))
@@ -398,6 +461,22 @@ class LanceDbAdapter(VectorAdapter):
             rows = qb.to_list()
             out.append([int(r["id"]) for r in rows])
         return np.array(out)
+
+    def search_full_row(self, handle, queries, k, ef_search, metric):
+        t, _uri = handle
+        out = []
+        for q in queries:
+            # Full row: fetch id and vector from Lance file on disk
+            qb = t.search(q.tolist()).limit(int(k))
+            try:
+                if self.index_type in ("hnsw_flat", "hnsw_sq", "flat", "sq"):
+                    qb = qb.ef(int(ef_search))
+                else:
+                    qb = qb.nprobes(max(1, int(ef_search) // 10))
+            except (AttributeError, TypeError):
+                pass
+            out.append(qb.to_list())
+        return out
 
     def index_bytes(self, handle):
         _t, uri = handle
@@ -483,12 +562,41 @@ class OpenSearchAdapter(VectorAdapter):
         for q in queries:
             body = {
                 "size": int(k),
-                "query": {"knn": {"vector": {"vector": q.tolist(), "k": int(k)}}},
+                "query": {
+                    "knn": {
+                        "vector": {
+                            "vector": q.tolist(),
+                            "k": int(k),
+                            "method_parameters": {"ef_search": int(ef_search)},
+                        }
+                    }
+                },
                 "_source": False,
             }
             res = es.search(index="bsdb-bench", body=body)
             out.append([int(h["_id"]) for h in res["hits"]["hits"]])
         return np.array(out)
+
+    def search_full_row(self, handle, queries, k, ef_search, metric):
+        es = handle
+        out = []
+        for q in queries:
+            body = {
+                "size": int(k),
+                "query": {
+                    "knn": {
+                        "vector": {
+                            "vector": q.tolist(),
+                            "k": int(k),
+                            "method_parameters": {"ef_search": int(ef_search)},
+                        }
+                    }
+                },
+                "_source": True,
+            }
+            res = es.search(index="bsdb-bench", body=body)
+            out.append(res["hits"]["hits"])
+        return out
 
     def index_bytes(self, handle):
         # OpenSearch exposes the on-disk index size via the stats API.
@@ -502,12 +610,18 @@ class OpenSearchAdapter(VectorAdapter):
 class QdrantAdapter(VectorAdapter):
     """Qdrant (dense-vector collection + HNSW) via the qdrant-client."""
 
-    def __init__(self) -> None:
-        super().__init__(name="qdrant", module="qdrant_client", server_side=True)
+    def __init__(self, index_type: str = "flat") -> None:
+        name = "qdrant_sq" if index_type in ("hnsw_sq", "sq") else "qdrant"
+        super().__init__(name=name, module="qdrant_client", server_side=True)
+        self.index_type = index_type
+        self.index_precision = "sq" if index_type in ("hnsw_sq", "sq") else "f32"
 
     def build(self, train, params, ctx):
         from qdrant_client import QdrantClient
-        from qdrant_client.models import Distance, HnswConfigDiff, PointStruct, VectorParams
+        from qdrant_client.models import (
+            Distance, HnswConfigDiff, PointStruct, VectorParams,
+            ScalarQuantization, ScalarQuantizationConfig, ScalarType
+        )
 
         url = ctx.get("host") or os.environ.get("QDRANT_URL") or "http://localhost:6333"
         client = QdrantClient(url=url, timeout=300)
@@ -516,6 +630,15 @@ class QdrantAdapter(VectorAdapter):
             "cosine": Distance.COSINE,
             "inner_product": Distance.DOT,
         }.get(metric, Distance.EUCLID)
+        quant_config = None
+        if self.index_type in ("hnsw_sq", "sq"):
+            quant_config = ScalarQuantization(
+                scalar=ScalarQuantizationConfig(
+                    type=ScalarType.INT8,
+                    quantile=0.99,
+                    always_ram=True,
+                )
+            )
         client.recreate_collection(
             collection_name="bsdb_bench",
             vectors_config=VectorParams(size=int(train.shape[1]), distance=distance),
@@ -523,8 +646,9 @@ class QdrantAdapter(VectorAdapter):
                 m=int(params["m"]),
                 ef_construct=int(params["ef_construction"]),
             ),
+            quantization_config=quant_config,
         )
-        batch = 2048
+        batch = 512
         for start in range(0, len(train), batch):
             end = min(start + batch, len(train))
             client.upsert(
@@ -561,11 +685,40 @@ class QdrantAdapter(VectorAdapter):
             out.append([int(p.id) for p in res])
         return np.array(out)
 
+    def search_full_row(self, handle, queries, k, ef_search, metric):
+        from qdrant_client.models import SearchParams
+
+        search_params = SearchParams(hnsw_ef=int(ef_search), exact=False)
+        out = []
+        for q in queries:
+            vec = q.tolist()
+            try:
+                res = handle.query_points(
+                    collection_name="bsdb_bench",
+                    query=vec,
+                    limit=int(k),
+                    search_params=search_params,
+                    with_payload=True,
+                    with_vectors=True,
+                ).points
+            except Exception:
+                res = handle.search(
+                    collection_name="bsdb_bench",
+                    query_vector=vec,
+                    limit=int(k),
+                    search_params=search_params,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+            out.append(res)
+        return out
+
     def index_bytes(self, handle):
         try:
             info = handle.get_collection("bsdb_bench")
             dim = int(info.config.params.vectors.size)
-            return dim * int(info.points_count or 0) * 4
+            bytes_per_dim = 1 if self.index_precision == "sq" else 4
+            return dim * int(info.points_count or 0) * bytes_per_dim
         except Exception:
             return 0
 
@@ -606,7 +759,7 @@ class MilvusAdapter(VectorAdapter):
                 },
             },
         )
-        batch = 2048
+        batch = 512
         for start in range(0, len(train), batch):
             end = min(start + batch, len(train))
             client.insert(
@@ -629,6 +782,20 @@ class MilvusAdapter(VectorAdapter):
             out.append([int(h["id"]) for h in hits[0]])
         return np.array(out)
 
+    def search_full_row(self, handle, queries, k, ef_search, metric):
+        client, name, mtype, _dim, _n = handle
+        out = []
+        for q in queries:
+            hits = client.search(
+                collection_name=name,
+                data=[q.tolist()],
+                limit=int(k),
+                output_fields=["id", "vector"],
+                search_params={"metric_type": mtype, "params": {"ef": int(ef_search)}},
+            )
+            out.append(hits[0])
+        return out
+
     def index_bytes(self, handle):
         # Milvus does not expose per-index bytes; report the raw vector payload
         # (dim * count * 4B) as a comparable floor.
@@ -639,8 +806,11 @@ class MilvusAdapter(VectorAdapter):
 class WeaviateAdapter(VectorAdapter):
     """Weaviate (HNSW) via the v4 weaviate-client."""
 
-    def __init__(self) -> None:
-        super().__init__(name="weaviate", module="weaviate", server_side=True)
+    def __init__(self, index_type: str = "flat") -> None:
+        name = "weaviate_sq" if index_type in ("hnsw_sq", "sq") else "weaviate"
+        super().__init__(name=name, module="weaviate", server_side=True)
+        self.index_type = index_type
+        self.index_precision = "sq" if index_type in ("hnsw_sq", "sq") else "f32"
 
     def build(self, train, params, ctx):
         import weaviate
@@ -664,6 +834,9 @@ class WeaviateAdapter(VectorAdapter):
         name = "BsdbBench"
         if client.collections.exists(name):
             client.collections.delete(name)
+        quantizer = None
+        if self.index_type in ("hnsw_sq", "sq"):
+            quantizer = Configure.VectorIndex.Quantizer.sq(training_limit=100000)
         client.collections.create(
             name=name,
             vectorizer_config=Configure.Vectorizer.none(),
@@ -671,6 +844,7 @@ class WeaviateAdapter(VectorAdapter):
                 distance_metric=dist,
                 ef_construction=int(params["ef_construction"]),
                 max_connections=int(params["m"]),
+                quantizer=quantizer,
             ),
             properties=[Property(name="rid", data_type=DataType.INT)],
         )
@@ -700,26 +874,52 @@ class WeaviateAdapter(VectorAdapter):
             out.append([int(o.properties["rid"]) for o in res.objects])
         return np.array(out)
 
+    def search_full_row(self, handle, queries, k, ef_search, metric):
+        _client, coll, _dim, _n = handle
+        out = []
+        for q in queries:
+            try:
+                res = coll.query.near_vector(
+                    near_vector=q.tolist(),
+                    limit=int(k),
+                    return_properties=["rid"],
+                    return_metadata=["distance"],
+                    include_vector=True,
+                    ef=int(ef_search),
+                )
+            except Exception:
+                res = coll.query.near_vector(
+                    near_vector=q.tolist(),
+                    limit=int(k),
+                    return_properties=["rid"],
+                    include_vector=True,
+                )
+            out.append(res.objects)
+        return out
+
     def index_bytes(self, handle):
         # Weaviate's schema API exposes object counts, not index bytes; report
-        # the raw vector payload (dim * count * 4B) as a comparable floor.
+        # the raw vector payload (dim * count * bytes_per_dim) as a comparable floor.
         _client, _coll, dim, n = handle
-        return int(dim) * int(n) * 4
+        bytes_per_dim = 1 if self.index_precision == "sq" else 4
+        return int(dim) * int(n) * bytes_per_dim
 
 
 def vector_adapters() -> dict[str, VectorAdapter]:
     return {
-        "faiss": FaissAdapter(),
+        "faiss": FaissAdapter("flat"),
+        "faiss_sq": FaissAdapter("hnsw_sq"),
         "hnswlib": HnswlibAdapter(),
         "pgvector": PgvectorAdapter(),
-        # LanceDB is reported twice: its default disk-ANN index (IVF_PQ) and the
-        # scalar-quantized HNSW variant, so the comparison covers both families.
-        "lancedb": LanceDbAdapter("ivf_pq"),
-        "lancedb_hnsw": LanceDbAdapter("hnsw_sq"),
+        # LanceDB HNSW: uncompressed float32 (HnswFlat) and scalar-quantized (HnswSq)
+        "lancedb": LanceDbAdapter("hnsw_flat"),
+        "lancedb_sq": LanceDbAdapter("hnsw_sq"),
         "opensearch": OpenSearchAdapter(),
-        "qdrant": QdrantAdapter(),
+        "qdrant": QdrantAdapter("flat"),
+        "qdrant_sq": QdrantAdapter("hnsw_sq"),
         "milvus": MilvusAdapter(),
-        "weaviate": WeaviateAdapter(),
+        "weaviate": WeaviateAdapter("flat"),
+        "weaviate_sq": WeaviateAdapter("hnsw_sq"),
     }
 
 
@@ -818,20 +1018,34 @@ def run_vector(adapter: VectorAdapter, args) -> dict:
     q = min(args.queries, len(test))
     k = args.k
 
-    latencies = []
+    pure_latencies = []
     hits = 0.0
     for i in range(q):
         t1 = time.perf_counter()
         ids = adapter.search(handle, test[i : i + 1], k, args.ef_search, metric)
-        latencies.append(time.perf_counter() - t1)
+        pure_latencies.append(time.perf_counter() - t1)
         got = set(int(x) for x in ids[0].tolist())
         truth_i = set(int(x) for x in neighbors[i][:k].tolist())
         hits += len(got & truth_i) / k
 
+    full_latencies = []
+    for i in range(q):
+        t1 = time.perf_counter()
+        _ = adapter.search_full_row(handle, test[i : i + 1], k, args.ef_search, metric)
+        full_latencies.append(time.perf_counter() - t1)
+
     recall = hits / q
-    total = sum(latencies) or 1e-9
+    pure_total = sum(pure_latencies) or 1e-9
+    full_total = sum(full_latencies) or 1e-9
+    pure_p50 = float(np.percentile(pure_latencies, 50) * 1000)
+    pure_p99 = float(np.percentile(pure_latencies, 99) * 1000)
+    full_p50 = float(np.percentile(full_latencies, 50) * 1000)
+    full_p99 = float(np.percentile(full_latencies, 99) * 1000)
+
     return {
         "engine": adapter.name,
+        "index_type": getattr(adapter, "index_type", "hnsw"),
+        "index_precision": getattr(adapter, "index_precision", "f32"),
         "dataset": args.dataset,
         "workload": "vector_ann",
         "device": _vector_backend(adapter, args.device),
@@ -843,9 +1057,15 @@ def run_vector(adapter: VectorAdapter, args) -> dict:
         "build_s": round(build_s, 3),
         "index_mb": round(adapter.index_bytes(handle) / 1e6, 2),
         "recall_at_k": round(recall, 4),
-        "qps": round(q / total, 1),
-        "p50_ms": round(float(np.percentile(latencies, 50) * 1000), 3),
-        "p99_ms": round(float(np.percentile(latencies, 99) * 1000), 3),
+        "pure_index_qps": round(q / pure_total, 1),
+        "pure_p50_ms": round(pure_p50, 3),
+        "pure_p99_ms": round(pure_p99, 3),
+        "full_row_qps": round(q / full_total, 1),
+        "full_p50_ms": round(full_p50, 3),
+        "full_p99_ms": round(full_p99, 3),
+        "qps": round(q / pure_total, 1),
+        "p50_ms": round(full_p50, 3),
+        "p99_ms": round(full_p99, 3),
     }
 
 

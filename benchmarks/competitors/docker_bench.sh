@@ -40,13 +40,11 @@ K=10
 M=16
 EFC=200
 EFS=200
-# `lancedb` is LanceDB's default disk-ANN index (IVF_PQ); `lancedb_hnsw` is its
-# scalar-quantized HNSW variant. Both are run so the comparison covers each
-# family rather than only the HNSW-shaped one.
+# `lancedb` uses LanceDB's scalar-quantized HNSW (HnswSq).
 # `benostreamdb` is full-precision HNSW (parity with the other float HNSW
 # engines); `benostreamdb_tq8` is the TurboQuant-compressed variant, so
 # the recall/size trade-off is visible rather than conflated.
-CPU_ENGINES="faiss hnswlib lancedb lancedb_hnsw pgvector opensearch qdrant milvus weaviate benostreamdb benostreamdb_tq8"
+CPU_ENGINES="faiss faiss_sq hnswlib lancedb lancedb_sq pgvector opensearch qdrant qdrant_sq milvus weaviate weaviate_sq benostreamdb benostreamdb_tq8"
 # The GPU pass runs only engines with a *working* GPU execution path. CPU-only
 # competitors run on the CPU inside the GPU container and now correctly report
 # device=cpu (per-engine backend), so re-measuring them adds nothing — the CPU

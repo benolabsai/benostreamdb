@@ -58,6 +58,16 @@ pub struct ArrowHnsw<T: ArrowType, D: Distance<T>> {
 }
 
 impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
+    /// Bytes the graph occupies.
+    ///
+    /// The graph is a flat Arrow IPC record batch, not a per-point heap graph:
+    /// when loaded from an mmap the buffers alias the file, so this is the file
+    /// footprint (page-cache backed), and when loaded from owned bytes it is the
+    /// heap footprint. Either way it is what the memory cache must budget for.
+    pub fn footprint_bytes(&self) -> usize {
+        self.batch.get_array_memory_size()
+    }
+
     pub fn load_from_mmap(mmap: Arc<memmap2::Mmap>, distance: D) -> Result<Self, String> {
         let buffer = unsafe {
             Buffer::from_custom_allocation(
@@ -70,6 +80,16 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
     }
 
     pub fn load_from_bytes(bytes: &[u8], distance: D) -> Result<Self, String> {
+        let buffer = Buffer::from(bytes);
+        Self::load_from_buffer(buffer, distance)
+    }
+
+    /// Zero-copy variant of [`Self::load_from_bytes`]: takes ownership of an
+    /// immutable [`bytes::Bytes`] and aliases its memory in the Arrow buffers
+    /// instead of copying. Puffin blob slices that view a memory-mapped
+    /// container therefore stay page-cache backed rather than duplicating on the
+    /// heap.
+    pub fn load_from_bytes_owned(bytes: bytes::Bytes, distance: D) -> Result<Self, String> {
         let buffer = Buffer::from(bytes);
         Self::load_from_buffer(buffer, distance)
     }

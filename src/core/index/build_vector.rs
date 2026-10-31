@@ -104,9 +104,19 @@ impl crate::core::segment::HybridSegmentWriter {
                 self.config.segment_id, col_name
             ));
 
+            // The first batch of a build starts from an empty file; later batches
+            // append. Opening with `append` unconditionally let a stale file from
+            // an interrupted build (or a concurrent one) survive, so the next
+            // build indexed every vector twice and then failed reading it.
+            let first_batch = {
+                let v_data = self.vector_data.lock();
+                !v_data.contains_key(col_name)
+            };
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
-                .append(true)
+                .write(true)
+                .truncate(first_batch)
+                .append(!first_batch)
                 .open(&tmp_path)
                 .context("Failed to open vector temp file")?;
 

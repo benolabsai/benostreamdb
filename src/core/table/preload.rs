@@ -25,6 +25,7 @@
 //! the last-warmed (most recently committed) segments win the budget.
 
 use anyhow::Result;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -92,6 +93,9 @@ pub struct PreloadStats {
     pub bytes_on_disk: u64,
     /// Wall-clock time for the pass.
     pub elapsed_ms: u128,
+    /// First warm failure, so a caller can tell an empty index from a broken one
+    /// without a tracing subscriber attached (the Python module installs none).
+    pub last_error: Option<String>,
 }
 
 impl Table {
@@ -129,6 +133,13 @@ impl Table {
 
         let disk_cache = DiskCache::new(self.store.clone());
 
+        // A Puffin container carries one vector index split across many blobs
+        // (centroids + a graph and a mapping per IVF cluster), and loading any
+        // one of them loads the whole index. Warming each blob therefore warmed
+        // the same index hundreds of times — materializing the entire bundle on
+        // each pass. Warm each (container, column, algorithm) exactly once.
+        let mut warmed_vector_indexes: HashSet<(String, String, String)> = HashSet::new();
+
         for (seg_dir, idx) in work {
             let kind = classify(&idx);
             let wanted = match kind {
@@ -149,6 +160,18 @@ impl Table {
                 format!("{}/{}", seg_dir, idx.file_path)
             };
 
+            if kind == IndexKind::Vector && idx.blob_offset.is_some() {
+                let family = (
+                    full_path.clone(),
+                    idx.column_name.clone(),
+                    idx.algorithm.clone(),
+                );
+                if !warmed_vector_indexes.insert(family) {
+                    stats.indexes_skipped += 1;
+                    continue;
+                }
+            }
+
             // Size the index so we can decide memory vs disk.
             let size = self.index_size_bytes(&full_path, &idx).await;
 
@@ -161,11 +184,14 @@ impl Table {
                         true
                     }
                     Err(e) => {
-                        tracing::debug!(
+                        tracing::warn!(
                             path = %full_path,
                             error = %e,
                             "preload: in-memory warm failed"
                         );
+                        if stats.last_error.is_none() {
+                            stats.last_error = Some(format!("{full_path}: {e}"));
+                        }
                         false
                     }
                 }
@@ -176,11 +202,14 @@ impl Table {
                         true
                     }
                     Err(e) => {
-                        tracing::debug!(
+                        tracing::warn!(
                             path = %full_path,
                             error = %e,
                             "preload: disk warm failed"
                         );
+                        if stats.last_error.is_none() {
+                            stats.last_error = Some(format!("{full_path} (disk): {e}"));
+                        }
                         false
                     }
                 }
@@ -246,7 +275,18 @@ impl Table {
         idx: &IndexFile,
         kind: IndexKind,
     ) -> Result<()> {
-        let cache_key = cache_key_for(&self.uri, full_path, idx);
+        // Puffin-packed vector index: one cache entry per container index, not
+        // per blob (see `puffin_vector_cache_key`).
+        let cache_key = if idx.blob_offset.is_some() {
+            crate::core::index::hnsw_ivf::HnswIvfIndex::puffin_vector_cache_key(
+                &self.uri,
+                full_path,
+                &idx.column_name,
+                &idx.algorithm,
+            )
+        } else {
+            cache_key_for(&self.uri, full_path, idx)
+        };
         match kind {
             IndexKind::Vector => {
                 // Populates HNSW_IVF_CACHE (the reader's vector fast path).

@@ -100,6 +100,47 @@ impl<W: Write + Seek> PuffinWriter<W> {
         Ok((offset, length))
     }
 
+    /// Add a blob by streaming from a reader, avoiding buffering large payloads in RAM.
+    /// Computes the SHA-256 checksum on the fly and returns `(offset, length, sha256_checksum)`.
+    pub fn add_blob_from_reader<R: Read>(
+        &mut self,
+        type_name: String,
+        fields: Vec<i32>,
+        snapshot_id: i64,
+        sequence_number: i64,
+        mut reader: R,
+        properties: HashMap<String, String>,
+    ) -> Result<(i64, i64, String)> {
+        let offset = self.current_offset;
+        let mut hasher = Sha256::new();
+        let mut buf = [0u8; 65536];
+        let mut total_len = 0i64;
+        loop {
+            let n = reader.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            self.writer.write_all(&buf[..n])?;
+            hasher.update(&buf[..n]);
+            total_len += n as i64;
+        }
+        let checksum = format!("{:x}", hasher.finalize());
+
+        self.blobs.push(PuffinBlobMetadata {
+            r#type: type_name,
+            fields,
+            snapshot_id,
+            sequence_number,
+            offset,
+            length: total_len,
+            compression_codec: None,
+            properties,
+        });
+
+        self.current_offset += total_len;
+        Ok((offset, total_len, checksum))
+    }
+
     pub fn finish(mut self) -> Result<W> {
         let footer = PuffinFooter {
             blobs: self.blobs,
@@ -176,6 +217,52 @@ impl<W: Write + Seek> PuffinIndexWriter<W> {
             self.source_snapshot_id,
             1, // sequence number
             data,
+            properties,
+        )?;
+
+        let entry = IndexFile {
+            format_version: 2,
+            index_id: Uuid::new_v4().to_string(),
+            index_category: category.to_string(),
+            algorithm: algorithm.to_string(),
+            column_name: column_name.to_string(),
+            source_snapshot_id: self.source_snapshot_id,
+            source_data_checksum: self.source_data_checksum.clone(),
+            source_record_count: self.source_record_count,
+            index_checksum: Some(index_checksum),
+            file_path: self.container_file_path.clone(),
+            blob_type: Some(blob_type.to_string()),
+            blob_offset: Some(offset),
+            blob_length: Some(length),
+            compression: "none".to_string(),
+        };
+
+        self.entries.push(entry);
+        Ok(self.entries.last().ok_or_else(|| {
+            crate::core::error::BenoStreamError::internal("entry was just pushed")
+        })?)
+    }
+
+    /// Add an index artifact from an on-disk file, streaming its payload directly
+    /// into the Puffin container in chunks without buffering the whole file in RAM.
+    pub fn add_index_blob_from_file(
+        &mut self,
+        category: &str,
+        algorithm: &str,
+        column_name: &str,
+        blob_type: &str,
+        file_path: &str,
+        fields: Vec<i32>,
+        properties: HashMap<String, String>,
+    ) -> Result<&IndexFile> {
+        let file = std::fs::File::open(file_path)?;
+        let reader = std::io::BufReader::with_capacity(65536, file);
+        let (offset, length, index_checksum) = self.writer.add_blob_from_reader(
+            blob_type.to_string(),
+            fields,
+            self.source_snapshot_id,
+            1, // sequence number
+            reader,
             properties,
         )?;
 
@@ -349,6 +436,187 @@ impl<R: Read + Seek> PuffinReader<R> {
     }
 }
 
+/// Zero-copy, read-only object store over the blobs of one Puffin container.
+///
+/// A container is the natural unit for an index split across hundreds of blobs
+/// (centroids plus a graph and a mapping per IVF cluster). Loading it used to
+/// mean materializing every blob into `$TMPDIR` and parsing it back — a full
+/// write and re-read of the bundle on every cold load (4.3 GB per load at 10M
+/// vectors). Here the container is read once and each blob is exposed as a
+/// `Bytes` slice of it, so the loaders copy nothing they do not keep.
+pub struct PuffinContainerStore {
+    inner: object_store::memory::InMemory,
+    label: String,
+}
+
+impl PuffinContainerStore {
+    /// Slice `container` into an in-memory store, returning it together with the
+    /// loader base path for `column_name`'s vector index.
+    pub async fn from_container(
+        container: bytes::Bytes,
+        container_path: &str,
+        column_name: &str,
+    ) -> Result<(Self, String)> {
+        // (filename, offset, length), in container order.
+        let entries: Vec<(String, i64, i64)> = {
+            let reader = PuffinReader::new(std::io::Cursor::new(container.as_ref()))?;
+            reader
+                .footer()
+                .blobs
+                .iter()
+                .enumerate()
+                .map(|(i, b)| {
+                    let name = b
+                        .properties
+                        .get("filename")
+                        .cloned()
+                        .unwrap_or_else(|| format!("blob_{i}"));
+                    (name, b.offset, b.length)
+                })
+                .collect()
+        };
+
+        // A bundle holds one vector index per (column, algorithm). Identify this
+        // one by its centroids blob rather than by blob order, which is not stable.
+        let marker = format!(".{column_name}.");
+        let base_path = entries
+            .iter()
+            .find_map(|(name, _, _)| {
+                if name.contains(&marker) {
+                    name.strip_suffix(".centroids.parquet").map(str::to_string)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Puffin bundle '{}' has no centroids blob for column '{}'",
+                    container_path,
+                    column_name
+                )
+            })?;
+
+        let inner = object_store::memory::InMemory::new();
+        for (name, offset, length) in &entries {
+            let start = usize::try_from(*offset).map_err(|_| {
+                anyhow::anyhow!("negative blob offset {offset} in '{container_path}'")
+            })?;
+            let len = usize::try_from(*length).map_err(|_| {
+                anyhow::anyhow!("negative blob length {length} in '{container_path}'")
+            })?;
+            let end = start
+                .checked_add(len)
+                .filter(|e| *e <= container.len())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "blob '{}' [{start}..{start}+{len}] is outside the {}-byte container",
+                        name,
+                        container.len()
+                    )
+                })?;
+            // `Bytes::slice` shares the container's allocation: no copy.
+            inner
+                .put(
+                    &object_store::path::Path::from(name.as_str()),
+                    container.slice(start..end).into(),
+                )
+                .await?;
+        }
+
+        Ok((
+            Self {
+                inner,
+                label: container_path.to_string(),
+            },
+            base_path,
+        ))
+    }
+}
+
+impl std::fmt::Display for PuffinContainerStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PuffinContainerStore({})", self.label)
+    }
+}
+
+impl std::fmt::Debug for PuffinContainerStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PuffinContainerStore({})", self.label)
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for PuffinContainerStore {
+    async fn put_opts(
+        &self,
+        location: &object_store::path::Path,
+        _payload: object_store::PutPayload,
+        _opts: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        Err(object_store::Error::NotSupported {
+            source: format!("PuffinContainerStore is read-only ({location})").into(),
+        })
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &object_store::path::Path,
+        _opts: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        Err(object_store::Error::NotSupported {
+            source: format!("PuffinContainerStore is read-only ({location})").into(),
+        })
+    }
+
+    async fn get_opts(
+        &self,
+        location: &object_store::path::Path,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    async fn copy(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+    ) -> object_store::Result<()> {
+        Err(object_store::Error::NotSupported {
+            source: format!("PuffinContainerStore is read-only ({from} -> {to})").into(),
+        })
+    }
+
+    async fn copy_if_not_exists(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+    ) -> object_store::Result<()> {
+        Err(object_store::Error::NotSupported {
+            source: format!("PuffinContainerStore is read-only ({from} -> {to})").into(),
+        })
+    }
+
+    async fn delete(&self, location: &object_store::path::Path) -> object_store::Result<()> {
+        Err(object_store::Error::NotSupported {
+            source: format!("PuffinContainerStore is read-only ({location})").into(),
+        })
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+}
+
 /// Materialize every blob of a Puffin container into a temporary directory,
 /// using each blob's `filename` property (falling back to `blob_{i}`).
 ///
@@ -412,4 +680,77 @@ pub fn read_deletion_vector_from_bytes(data: &[u8]) -> Result<roaring::RoaringBi
         .context("Failed to deserialize deletion vector RoaringBitmap")?;
 
     Ok(bitmap)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_streaming_puffin_writer_and_reader() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let puffin_path = temp_dir.path().join("test.puffin");
+        let payload1_path = temp_dir.path().join("payload1.bin");
+        let payload2_path = temp_dir.path().join("payload2.bin");
+
+        let data1 = vec![42u8; 100_000];
+        let data2 = vec![99u8; 200_000];
+        std::fs::write(&payload1_path, &data1)?;
+        std::fs::write(&payload2_path, &data2)?;
+
+        let puffin_file = std::fs::File::create(&puffin_path)?;
+        let mut writer = PuffinIndexWriter::new(
+            std::io::BufWriter::new(puffin_file),
+            puffin_path.to_string_lossy().to_string(),
+            1,
+            "chk123".to_string(),
+            300,
+        )?;
+
+        let mut props1 = HashMap::new();
+        props1.insert("filename".to_string(), "payload1.bin".to_string());
+        writer.add_index_blob_from_file(
+            "vector",
+            "tq8",
+            "embedding",
+            PUFFIN_BLOB_VECTOR_HNSW_TQ8,
+            payload1_path.to_str().unwrap(),
+            vec![],
+            props1,
+        )?;
+
+        let mut props2 = HashMap::new();
+        props2.insert("filename".to_string(), "payload2.bin".to_string());
+        writer.add_index_blob_from_file(
+            "vector",
+            "centroids",
+            "embedding",
+            PUFFIN_BLOB_HNSW_IVF_CENTROIDS,
+            payload2_path.to_str().unwrap(),
+            vec![],
+            props2,
+        )?;
+
+        let (mut file_writer, entries) = writer.finish()?;
+        use std::io::Write;
+        file_writer.flush()?;
+        drop(file_writer);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].blob_length, Some(100_000));
+        assert_eq!(entries[1].blob_length, Some(200_000));
+
+        // Read back with PuffinReader
+        let read_file = std::fs::File::open(&puffin_path)?;
+        let mut reader = PuffinReader::new(read_file)?;
+        let blobs = reader.footer().blobs.clone();
+        assert_eq!(blobs.len(), 2);
+
+        let read_data1 = reader.read_blob(0)?;
+        assert_eq!(read_data1, data1);
+        let read_data2 = reader.read_blob(1)?;
+        assert_eq!(read_data2, data2);
+
+        Ok(())
+    }
 }

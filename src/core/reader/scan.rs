@@ -1887,6 +1887,52 @@ impl HybridReader {
         }
     }
 
+    /// Row groups that contain at least one id in `bitmap`, with each group's
+    /// first global row id: `(row_group_index, first_row_id)`.
+    ///
+    /// Parquet cannot address a single row — a read must start at a row group.
+    /// Restricting a kNN hydration read to the groups that actually hold a
+    /// requested row keeps it O(1) groups instead of O(file): a 10M-row segment
+    /// has ~500 row groups, and walking all of them per query is what made
+    /// hydration cost 44 ms at 10M versus 6 ms at 1M, with *negative* thread
+    /// scaling because every thread paged its way through the whole footer.
+    fn row_groups_covering(
+        metadata: &parquet::file::metadata::ParquetMetaData,
+        bitmap: &RoaringBitmap,
+    ) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        if bitmap.is_empty() {
+            return out;
+        }
+        let mut start = 0usize;
+        let mut cursor = bitmap.iter().peekable();
+        for rg in 0..metadata.num_row_groups() {
+            let rows = metadata.row_group(rg).num_rows() as usize;
+            let end = start + rows;
+            while let Some(id) = cursor.peek() {
+                if *id as usize >= start {
+                    break;
+                }
+                cursor.next();
+            }
+            let first = match cursor.peek() {
+                Some(id) => *id as usize,
+                None => break,
+            };
+            if first < end {
+                out.push((rg, start));
+                while let Some(id) = cursor.peek() {
+                    if *id as usize >= end {
+                        break;
+                    }
+                    cursor.next();
+                }
+            }
+            start = end;
+        }
+        out
+    }
+
     async fn fetch_rows_with_distances(
         &self,
         matches: Vec<(usize, f32)>,
@@ -2135,11 +2181,34 @@ impl HybridReader {
         let arrow_meta = (*meta).clone();
         let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
 
-        let selection = self.bitmap_to_row_selection(
-            &bitmap,
-            builder.metadata().file_metadata().num_rows() as usize,
-        );
-        builder = builder.with_row_selection(selection);
+        // Prune to the row groups that actually hold a requested row, then build
+        // the selection over those groups' concatenated rows (a `RowSelection`
+        // is relative to the groups the reader was told to read).
+        let groups = Self::row_groups_covering(builder.metadata(), &bitmap);
+        let num_groups = builder.metadata().num_row_groups();
+        if !groups.is_empty() && groups.len() < num_groups {
+            let mut shifted = RoaringBitmap::new();
+            let mut base: u32 = 0;
+            for (rg, group_start) in &groups {
+                let rows = builder.metadata().row_group(*rg).num_rows() as u32;
+                for id in bitmap.iter() {
+                    let id = id as usize;
+                    if id >= *group_start && id < *group_start + rows as usize {
+                        shifted.insert(base + (id as u32 - *group_start as u32));
+                    }
+                }
+                base += rows;
+            }
+            builder = builder.with_row_groups(groups.iter().map(|(rg, _)| *rg).collect());
+            let selection = self.bitmap_to_row_selection(&shifted, base as usize);
+            builder = builder.with_row_selection(selection);
+        } else {
+            let selection = self.bitmap_to_row_selection(
+                &bitmap,
+                builder.metadata().file_metadata().num_rows() as usize,
+            );
+            builder = builder.with_row_selection(selection);
+        }
 
         // Apply column projection if specified (skip reading unused columns like embeddings)
         let target_schema_ref = target_schema.clone();
@@ -2435,8 +2504,16 @@ impl HybridReader {
     ) -> Result<Vec<(usize, f32)>> {
         let idx_path_str = idx_info.file_path.clone();
 
-        let cache_key = if let Some(offset) = idx_info.blob_offset {
-            format!("{}/{}:{}", self.root_uri, idx_path_str, offset)
+        // A Puffin container is loaded as one index per (column, algorithm);
+        // keying by blob offset would give each cluster blob its own entry and
+        // re-materialize the entire bundle on every miss.
+        let cache_key = if idx_info.blob_offset.is_some() {
+            HnswIvfIndex::puffin_vector_cache_key(
+                &self.root_uri,
+                &idx_path_str,
+                &idx_info.column_name,
+                &idx_info.algorithm,
+            )
         } else {
             format!("{}/{}", self.root_uri, idx_path_str)
         };
@@ -2502,6 +2579,17 @@ impl HybridReader {
             )
         })
         .await??;
+
+        if std::env::var("BSDB_TRACE_SEARCH").is_ok() {
+            eprintln!(
+                "[trace] search_hnsw_ivf path={} blob_offset={:?} algo={} cache_key={} top={:?}",
+                idx_info.file_path,
+                idx_info.blob_offset,
+                idx_info.algorithm,
+                cache_key,
+                matches.iter().take(5).map(|(id, d)| (*id, *d)).collect::<Vec<_>>(),
+            );
+        }
 
         Ok(matches)
     }

@@ -451,6 +451,26 @@ impl Table {
     }
 
     pub(crate) async fn backfill_indexes_async(&self, target_columns: Vec<String>) -> Result<()> {
+        self.backfill_indexes_inner(target_columns, false).await
+    }
+
+    /// Rebuild `target_columns` on every segment even when the index already
+    /// exists.
+    ///
+    /// `backfill_indexes_async` is idempotent and skips segments that already
+    /// carry the required index type, which is right for `add_index` but wrong
+    /// for a forced reindex: switching the *quantizer* of an existing
+    /// `hnsw_tq8` index keeps the same (column, type) pair, so the skip check
+    /// would leave the old bytes in place and silently report success.
+    pub(crate) async fn backfill_indexes_forced(&self, target_columns: Vec<String>) -> Result<()> {
+        self.backfill_indexes_inner(target_columns, true).await
+    }
+
+    async fn backfill_indexes_inner(
+        &self,
+        target_columns: Vec<String>,
+        force: bool,
+    ) -> Result<()> {
         use futures::StreamExt;
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, all_entries, _) = manager.load_latest_full().await?;
@@ -465,7 +485,7 @@ impl Table {
         // OOM-killed the demo load (per-chunk time grew 293s -> 885s -> 2071s).
         let required = self.required_index_types(&target_columns);
         let total = all_entries.len();
-        let to_build: Vec<crate::core::manifest::ManifestEntry> = if required.is_empty() {
+        let to_build: Vec<crate::core::manifest::ManifestEntry> = if force || required.is_empty() {
             // No configured algorithms to compare against (e.g. `index_all` or `add_index_columns`):
             // fall back to rebuilding everything.
             all_entries
@@ -599,6 +619,12 @@ impl Table {
                     );
 
                     let updated_entry = writer.to_manifest_entry();
+                    drop(writer);
+                    drop(reader);
+
+                    // Explicitly purge dirty jemalloc pages back to the kernel after every segment
+                    // to prevent RSS ratchet across consecutive segments.
+                    crate::core::memory::trim_heap();
                     tracing::debug!(
                         segment = %current_entry.file_path,
                         index_files = ?updated_entry.index_files,

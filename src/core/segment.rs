@@ -509,7 +509,30 @@ impl HybridSegmentWriter {
 
         let puffin_filename = format!("{}.puffin", self.config.segment_id);
         let puffin_path_str = format!("{}{}", parent_prefix, puffin_filename);
-        let mut puffin_writer = crate::core::puffin::PuffinIndexWriter::new_in_memory(
+
+        // Staging file on disk for streaming Puffin serialization (avoids gigabytes of RAM allocation).
+        let local_puffin_target = puffin_path_str
+            .strip_prefix("file://")
+            .unwrap_or(&puffin_path_str);
+        let staging_puffin_path = if let Some(parent) = std::path::Path::new(local_puffin_target).parent() {
+            if parent.exists() {
+                format!("{}.tmp.puffin", local_puffin_target)
+            } else {
+                std::env::temp_dir()
+                    .join(format!("{}.tmp.puffin", self.config.segment_id))
+                    .to_string_lossy()
+                    .to_string()
+            }
+        } else {
+            std::env::temp_dir()
+                .join(format!("{}.tmp.puffin", self.config.segment_id))
+                .to_string_lossy()
+                .to_string()
+        };
+
+        let staging_file = std::fs::File::create(&staging_puffin_path)?;
+        let mut puffin_writer = crate::core::puffin::PuffinIndexWriter::new(
+            std::io::BufWriter::with_capacity(128 * 1024, staging_file),
             puffin_path_str.clone(),
             self.config.active_snapshot_id.unwrap_or(0),
             self.file_checksum
@@ -763,10 +786,6 @@ impl HybridSegmentWriter {
                     _ => "idx",
                 };
 
-                let hnsw_ivf_index = crate::core::index::hnsw_ivf::HnswIvfIndex::build_from_file(
-                    &tmp_path, metric, None, None, algo,
-                )?;
-
                 let suffix = if algos.len() > 1 {
                     format!("{}.{}.{}", col_name, algo_id, idx)
                 } else {
@@ -782,9 +801,15 @@ impl HybridSegmentWriter {
                 let local_base_path =
                     local_staging_dir.join(format!("{}.{}", self.config.segment_id, suffix));
 
-                let saved_files = hnsw_ivf_index
-                    .save(local_base_path.to_str().context("Invalid UTF-8 in path")?)
-                    .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
+                // Streaming build and disk serialization: avoids keeping all bucket HNSW graphs in RAM
+                let saved_files = crate::core::index::hnsw_ivf::HnswIvfIndex::build_and_save_from_file(
+                    &tmp_path,
+                    local_base_path.to_str().context("Invalid UTF-8 in path")?,
+                    metric,
+                    None,
+                    None,
+                    algo,
+                )?;
 
                 {
                     let mut meta = self.index_metadata.lock();
@@ -794,14 +819,13 @@ impl HybridSegmentWriter {
                     );
                 }
 
-                // Pack vector index artifacts into the Puffin bundle.
+                // Pack vector index artifacts into the Puffin bundle via streaming reader.
                 for local_file in &saved_files {
                     let file_name = std::path::Path::new(local_file)
                         .file_name()
                         .context("saved index file has no file name")?
                         .to_string_lossy()
                         .to_string();
-                    let data = std::fs::read(local_file)?;
 
                     let blob_type = if file_name.ends_with(".hnsw.graph") {
                         match algo_id {
@@ -823,12 +847,12 @@ impl HybridSegmentWriter {
 
                     let mut props = HashMap::new();
                     props.insert("filename".to_string(), file_name.clone());
-                    puffin_writer.add_index_blob(
+                    puffin_writer.add_index_blob_from_file(
                         "vector",
                         algo_id,
                         &col_name,
                         blob_type,
-                        &data,
+                        local_file,
                         vec![],
                         props,
                     )?;
@@ -868,14 +892,13 @@ impl HybridSegmentWriter {
             )
             .map_err(|e| anyhow::anyhow!("Graph build failed: {}", e))?;
 
-            // Pack graph index artifacts into the Puffin bundle.
+            // Pack graph index artifacts into the Puffin bundle via streaming reader.
             for local_file in &saved_files {
                 let file_name = std::path::Path::new(local_file)
                     .file_name()
                     .context("saved index file has no file name")?
                     .to_string_lossy()
                     .to_string();
-                let data = std::fs::read(local_file)?;
 
                 let blob_type = if file_name.ends_with(".csr.offsets") {
                     crate::core::puffin::PUFFIN_BLOB_GRAPH_CSR_OFFSETS
@@ -889,12 +912,12 @@ impl HybridSegmentWriter {
 
                 let mut props = HashMap::new();
                 props.insert("filename".to_string(), file_name.clone());
-                puffin_writer.add_index_blob(
+                puffin_writer.add_index_blob_from_file(
                     "graph_v2",
                     "csr_graph",
                     &col_name,
                     blob_type,
-                    &data,
+                    local_file,
                     vec![],
                     props,
                 )?;
@@ -915,10 +938,10 @@ impl HybridSegmentWriter {
         }
 
         // 4. Pack loose scalar inverted-index files (Int32/Int64/Float/Date/
-        // Bool) into the Puffin bundle. These arms of `build_inverted_index`
-        // serialize directly to a staging file rather than the in-memory
-        // `inverted_data` map, so they are collected here and removed from the
-        // upload list.
+        // Bool) into the Puffin bundle via streaming reader. These arms of
+        // `build_inverted_index` serialize directly to a staging file rather
+        // than the in-memory `inverted_data` map, so they are collected here
+        // and removed from the upload list.
         let loose_inv: Vec<String> = {
             let files = self.generated_files.lock();
             files
@@ -928,15 +951,14 @@ impl HybridSegmentWriter {
                 .collect()
         };
         for path in loose_inv {
-            let data = std::fs::read(&path)?;
             let filename = path.split('/').next_back().unwrap_or(&path);
             let col_name = filename.split('.').nth(1).unwrap_or("unknown").to_string();
-            puffin_writer.add_index_blob(
+            puffin_writer.add_index_blob_from_file(
                 "lexical",
                 "inverted",
                 &col_name,
                 crate::core::puffin::PUFFIN_BLOB_LEXICAL_BM25,
-                &data,
+                &path,
                 vec![],
                 HashMap::new(),
             )?;
@@ -946,9 +968,9 @@ impl HybridSegmentWriter {
         }
 
         // 4b. Pack JSON-path overlay files (`<segment>.<col>.jsonpath.parquet`)
-        // into the Puffin bundle so they get a manifest `IndexFile` entry with
-        // category `json_path`. Without this the file is uploaded but never
-        // registered, and the reader cannot find it.
+        // into the Puffin bundle via streaming reader so they get a manifest
+        // `IndexFile` entry with category `json_path`. Without this the file is
+        // uploaded but never registered, and the reader cannot find it.
         let loose_jsonpath: Vec<String> = {
             let files = self.generated_files.lock();
             files
@@ -958,15 +980,14 @@ impl HybridSegmentWriter {
                 .collect()
         };
         for path in loose_jsonpath {
-            let data = std::fs::read(&path)?;
             let filename = path.split('/').next_back().unwrap_or(&path);
             let col_name = filename.split('.').nth(1).unwrap_or("unknown").to_string();
-            puffin_writer.add_index_blob(
+            puffin_writer.add_index_blob_from_file(
                 "json_path",
                 "json_path",
                 &col_name,
                 crate::core::puffin::PUFFIN_BLOB_JSON_PATH,
-                &data,
+                &path,
                 vec![],
                 HashMap::new(),
             )?;
@@ -975,13 +996,40 @@ impl HybridSegmentWriter {
             files.retain(|f| f != &path);
         }
 
-        let (puffin_bytes, puffin_entries) = puffin_writer.finish_to_bytes()?;
-        store
-            .put(
-                &object_store::path::Path::from(puffin_path_str.clone()),
-                puffin_bytes.into(),
-            )
-            .await?;
+        let (mut buf_writer, puffin_entries) = puffin_writer.finish()?;
+        use std::io::Write;
+        buf_writer.flush()?;
+        drop(buf_writer);
+
+        let is_local_file = !puffin_path_str.contains("://") || puffin_path_str.starts_with("file://");
+        let local_dest = puffin_path_str
+            .strip_prefix("file://")
+            .unwrap_or(&puffin_path_str);
+
+        if is_local_file
+            && std::path::Path::new(local_dest)
+                .parent()
+                .map(|p| p.exists())
+                .unwrap_or(false)
+        {
+            // Local lakehouse: zero-copy atomic rename on disk!
+            std::fs::rename(&staging_puffin_path, local_dest)?;
+        } else {
+            let store_path = if puffin_path_str.contains("://") {
+                let url = url::Url::parse(&puffin_path_str)?;
+                object_store::path::Path::from(url.path().trim_start_matches('/'))
+            } else {
+                object_store::path::Path::from(puffin_path_str.clone())
+            };
+            let puffin_bytes = std::fs::read(&staging_puffin_path)?;
+            store
+                .put(
+                    &store_path,
+                    puffin_bytes.into(),
+                )
+                .await?;
+            let _ = std::fs::remove_file(&staging_puffin_path);
+        }
         {
             let mut files = self.generated_files.lock();
             files.push(puffin_path_str.clone());

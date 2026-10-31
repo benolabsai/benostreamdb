@@ -488,6 +488,17 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Rebuild a column's index from the data already stored in the table.
+    ///
+    /// Drops the existing index artifacts and rebuilds them by streaming the
+    /// column back out of the segment Parquet — the data is **not** re-ingested.
+    /// The algorithm comes from the column's current index configuration, so
+    /// call `add_index` (or set the relevant env knobs) first to change it.
+    fn rebuild_index(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.rebuild_index(column)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Alias for `drop_index`: remove all indexing strategies from a column cleanly.
     fn remove_index(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
         self.drop_index(py, column)
@@ -2882,6 +2893,7 @@ impl PyTable {
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("indexes_seen", stats.indexes_seen)?;
         dict.set_item("indexes_warmed", stats.indexes_warmed)?;
+        dict.set_item("last_error", stats.last_error.clone())?;
         dict.set_item("indexes_skipped", stats.indexes_skipped)?;
         dict.set_item("bytes_in_memory", stats.bytes_in_memory)?;
         dict.set_item("bytes_on_disk", stats.bytes_on_disk)?;

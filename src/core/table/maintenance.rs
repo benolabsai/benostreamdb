@@ -685,10 +685,14 @@ impl Table {
         Ok(out)
     }
 
-    /// Force a rebuild of a column's index from the current data: drop any
-    /// existing index files, then re-add the column's configured algorithm(s)
-    /// (falling back to the default vector index when none is configured).
-    /// Backs the connector `rebuild_index` procedures.
+    /// Force a rebuild of a column's index from the current data.
+    ///
+    /// Drops the existing index files, re-registers the column's configured
+    /// algorithm(s) — falling back to the default vector index when none is
+    /// configured — and then physically rebuilds them from the persisted
+    /// Parquet, so the data never has to be re-ingested. Backs the connector
+    /// `rebuild_index` procedures and the ablation harness, which rebuilds one
+    /// index per quantizer over the same table.
     pub async fn rebuild_index(&self, column: String) -> Result<()> {
         let algorithms = {
             let configs = self.indexing.index_configs.read();
@@ -697,23 +701,48 @@ impl Table {
                 .map(|c| c.algorithms.clone())
                 .unwrap_or_default()
         };
-        // A rebuild of a never-indexed column is valid: there is simply nothing
-        // to drop first, so a failed drop is not fatal here.
-        if let Err(e) = self.drop_index(column.clone()).await {
-            tracing::debug!(
-                "rebuild_index: no existing index to drop for '{}': {}",
-                column,
-                e
-            );
-        }
+
+        // Register the algorithm if the column has none configured. When it does,
+        // leave the config alone: the caller may have just set it (e.g. switching
+        // the quantizer), and `add_index` would schedule a redundant backfill.
         if algorithms.is_empty() {
-            self.add_index(column, crate::core::manifest::IndexAlgorithm::default())
+            self.add_index(column.clone(), crate::core::manifest::IndexAlgorithm::default())
                 .await?;
-        } else {
-            for alg in algorithms {
-                self.add_index(column.clone(), alg).await?;
-            }
         }
+
+        // Drain anything the `add_index` above scheduled before forcing: two
+        // concurrent passes append to the same `{segment}.{column}.tmp.vec.bin`
+        // and corrupt the build (a 2x oversized vector file, then a
+        // truncated-read failure).
+        self.wait_for_background_tasks_async().await?;
+
+        // A forced rebuild deliberately does NOT drop the index first. Dropping
+        // commits a manifest entry with no index files and deletes the container,
+        // and the rebuilt entry that follows could not be resolved by the preload
+        // path — queries then fell back to a full scan (1.2 s/query instead of
+        // 6 ms) while still reporting the right answer. Rebuilding over the
+        // existing artifacts replaces the bytes and the manifest entry in one
+        // commit instead.
+        self.backfill_indexes_forced(vec![column.clone()]).await?;
+        self.wait_for_background_tasks_async().await?;
+
+        // Drop every cached artifact a rebuild invalidates. A rebuild rewrites
+        // the container and commits a new manifest, so an entry admitted while
+        // the build was still running (metadata inference loads the index
+        // before the manifest entry is committed) describes bytes that no
+        // longer exist. Serving it returned neighbours from a stale index —
+        // recall 0.0001 in the process that rebuilt, while a fresh process read
+        // 0.86 from the same DB. Rebuilds are rare and explicit, so clearing
+        // every cache that can hold a vector-index or manifest snapshot is the
+        // safe trade.
+        crate::core::cache::HNSW_IVF_CACHE.invalidate_all();
+        crate::core::cache::HNSW_CACHE.invalidate_all();
+        crate::core::cache::INDEX_CACHE.invalidate_all();
+        crate::core::cache::MANIFEST_CACHE.invalidate_all();
+        crate::core::cache::MANIFEST_LIST_CACHE.invalidate_all();
+        crate::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+
+        tracing::info!(column = %column, "rebuild_index: index rebuilt from persisted data");
         Ok(())
     }
 }

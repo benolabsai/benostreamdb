@@ -177,6 +177,43 @@ impl HnswGraph {
         }
     }
 
+    /// Approximate bytes the decoded graph occupies.
+    ///
+    /// The Arrow IPC variants are flat record batches served zero-copy — over an
+    /// mmap of the index object, or over owned bytes — so their footprint is the
+    /// backing buffer size. The legacy `hnsw_rs` variants box every point behind
+    /// `Arc<RwLock<Point>>` and measured ~20 KB per point under dhat profiling.
+    pub fn footprint_bytes(&self) -> usize {
+        // Measured heap overhead per point for the in-memory hnsw_rs graph.
+        const LEGACY_BYTES_PER_POINT: usize = 20_000;
+
+        match self {
+            HnswGraph::L2Arrow(h) => h.footprint_bytes(),
+            HnswGraph::CosineArrow(h) => h.footprint_bytes(),
+            HnswGraph::DotArrow(h) => h.footprint_bytes(),
+            HnswGraph::L1Arrow(h) => h.footprint_bytes(),
+            HnswGraph::HammingArrow(h) => h.footprint_bytes(),
+            HnswGraph::JaccardArrow(h) => h.footprint_bytes(),
+            HnswGraph::BinaryHammingArrow(h) => h.footprint_bytes(),
+            HnswGraph::TurboQuant8Arrow(h) => h.footprint_bytes(),
+            HnswGraph::TurboQuant4Arrow(h) => h.footprint_bytes(),
+            HnswGraph::SparseDotArrow(h) => h.footprint_bytes(),
+            HnswGraph::PqArrow(h) => h.footprint_bytes(),
+
+            HnswGraph::L2(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::Cosine(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::Dot(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::L1(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::Hamming(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::Jaccard(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::BinaryHamming(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::TurboQuant8(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::TurboQuant4(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::SparseDot(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::Pq(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+        }
+    }
+
     pub fn insert(&self, data: (VectorValue, usize)) {
         let (val, local_id) = data;
         match (self, val) {
@@ -346,6 +383,19 @@ impl HnswGraph {
     }
 }
 
+/// Owns a memory map so `bytes::Bytes` can alias it without copying.
+///
+/// `Bytes::from_owner` needs `AsRef<[u8]>`, which `Arc<Mmap>` does not
+/// implement; this newtype supplies it and keeps the mapping alive as long as
+/// any slice derived from it is held.
+struct MmapOwner(Arc<memmap2::Mmap>);
+
+impl AsRef<[u8]> for MmapOwner {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref().as_ref()
+    }
+}
+
 /// HNSW-IVF Hybrid Index
 pub struct HnswIvfIndex {
     /// Cluster centroids for coarse quantization
@@ -354,6 +404,11 @@ pub struct HnswIvfIndex {
     metric: VectorMetric,
     /// Per-cluster HNSW graphs: cluster_id -> (hnsw_index, row_id_mapping)
     cluster_graphs: HashMap<usize, (HnswGraph, Vec<usize>)>,
+    /// True when the per-cluster graphs are zero-copy views over `mmap`'d files.
+    /// In that case the graph bytes live in the OS page cache rather than the
+    /// process heap, so [`Self::size_in_bytes`] must not charge them against the
+    /// memory cache budget (only centroids + row-id mappings are heap-resident).
+    mmap_backed: bool,
     /// Number of clusters (for metadata/scaling)
     _n_lists: usize,
     /// Vector dimensionality
@@ -599,6 +654,355 @@ fn build_bucket_graph(
 }
 
 impl HnswIvfIndex {
+    /// Build HNSW-IVF index from an out-of-core temporary vector file and stream
+    /// each cluster graph and mapping file directly to disk as Rayon finishes it.
+    ///
+    /// This avoids collecting hundreds of bucket graphs into memory simultaneously
+    /// (which peaks at 5-10 GB of RAM for a 5M segment), dropping peak memory
+    /// during index build to strictly bounded worker-thread working set (~80 MB).
+    pub fn build_and_save_from_file(
+        tmp_path: &str,
+        output_base_path: &str,
+        metric: VectorMetric,
+        n_lists: Option<usize>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+    ) -> Result<Vec<String>> {
+        Self::build_and_save_from_file_with_seed(
+            tmp_path,
+            output_base_path,
+            metric,
+            n_lists,
+            hnsw_m,
+            algo,
+            None,
+        )
+    }
+
+    /// Build HNSW-IVF index and stream serialized artifacts directly to disk with an optional PRNG seed.
+    pub fn build_and_save_from_file_with_seed(
+        tmp_path: &str,
+        output_base_path: &str,
+        metric: VectorMetric,
+        n_lists: Option<usize>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+        seed: Option<u64>,
+    ) -> Result<Vec<String>> {
+        let start = std::time::Instant::now();
+        tracing::info!(
+            "Building & streaming HNSW-IVF out-of-core from file {} to {}",
+            tmp_path,
+            output_base_path
+        );
+
+        let mut file = std::fs::File::open(tmp_path)?;
+        let file_len = file.metadata()?.len();
+        let mut n_vectors = 0;
+        let mut dim = 0;
+        let mut vectors_sampled = Vec::new();
+
+        use std::io::{Read, Seek, SeekFrom};
+        let mut id_buf = [0u8; 4];
+        let mut dim_buf = [0u8; 4];
+        let max_samples = 100_000;
+
+        let mut magic_buf = [0u8; 4];
+        let has_header = file.read_exact(&mut magic_buf).is_ok()
+            && u32::from_le_bytes(magic_buf) == VEC_TMP_MAGIC
+            && file.read_exact(&mut dim_buf).is_ok();
+
+        if has_header {
+            dim = u32::from_le_bytes(dim_buf) as usize;
+            let record = 8 + dim * 4;
+            n_vectors = if file_len >= 8 && record > 0 {
+                ((file_len - 8) / record as u64) as usize
+            } else {
+                0
+            };
+            let to_sample = n_vectors.min(max_samples);
+            const SAMPLE_BLOCK: usize = 64;
+            let n_blocks = (to_sample / SAMPLE_BLOCK).max(1).min(n_vectors);
+            let stride = (n_vectors / n_blocks).max(1);
+            let record = (8 + dim * 4) as u64;
+
+            'sample: for b in 0..n_blocks {
+                let start_idx = b * stride;
+                if start_idx >= n_vectors {
+                    break;
+                }
+                file.seek(SeekFrom::Start(8 + start_idx as u64 * record))?;
+                for _ in 0..SAMPLE_BLOCK {
+                    if vectors_sampled.len() >= to_sample {
+                        break 'sample;
+                    }
+                    if file.read_exact(&mut id_buf).is_err()
+                        || file.read_exact(&mut dim_buf).is_err()
+                    {
+                        break 'sample;
+                    }
+                    let current_dim = u32::from_le_bytes(dim_buf) as usize;
+                    let mut vec_f32 = vec![0f32; current_dim];
+                    file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+                    vectors_sampled.push(vec_f32);
+                }
+            }
+        } else {
+            file.seek(SeekFrom::Start(0))?;
+            loop {
+                if file.read_exact(&mut id_buf).is_err() {
+                    break;
+                }
+                if file.read_exact(&mut dim_buf).is_err() {
+                    break;
+                }
+                let current_dim = u32::from_le_bytes(dim_buf) as usize;
+                if dim == 0 {
+                    dim = current_dim;
+                }
+                let mut vec_f32 = vec![0f32; current_dim];
+                file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+                n_vectors += 1;
+                if vectors_sampled.len() < max_samples {
+                    vectors_sampled.push(vec_f32);
+                }
+            }
+        }
+
+        if n_vectors == 0 {
+            anyhow::bail!("No vectors found in temp file");
+        }
+
+        let num_cpus = num_cpus::get();
+        let n_lists = n_lists
+            .or_else(|| {
+                std::env::var("BSDB_HNSW_N_LISTS")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .unwrap_or_else(|| {
+                if n_vectors < 1000 {
+                    4
+                } else if n_vectors < 10_000 {
+                    num_cpus.max(16)
+                } else {
+                    ((n_vectors as f64).sqrt() / 5.0) as usize
+                }
+            })
+            .max(1)
+            .min(n_vectors / 10)
+            .max(1);
+
+        let hnsw_m = hnsw_m
+            .or_else(|| {
+                std::env::var("BSDB_HNSW_M")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .or_else(|| match algo {
+                IndexAlgorithm::Hnsw { complexity, .. }
+                | IndexAlgorithm::HnswTq8 { complexity, .. }
+                | IndexAlgorithm::HnswTq4 { complexity, .. }
+                | IndexAlgorithm::HnswPq { complexity, .. } => Some(*complexity),
+                _ => None,
+            })
+            .unwrap_or(16);
+
+        let (centroids, _) = simple_kmeans_with_seed(&vectors_sampled, n_lists, 10, seed)?;
+
+        let quantizer = match algo {
+            IndexAlgorithm::HnswTq8 { .. } => {
+                let use_sq = std::env::var("BSDB_USE_SQ")
+                    .ok()
+                    .map(|v| v == "1" || v.to_lowercase() == "true")
+                    .unwrap_or(false);
+                if use_sq {
+                    Some(QuantizerImpl::Sq(
+                        crate::core::index::sq::SqEncoder::train(&vectors_sampled, 8, metric)?,
+                    ))
+                } else {
+                    Some(QuantizerImpl::BenoQuant(
+                        BenoQuantEncoder::train(&vectors_sampled, 8, metric)?,
+                    ))
+                }
+            }
+            IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(
+                BenoQuantEncoder::train(&vectors_sampled, 4, metric)?,
+            )),
+            IndexAlgorithm::HnswPq { compression, .. } => {
+                let subspaces = dim / compression;
+                let config = PqConfig {
+                    m: subspaces,
+                    k: 256,
+                    dim,
+                };
+                Some(QuantizerImpl::Pq(PqEncoder::train(
+                    &vectors_sampled,
+                    config,
+                )?))
+            }
+            _ => None,
+        };
+
+        // 1. Immediately save centroids to disk
+        let mut saved_files = Vec::new();
+        let centroids_path = format!("{}.centroids.parquet", output_base_path);
+        Self::save_centroids_parquet(&centroids, metric, quantizer.as_ref(), &centroids_path)?;
+        saved_files.push(centroids_path);
+
+        // Pass 2: Out-of-core bucketing
+        let mut cluster_files = HashMap::new();
+        for c in 0..n_lists {
+            let c_path = format!("{}.cluster_{}.bin", tmp_path, c);
+            let f = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&c_path)?;
+            cluster_files.insert(c, (c_path, f));
+        }
+
+        let mut file = std::fs::File::open(tmp_path)?;
+        use std::io::Write;
+        {
+            let mut m = [0u8; 4];
+            if file.read_exact(&mut m).is_ok() && u32::from_le_bytes(m) == VEC_TMP_MAGIC {
+                file.seek(SeekFrom::Start(8))?;
+            } else {
+                file.seek(SeekFrom::Start(0))?;
+            }
+        }
+
+        let centroids_flat: Vec<f32> = centroids.iter().flatten().copied().collect();
+        let use_gpu_assign = matches!(metric, VectorMetric::L2);
+        const ASSIGN_BATCH: usize = 65536;
+        let mut ids: Vec<u32> = Vec::with_capacity(ASSIGN_BATCH);
+        let mut vecs: Vec<f32> = Vec::with_capacity(ASSIGN_BATCH * dim);
+        let mut progress = 0usize;
+
+        loop {
+            ids.clear();
+            vecs.clear();
+            let mut eof = false;
+            while ids.len() < ASSIGN_BATCH {
+                if file.read_exact(&mut id_buf).is_err() {
+                    eof = true;
+                    break;
+                }
+                if file.read_exact(&mut dim_buf).is_err() {
+                    eof = true;
+                    break;
+                }
+                let mut vec_f32 = vec![0f32; dim];
+                file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+                ids.push(u32::from_le_bytes(id_buf));
+                vecs.extend_from_slice(&vec_f32);
+            }
+            if ids.is_empty() {
+                break;
+            }
+
+            let assignments: Vec<u32> = match use_gpu_assign {
+                true => {
+                    crate::core::index::gpu::compute_kmeans_assignment(&vecs, &centroids_flat, dim)
+                        .unwrap_or_else(|_| cpu_assignments(&vecs, &centroids, dim, metric))
+                }
+                false => cpu_assignments(&vecs, &centroids, dim, metric),
+            };
+
+            for (k, &c) in assignments.iter().enumerate() {
+                if let Some((_, ref mut f)) = cluster_files.get_mut(&(c as usize)) {
+                    f.write_all(&ids[k].to_le_bytes())?;
+                    f.write_all(bytemuck::cast_slice(&vecs[k * dim..(k + 1) * dim]))?;
+                }
+            }
+            progress += ids.len();
+            if progress / 100_000 != (progress - ids.len()) / 100_000 {
+                tracing::info!("Bucketed {}/{} vectors...", progress, n_vectors);
+            }
+            if eof {
+                break;
+            }
+        }
+
+        // Pass 3: Build HNSW graphs per bucket in parallel, streaming each directly to disk!
+        let ef_construction = std::env::var("BSDB_HNSW_EF_CONSTRUCTION")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .or_else(|| match algo {
+                IndexAlgorithm::Hnsw { quality, .. }
+                | IndexAlgorithm::HnswTq8 { quality, .. }
+                | IndexAlgorithm::HnswTq4 { quality, .. }
+                | IndexAlgorithm::HnswPq { quality, .. } => Some(*quality),
+                _ => None,
+            })
+            .unwrap_or((hnsw_m * 2).max(40));
+        let max_layers = 16;
+
+        let cluster_list: Vec<(usize, String)> = cluster_files
+            .into_iter()
+            .map(|(c, (p, _f))| (c, p))
+            .collect();
+
+        let quantizer_ref = quantizer.as_ref();
+        let base_out = output_base_path.to_string();
+
+        let cluster_files_saved: Vec<Vec<String>> = cluster_list
+            .into_par_iter()
+            .map(|(c, c_path)| -> Result<Vec<String>> {
+                let built = build_bucket_graph(
+                    c,
+                    &c_path,
+                    dim,
+                    hnsw_m,
+                    max_layers,
+                    ef_construction,
+                    metric,
+                    quantizer_ref,
+                )?;
+                if let Some((cluster_id, (hnsw, row_id_mapping))) = built {
+                    let mut per_bucket = Vec::with_capacity(2);
+                    let cluster_base = format!("{}.cluster_{}", base_out, cluster_id);
+                    let cluster_tmp = format!("{}.tmp", cluster_base);
+
+                    hnsw.file_dump(&cluster_tmp)
+                        .map_err(|e| anyhow::anyhow!("HNSW dump failed: {}", e))?;
+
+                    let graph_orig = format!("{}.hnsw.graph", cluster_tmp);
+                    let graph_dest = format!("{}.hnsw.graph", cluster_base);
+
+                    if !std::path::Path::new(&graph_orig).exists() {
+                        anyhow::bail!("HNSW dump did not create expected file: {}", graph_orig);
+                    }
+
+                    std::fs::rename(&graph_orig, &graph_dest)?;
+                    per_bucket.push(graph_dest);
+
+                    let mapping_path =
+                        format!("{}.cluster_{}.mapping.parquet", base_out, cluster_id);
+                    Self::save_mapping_parquet(&row_id_mapping, &mapping_path)?;
+                    per_bucket.push(mapping_path);
+
+                    // hnsw and row_id_mapping are dropped right here, freeing RAM!
+                    Ok(per_bucket)
+                } else {
+                    Ok(Vec::new())
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        for files in cluster_files_saved {
+            saved_files.extend(files);
+        }
+
+        tracing::info!(
+            "HNSW-IVF streaming build & save complete in {:?}",
+            start.elapsed()
+        );
+
+        Ok(saved_files)
+    }
+
     pub fn build_from_file(
         tmp_path: &str,
         metric: VectorMetric,
@@ -647,18 +1051,44 @@ impl HnswIvfIndex {
             } else {
                 0
             };
-            // Sample the contiguous prefix of up to `max_samples` vectors.
+            // Sample **across the whole file**, not its prefix.
+            //
+            // The previous version trained k-means on the first `max_samples`
+            // vectors only. A contiguous prefix is not a sample of the corpus:
+            // at 1M it was 10% of the rows, at 10M 1%, and at 100M 0.1%, so the
+            // centroids drifted further from the true distribution as the
+            // dataset grew — which is exactly the regime where IVF recall is set
+            // by centroid quality. Read `block` consecutive vectors from evenly
+            // spaced offsets instead: same sample count, ~n_blocks seeks.
             let to_sample = n_vectors.min(max_samples);
-            for _ in 0..to_sample {
-                if file.read_exact(&mut id_buf).is_err() || file.read_exact(&mut dim_buf).is_err() {
+            const SAMPLE_BLOCK: usize = 64;
+            let n_blocks = (to_sample / SAMPLE_BLOCK).max(1).min(n_vectors);
+            let stride = (n_vectors / n_blocks).max(1);
+            let record = (8 + dim * 4) as u64;
+
+            'sample: for b in 0..n_blocks {
+                let start_idx = b * stride;
+                if start_idx >= n_vectors {
                     break;
                 }
-                let current_dim = u32::from_le_bytes(dim_buf) as usize;
-                // f32-ALIGNED buffer: Vec<u8> has alignment 1, so casting it to
-                // &[f32] panics intermittently ("TargetAlignmentGreaterAndInputNotAligned").
-                let mut vec_f32 = vec![0f32; current_dim];
-                file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
-                vectors_sampled.push(vec_f32);
+                file.seek(SeekFrom::Start(8 + start_idx as u64 * record))?;
+                for _ in 0..SAMPLE_BLOCK {
+                    if vectors_sampled.len() >= to_sample {
+                        break 'sample;
+                    }
+                    if file.read_exact(&mut id_buf).is_err()
+                        || file.read_exact(&mut dim_buf).is_err()
+                    {
+                        break 'sample;
+                    }
+                    let current_dim = u32::from_le_bytes(dim_buf) as usize;
+                    // f32-ALIGNED buffer: Vec<u8> has alignment 1, so casting it
+                    // to &[f32] panics intermittently
+                    // ("TargetAlignmentGreaterAndInputNotAligned").
+                    let mut vec_f32 = vec![0f32; current_dim];
+                    file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+                    vectors_sampled.push(vec_f32);
+                }
             }
         } else {
             // Legacy file without a header: full scan.
@@ -898,6 +1328,7 @@ impl HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
+            mmap_backed: false,
             _n_lists: n_lists,
             dim,
             quantizer,
@@ -1189,6 +1620,7 @@ impl HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
+            mmap_backed: false,
             _n_lists: n_lists,
             dim,
             quantizer,
@@ -1377,6 +1809,26 @@ impl HnswIvfIndex {
         candidates.dedup_by_key(|x| x.0); // Remove duplicates
         tracing::debug!("Candidates after dedup: len={}", candidates.len());
         candidates.truncate(k);
+        if std::env::var("BSDB_TRACE_SEARCH").is_ok() {
+            let mapping_lens: Vec<usize> =
+                self.cluster_graphs.values().map(|(_, m)| m.len()).collect();
+            let (mn, mx) = match (mapping_lens.iter().min(), mapping_lens.iter().max()) {
+                (Some(a), Some(b)) => (*a, *b),
+                _ => (0, 0),
+            };
+            let first = self.cluster_graphs.iter().next().map(|(cid, (_, m))| {
+                (*cid, m.iter().take(8).copied().collect::<Vec<_>>())
+            });
+            eprintln!(
+                "[trace] hnsw_ivf.search centroids={} clusters_loaded={} mapping_len[{}..{}] first_cluster={:?} final={:?}",
+                self.centroids.len(),
+                self.cluster_graphs.len(),
+                mn,
+                mx,
+                first,
+                candidates.iter().map(|(id, d)| (*id, *d)).collect::<Vec<_>>(),
+            );
+        }
         let t_fine = t_fine_start.elapsed();
         tracing::debug!(
             "Search Profile -> Coarse: {:?}, Fine: {:?}",
@@ -1386,9 +1838,14 @@ impl HnswIvfIndex {
         Ok(candidates)
     }
 
-    /// Save HNSW-IVF index to disk
-    pub fn save(&self, local_path: &str) -> Result<Vec<String>> {
-        use arrow::array::{Float32Builder, ListBuilder, UInt32Array};
+    /// Helper to serialize centroids directly to a Parquet file.
+    pub fn save_centroids_parquet(
+        centroids: &[Vec<f32>],
+        metric: VectorMetric,
+        quantizer: Option<&QuantizerImpl>,
+        target_path: &str,
+    ) -> Result<String> {
+        use arrow::array::{Float32Builder, ListBuilder};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use parquet::arrow::ArrowWriter;
@@ -1396,59 +1853,97 @@ impl HnswIvfIndex {
         use std::fs::File;
         use std::sync::Arc;
 
+        let centroids_tmp = format!("{}.tmp", target_path);
+        let mut centroid_builder = ListBuilder::new(Float32Builder::new());
+        for centroid in centroids {
+            for &val in centroid {
+                centroid_builder.values().append_value(val);
+            }
+            centroid_builder.append(true);
+        }
+        let centroid_array = Arc::new(centroid_builder.finish());
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "centroid",
+            DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![centroid_array])?;
+
+        let file = File::create(&centroids_tmp)?;
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![
+                parquet::file::metadata::KeyValue {
+                    key: "vector_metric".to_string(),
+                    value: Some(match metric {
+                        VectorMetric::L2 => "l2".to_string(),
+                        VectorMetric::Cosine => "cosine".to_string(),
+                        VectorMetric::InnerProduct => "ip".to_string(),
+                        VectorMetric::L1 => "l1".to_string(),
+                        VectorMetric::Hamming => "hamming".to_string(),
+                        VectorMetric::Jaccard => "jaccard".to_string(),
+                    }),
+                },
+                parquet::file::metadata::KeyValue {
+                    key: "quantizer_config".to_string(),
+                    value: quantizer.map(|q| serde_json::to_string(q).unwrap_or_default()),
+                },
+            ]))
+            .build();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        std::fs::rename(&centroids_tmp, target_path)?;
+        Ok(target_path.to_string())
+    }
+
+    /// Helper to serialize cluster row-id mapping directly to a Parquet file.
+    pub fn save_mapping_parquet(row_id_mapping: &[usize], target_path: &str) -> Result<String> {
+        use arrow::array::UInt32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::fs::File;
+        use std::sync::Arc;
+
+        let mapping_tmp = format!("{}.tmp", target_path);
+        let row_ids: Vec<u32> = row_id_mapping.iter().map(|&x| x as u32).collect();
+        let row_id_array = Arc::new(UInt32Array::from(row_ids));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "row_id",
+            DataType::UInt32,
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![row_id_array])?;
+
+        let file = File::create(&mapping_tmp)?;
+        let props = WriterProperties::builder().build();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        std::fs::rename(&mapping_tmp, target_path)?;
+        Ok(target_path.to_string())
+    }
+
+    /// Save HNSW-IVF index to disk
+    pub fn save(&self, local_path: &str) -> Result<Vec<String>> {
         let mut saved_files = Vec::new();
 
         // 1. Save centroids
         let centroids_path = format!("{}.centroids.parquet", local_path);
-        let centroids_tmp = format!("{}.tmp", centroids_path);
-        {
-            let mut centroid_builder = ListBuilder::new(Float32Builder::new());
-            for centroid in &self.centroids {
-                for &val in centroid {
-                    centroid_builder.values().append_value(val);
-                }
-                centroid_builder.append(true);
-            }
-            let centroid_array = Arc::new(centroid_builder.finish());
-
-            let schema = Arc::new(Schema::new(vec![Field::new(
-                "centroid",
-                DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
-                false,
-            )]));
-
-            let batch = RecordBatch::try_new(schema.clone(), vec![centroid_array])?;
-
-            let file = File::create(&centroids_tmp)?;
-            let props = WriterProperties::builder()
-                .set_key_value_metadata(Some(vec![
-                    parquet::file::metadata::KeyValue {
-                        key: "vector_metric".to_string(),
-                        value: Some(match self.metric {
-                            VectorMetric::L2 => "l2".to_string(),
-                            VectorMetric::Cosine => "cosine".to_string(),
-                            VectorMetric::InnerProduct => "ip".to_string(),
-                            VectorMetric::L1 => "l1".to_string(),
-                            VectorMetric::Hamming => "hamming".to_string(),
-                            VectorMetric::Jaccard => "jaccard".to_string(),
-                        }),
-                    },
-                    parquet::file::metadata::KeyValue {
-                        key: "quantizer_config".to_string(),
-                        value: self
-                            .quantizer
-                            .as_ref()
-                            .map(|q| serde_json::to_string(q).unwrap_or_default()),
-                    },
-                ]))
-                .build();
-            let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
-            writer.write(&batch)?;
-            writer.close()?;
-
-            std::fs::rename(&centroids_tmp, &centroids_path)?;
-            saved_files.push(centroids_path.clone());
-        }
+        Self::save_centroids_parquet(
+            &self.centroids,
+            self.metric,
+            self.quantizer.as_ref(),
+            &centroids_path,
+        )?;
+        saved_files.push(centroids_path);
 
         // 2. Save per-cluster HNSW graphs
         for (cluster_id, (hnsw, row_id_mapping)) in &self.cluster_graphs {
@@ -1466,33 +1961,11 @@ impl HnswIvfIndex {
             }
 
             std::fs::rename(&graph_orig, &graph_dest)?;
-
             saved_files.push(graph_dest);
 
             let mapping_path = format!("{}.cluster_{}.mapping.parquet", local_path, cluster_id);
-            let mapping_tmp = format!("{}.tmp", mapping_path);
-
-            {
-                let row_ids: Vec<u32> = row_id_mapping.iter().map(|&x| x as u32).collect();
-                let row_id_array = Arc::new(UInt32Array::from(row_ids));
-
-                let schema = Arc::new(Schema::new(vec![Field::new(
-                    "row_id",
-                    DataType::UInt32,
-                    false,
-                )]));
-
-                let batch = RecordBatch::try_new(schema.clone(), vec![row_id_array])?;
-
-                let file = File::create(&mapping_tmp)?;
-                let props = WriterProperties::builder().build();
-                let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
-                writer.write(&batch)?;
-                writer.close()?;
-
-                std::fs::rename(&mapping_tmp, &mapping_path)?;
-                saved_files.push(mapping_path);
-            }
+            Self::save_mapping_parquet(row_id_mapping, &mapping_path)?;
+            saved_files.push(mapping_path);
         }
 
         Ok(saved_files)
@@ -1576,7 +2049,23 @@ impl HnswIvfIndex {
         cache_key: &str,
         use_mmap: bool,
     ) -> Result<Arc<Self>> {
-        use crate::core::cache::{DiskCache, HNSW_IVF_CACHE};
+        let disk_cache = crate::core::cache::DiskCache::new(store.clone());
+        Self::load_async_inner(store, base_path, cache_key, use_mmap, disk_cache).await
+    }
+
+    /// Loader body, taking the blob cache explicitly.
+    ///
+    /// In-memory blob containers (a Puffin bundle sliced into `Bytes`, see
+    /// [`HnswIvfIndex::load_from_puffin`]) must not be mirrored into the
+    /// on-disk cache, so the caller passes [`DiskCache::disabled`].
+    pub(crate) async fn load_async_inner(
+        store: Arc<dyn ObjectStore>,
+        base_path: &str,
+        cache_key: &str,
+        use_mmap: bool,
+        disk_cache: crate::core::cache::DiskCache,
+    ) -> Result<Arc<Self>> {
+        use crate::core::cache::HNSW_IVF_CACHE;
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let cache_key_str = cache_key.to_string();
@@ -1586,8 +2075,6 @@ impl HnswIvfIndex {
         {
             return Ok(cached);
         }
-
-        let disk_cache = DiskCache::new(store.clone());
 
         let mut root_path = if base_path.contains("://") {
             if let Ok(url) = url::Url::parse(base_path) {
@@ -1718,7 +2205,15 @@ impl HnswIvfIndex {
                         format!("{}.cluster_{}.mapping.parquet", cache_key, cluster_id);
 
                     let res_graph = if use_mmap {
-                        GraphData::Mmap(dc.get_mmap_with_key(&hnsw_key, &hnsw_cache_key).await?)
+                        // mmap when the object is a real local file; an in-memory
+                        // store (Puffin container slices) cannot be mmap'd, so
+                        // fall back to its zero-copy Bytes view.
+                        match dc.get_mmap_with_key(&hnsw_key, &hnsw_cache_key).await {
+                            Ok(m) => GraphData::Mmap(m),
+                            Err(_) => GraphData::Bytes(
+                                dc.get_bytes_with_key(&hnsw_key, &hnsw_cache_key).await?,
+                            ),
+                        }
                     } else {
                         GraphData::Bytes(dc.get_bytes_with_key(&hnsw_key, &hnsw_cache_key).await?)
                     };
@@ -1753,7 +2248,7 @@ impl HnswIvfIndex {
                                 HnswGraph::TurboQuant4Arrow(
                                     match cb.graph {
                                         GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u4),
-                                        GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, crate::core::index::distance::DistL2u4),
+                                        GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, crate::core::index::distance::DistL2u4),
                                     }
                                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                                 )
@@ -1761,7 +2256,7 @@ impl HnswIvfIndex {
                                 HnswGraph::TurboQuant8Arrow(
                                     match cb.graph {
                                         GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u8),
-                                        GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, crate::core::index::distance::DistL2u8),
+                                        GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, crate::core::index::distance::DistL2u8),
                                     }
                                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                                 )
@@ -1771,7 +2266,7 @@ impl HnswIvfIndex {
                             HnswGraph::TurboQuant8Arrow(
                                 match cb.graph {
                                     GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u8),
-                                    GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, crate::core::index::distance::DistL2u8),
+                                    GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, crate::core::index::distance::DistL2u8),
                                 }
                                 .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                             )
@@ -1783,7 +2278,7 @@ impl HnswIvfIndex {
                             HnswGraph::PqArrow(
                                 match cb.graph {
                                     GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, dist),
-                                    GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, dist),
+                                    GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, dist),
                                 }
                                 .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                             )
@@ -1794,42 +2289,42 @@ impl HnswIvfIndex {
                         VectorMetric::L2 => HnswGraph::L2Arrow(
                             match cb.graph {
                                 GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistL2),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistL2),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistL2),
                             }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::Cosine => HnswGraph::CosineArrow(
                             match cb.graph {
                                 GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistCosine),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistCosine),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistCosine),
                             }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::InnerProduct => HnswGraph::DotArrow(
                             match cb.graph {
                                 GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistDot),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistDot),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistDot),
                             }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::L1 => HnswGraph::L1Arrow(
                             match cb.graph {
                                 GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistL1),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistL1),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistL1),
                             }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::Hamming => HnswGraph::HammingArrow(
                             match cb.graph {
                                 GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistHamming),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistHamming),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistHamming),
                             }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::Jaccard => HnswGraph::JaccardArrow(
                             match cb.graph {
                                 GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistJaccard),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistJaccard),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistJaccard),
                             }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
@@ -1864,6 +2359,7 @@ impl HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
+            mmap_backed: use_mmap,
             _n_lists: n_lists,
             dim,
             quantizer,
@@ -1878,20 +2374,47 @@ impl HnswIvfIndex {
         Ok(index_arc)
     }
 
+    /// Cache key for a vector index packed in a Puffin compound bundle.
+    ///
+    /// One container holds **one** vector index per `(column, algorithm)`,
+    /// split across many blobs: centroids, plus a graph and a mapping per IVF
+    /// cluster (hundreds of blobs at 10M vectors). A cache key derived from the
+    /// blob offset gave every one of those blobs its own entry, and every entry
+    /// had to materialize and parse the *whole* bundle — O(blobs²) bytes of
+    /// temp-file I/O. Loading an index once must produce one entry, so the key
+    /// is the container plus the column/algorithm it was built for.
+    pub fn puffin_vector_cache_key(
+        root_uri: &str,
+        container_path: &str,
+        column: &str,
+        algorithm: &str,
+    ) -> String {
+        format!(
+            "{}/{}:{}:{}",
+            root_uri.trim_end_matches('/'),
+            container_path,
+            column,
+            algorithm
+        )
+    }
+
     /// Load an HNSW-IVF index packed inside a Puffin compound bundle.
     ///
-    /// The bundle's blobs are materialized into a temporary directory (using
-    /// each blob's `filename` property) and then loaded through the standard
-    /// multi-file loader. `use_mmap` is forced off because the temporary
-    /// directory is dropped once the index has copied its bytes into memory.
+    /// The container is read **once** and each blob is served as a zero-copy
+    /// slice of it: `use_mmap` maps the `.puffin` file when the store is local,
+    /// otherwise the container is fetched as `Bytes`. The slices are handed to
+    /// the standard loader through an in-memory object store, so nothing is
+    /// copied to a temp directory. The previous implementation materialized
+    /// every blob into `$TMPDIR` and parsed it back — a full write + re-read of
+    /// the bundle (4.3 GB per load at 10M vectors) on every cold load.
     pub async fn load_from_puffin(
         store: Arc<dyn ObjectStore>,
         puffin_path: &str,
         cache_key: &str,
-        _use_mmap: bool,
+        use_mmap: bool,
         column_name: &str,
     ) -> Result<Arc<Self>> {
-        use crate::core::cache::HNSW_IVF_CACHE;
+        use crate::core::cache::{DiskCache, HNSW_IVF_CACHE};
 
         let cache_key_str = cache_key.to_string();
         if let Some(cached) = HNSW_IVF_CACHE
@@ -1901,6 +2424,61 @@ impl HnswIvfIndex {
             return Ok(cached);
         }
 
+        // One read of the container: mmap it when the store is local (the page
+        // cache then serves the blobs actually touched), else fetch the bytes.
+        let container: bytes::Bytes = if use_mmap {
+            match DiskCache::new(store.clone()).get_mmap(puffin_path).await {
+                Ok(mmap) => bytes::Bytes::from_owner(MmapOwner(mmap)),
+                Err(_) => {
+                    store
+                        .get(&object_store::path::Path::from(puffin_path))
+                        .await?
+                        .bytes()
+                        .await?
+                }
+            }
+        } else {
+            store
+                .get(&object_store::path::Path::from(puffin_path))
+                .await?
+                .bytes()
+                .await?
+        };
+
+        // Zero-copy blob views; falls back to the temp-dir materialization if the
+        // container has no usable `filename` properties (legacy writers).
+        match crate::core::puffin::PuffinContainerStore::from_container(
+            container,
+            puffin_path,
+            column_name,
+        )
+        .await
+        {
+            Ok((blob_store, base_path)) => {
+                let blob_store: Arc<dyn ObjectStore> = Arc::new(blob_store);
+                let disk_cache = DiskCache::disabled(blob_store.clone());
+                Self::load_async_inner(blob_store, &base_path, cache_key, use_mmap, disk_cache).await
+            }
+            Err(e) => {
+                tracing::warn!(
+                    puffin = %puffin_path,
+                    error = %e,
+                    "load_from_puffin: zero-copy slicing unavailable, materializing blobs"
+                );
+                Self::load_from_puffin_materialized(store, puffin_path, cache_key, column_name)
+                    .await
+            }
+        }
+    }
+
+    /// Legacy fallback: materialize the bundle into a temp directory and load
+    /// from there. Used when the container's blobs cannot be addressed directly.
+    async fn load_from_puffin_materialized(
+        store: Arc<dyn ObjectStore>,
+        puffin_path: &str,
+        cache_key: &str,
+        column_name: &str,
+    ) -> Result<Arc<Self>> {
         let (temp_dir, written) =
             crate::core::puffin::materialize_puffin_blobs(&store, puffin_path).await?;
 
@@ -1930,7 +2508,6 @@ impl HnswIvfIndex {
             object_store::local::LocalFileSystem::new_with_prefix(temp_dir.path())?,
         );
 
-        // Force non-mmap: the temp dir is dropped after this call.
         let index =
             Self::load_async_with_cache_key(local_store, &base_path, cache_key, false).await?;
         drop(temp_dir);
@@ -2112,6 +2689,7 @@ impl HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
+            mmap_backed: false,
             _n_lists: n_lists,
             dim,
             quantizer,
@@ -2119,19 +2697,28 @@ impl HnswIvfIndex {
         })
     }
 
+    /// Bytes this index occupies, used as the weight of [`HNSW_IVF_CACHE`].
+    ///
+    /// This must describe the **loaded** representation, not the builder's. The
+    /// old estimate charged 20 KB/point plus `dim * 4` bytes per vector, which
+    /// put a 10M x 128 index at ~200 GB. That weight can never fit a realistic
+    /// cache budget, so moka rejected every insert and each query re-loaded the
+    /// whole index from the object store — the per-query reload storm that
+    /// hammered the disk for an hour.
     pub fn size_in_bytes(&self) -> usize {
         let mut size = 0;
         for c in &self.centroids {
-            size += c.len() * 4;
+            size += c.len() * std::mem::size_of::<f32>();
         }
-        for (_hnsw, mapping) in self.cluster_graphs.values() {
-            size += mapping.len() * 8;
-            let data_count = mapping.len();
-            size += data_count * self.dim * 4;
-            // The HNSW graph structure in hnsw_rs uses Arc<RwLock<Point>> and
-            // deeply nested Vecs for edges, creating massive heap allocation overhead.
-            // Empirical profiling via dhat shows ~15-20KB per point at M=16.
-            size += data_count * 20_000;
+        for (hnsw, mapping) in self.cluster_graphs.values() {
+            // Row-id mapping is one usize per point.
+            size += mapping.len() * std::mem::size_of::<usize>();
+            // Graph + codes. mmap-backed graphs alias the file (page-cache
+            // backed, not heap), so they are not charged against the moka
+            // budget; owned-byte graphs (remote store / materialized) are.
+            if !self.mmap_backed {
+                size += hnsw.footprint_bytes();
+            }
         }
         size
     }

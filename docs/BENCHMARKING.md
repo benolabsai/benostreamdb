@@ -1,4 +1,4 @@
-# Benchmarking: how to reproduce every number
+?# Benchmarking: how to reproduce every number
 
 Status: runnable methodology. Owner: BenoStreamDB core.
 Companion docs: [`BENCHMARKING_PLAN.md`](BENCHMARKING_PLAN.md) (the full plan:
@@ -149,11 +149,21 @@ benchmarks/competitors/docker_bench.sh --build-wheel \
 `--queries` map 1:1 onto the BenoStreamDB harness flags, so the same
 configuration runs on both sides without translation.
 
-**Like-for-like rule.** The competitor adapters return ids only (no payload
-fetch). The rollup therefore reports BenoStreamDB's **pure-index** QPS
-(`pure_index_qps`), not its full search+row-fetch number, and LanceDB projects
-only `id` in its search. Comparing BenoStreamDB's full-search QPS against a
-competitor's search-only QPS is not a valid comparison.
+**Like-for-like rule & Iso-Recall evaluation.** 
+1. **Index-Only Isolation:** Competitor adapters return vector IDs only (no payload
+   fetch). The rollup therefore reports BenoStreamDB's **pure-index** QPS
+   (`pure_index_qps`), not its full search+row-fetch number, and LanceDB projects
+   only `id` in its search. Comparing BenoStreamDB's full-search QPS against a
+   competitor's search-only QPS conflates index traversal with columnar Parquet
+   decoding and PyArrow RecordBatch construction (§4.1). Full end-to-end query
+   latency is measured separately in §3 and §6.
+2. **Iso-Recall Tiering (Option A Parity):** ANN search speed is parameterized by
+   beam-search depth (`ef_search`). To prevent an engine with lower recall from
+   appearing artificially faster, evaluations are normalized across two standard
+   operational tiers: **High-Throughput Tier** ($\text{Recall}@10 \ge 0.95$, candidate
+   generation) and **High-Fidelity Tier** ($\text{Recall}@10 \ge 0.99$, top-$k$ ground
+   truth). Within a tier, engines perform equivalent exploration work per query;
+   cross-tier comparisons are evaluated strictly as $(\text{Recall}, \text{QPS})$ Pareto pairs.
 
 ### 4.2 Graph
 
@@ -206,6 +216,71 @@ cgroup `deploy.resources.limits.memory`. The BenoStreamDB side is constrained by
 > `RLIMIT_AS` for GPU engines.
 
 **Match `--cpus`/`--mem` on both sides or the comparison is invalid.**
+
+### 5.1 NeurIPS BigANN (leaderboard-comparable)
+
+The BigANN ablation runs under the challenge's reference envelope — Azure
+Standard_D8lds_v5, **8 vCPU / 16 GiB** — because that envelope determines the
+cache budgets, not just the thread count:
+
+```bash
+maturin build --release --out dist
+docker build -f benchmarks/Dockerfile.neurips -t bsdb-neurips .
+DATASET_DIR=/path/to/bigann \
+  docker compose -f benchmarks/docker-compose.neurips.yml run --rm neurips
+```
+
+[`run_neurips_bigann.py`](../benchmarks/run_neurips_bigann.py) reads the cgroup
+limits itself (`--hardware auto`) and derives:
+
+| Knob | Derivation |
+| :--- | :--- |
+| query threads | the CPU limit (env `--cpus`) |
+| `BSDB_CACHE_GB` | half the memory limit |
+| preload budget | the same half, capped |
+| `BSDB_DISK_CACHE` | off — a local `file://` table is served in place, never copied |
+
+`--hardware d8lds --strict-hardware` pins the reference envelope and **aborts**
+if the container is not actually constrained, so an oversized host run cannot
+silently produce a number that looks comparable but is not.
+
+The run is staged so a large corpus is ingested once and only the index is
+rebuilt per quantizer:
+
+```bash
+# ingest once (no index), then 3 reindexes + the Pareto grid, in one process
+python benchmarks/run_neurips_bigann.py --dataset 10m --stage both --all-modes --sweep
+
+# 100M/1B: ingest in one job, reuse the table for every later run
+python benchmarks/run_neurips_bigann.py --dataset 100m --stage ingest
+python benchmarks/run_neurips_bigann.py --dataset 100m --stage query --all-modes --sweep
+```
+
+`--sweep` walks `--ef-sweep` × `--n-probe-sweep` (default
+`32,64,128,256` × `4,8,16,32`) against the **same warm index**, and prints the
+fastest operating point that clears recall ≥ 0.90 / 0.95 / 0.98 — the row the
+leaderboard compares against.
+
+Results are written to [`benchmarks/results/neurips_bigann/`](../benchmarks/results/neurips_bigann):
+
+- `<tag>.json` — every operating point with full provenance: dataset paths, the
+  ground-truth source, engine version + git revision, the envelope, and the grid.
+- `<tag>.md` — the Pareto table and the fastest point clearing each recall bar,
+  ready to paste into the paper.
+- `bigann_ledger.jsonl` — append-only, one line per run, so numbers can be
+  compared across engine versions.
+
+`BenoGraph/paper` reads the results from here rather than keeping a second copy.
+
+Two caveats when reading the ablation:
+
+- `n_probe` must scale with the corpus. The IVF list count is
+  `sqrt(n)/5` (63 lists at 1M, 632 at 10M), so `--n-probe 8` is 12% of the lists
+  at 1M but 1.3% at 10M — recall is dominated by list pruning, not by the
+  quantizer, and all three quantizers return identical neighbours.
+- At 8 bits over `uint8` data, SQ8/TQ8/BQ8 are all effectively lossless. The
+  quantizers only separate above ~0.90 recall, so quote that region, not the
+  coarse-filter end of the curve.
 
 ---
 

@@ -15,6 +15,7 @@ Outputs:
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import shutil
@@ -83,7 +84,7 @@ def dir_size_mb(path: str) -> float:
     return total / (1024.0 * 1024.0)
 
 
-def worker_run(dataset: str, mode: str, limit: int, queries: int, k: int, m: int, ef_c: int, ef_s: int):
+def worker_run(dataset: str, mode: str, limit: int, queries: int, k: int, m: int, ef_c: int, ef_s: int, threads: int = 32):
     """Worker function executed inside an isolated subprocess."""
     import benostreamdb as bsdb
 
@@ -126,40 +127,48 @@ def worker_run(dataset: str, mode: str, limit: int, queries: int, k: int, m: int
     build_time = time.time() - t0
     index_size = dir_size_mb(db_path)
 
-    # 1. End-to-end Arrow queries (full search + hydration)
-    latencies = []
-    hits = 0.0
-    for i in range(q):
-        query_list = test[i].tolist()
+    query_lists = [test[i].tolist() for i in range(q)]
+
+    # 1. End-to-end Arrow queries (full search + ID projection across threads)
+    def arrow_worker(i):
         vf = {
             "column": "embedding",
-            "query": query_list,
+            "query": query_lists[i],
             "k": k,
             "ef_search": ef_s,
         }
         t1 = time.perf_counter()
         res = table.to_arrow(vector_filter=vf, columns=["id"])
-        latencies.append(time.perf_counter() - t1)
+        lat = time.perf_counter() - t1
         got = set(res.column("id").to_pylist()) if "id" in res.column_names else set()
         truth = set(neighbors[i][:k].tolist())
-        hits += len(got & truth) / k
+        hit = len(got & truth) / k
+        return lat, hit
 
+    t_wall_arrow = time.time()
+    with ThreadPoolExecutor(max_workers=threads) as ex:
+        arrow_results = list(ex.map(arrow_worker, range(q)))
+    wall_arrow = time.time() - t_wall_arrow
+
+    latencies = [r[0] for r in arrow_results]
+    hits = sum(r[1] for r in arrow_results)
     recall = hits / q
-    total_time = sum(latencies)
-    qps = q / total_time if total_time > 0 else 0.0
+    qps = q / max(wall_arrow, 0.001)
     p50 = float(np.percentile(latencies, 50) * 1000)
     p99 = float(np.percentile(latencies, 99) * 1000)
 
-    # 2. Pure index search queries (in-process index routing only)
-    pure_latencies = []
-    for i in range(q):
-        query_list = test[i].tolist()
+    # 2. Pure index search queries (in-process index routing only across threads)
+    def pure_worker(i):
         t1 = time.perf_counter()
-        _ = table._inner.vector_search_scored("embedding", query_list, k, metric, ef_s)
-        pure_latencies.append(time.perf_counter() - t1)
+        _ = table._inner.vector_search_scored("embedding", query_lists[i], k, metric, ef_s)
+        return time.perf_counter() - t1
 
-    pure_total = sum(pure_latencies)
-    pure_qps = q / pure_total if pure_total > 0 else 0.0
+    t_wall_pure = time.time()
+    with ThreadPoolExecutor(max_workers=threads) as ex:
+        pure_latencies = list(ex.map(pure_worker, range(q)))
+    wall_pure = time.time() - t_wall_pure
+
+    pure_qps = q / max(wall_pure, 0.001)
     pure_p50 = float(np.percentile(pure_latencies, 50) * 1000)
     pure_p99 = float(np.percentile(pure_latencies, 99) * 1000)
 
@@ -176,6 +185,7 @@ def worker_run(dataset: str, mode: str, limit: int, queries: int, k: int, m: int
         "m": m,
         "ef_construction": ef_c,
         "ef_search": ef_s,
+        "threads": threads,
         "recall_at_k": round(recall, 4),
         "qps": round(qps, 1),
         "pure_qps": round(pure_qps, 1),
@@ -190,7 +200,7 @@ def worker_run(dataset: str, mode: str, limit: int, queries: int, k: int, m: int
     print(json.dumps(result))
 
 
-def run_configuration(dataset: str, mode: str, limit: int, queries: int, k: int, m: int, ef_c: int, ef_s: int):
+def run_configuration(dataset: str, mode: str, limit: int, queries: int, k: int, m: int, ef_c: int, ef_s: int, threads: int = 32):
     env = os.environ.copy()
     if mode == "sq8":
         env["BSDB_USE_SQ"] = "1"
@@ -217,6 +227,7 @@ def run_configuration(dataset: str, mode: str, limit: int, queries: int, k: int,
         "--m", str(m),
         "--ef-construction", str(ef_c),
         "--ef-search", str(ef_s),
+        "--threads", str(threads),
     ]
 
     res = subprocess.run(cmd, env=env, capture_output=True, text=True)
@@ -244,6 +255,7 @@ def main():
     parser.add_argument("--m", type=int, default=16, help="HNSW complexity M")
     parser.add_argument("--ef-construction", type=int, default=200, help="HNSW ef_construction")
     parser.add_argument("--ef-search", type=int, default=200, help="HNSW ef_search")
+    parser.add_argument("--threads", type=int, default=32, help="Number of concurrent search threads")
     parser.add_argument("--out", default=None, help="Output markdown or json file")
 
     args = parser.parse_args()
@@ -258,6 +270,7 @@ def main():
             args.m,
             args.ef_construction,
             args.ef_search,
+            args.threads,
         )
         return
 
@@ -267,7 +280,7 @@ def main():
 
     print("==========================================================================================")
     print(f"Starting 3-Way Intra-Engine Ablation (SQ8 vs. Vanilla TQ8 vs. BenoQuant BQ8)")
-    print(f"Datasets: {datasets} | Limit: {args.limit} | Queries: {args.queries} | M={args.m} | ef_c={args.ef_construction} | ef_s={args.ef_search}")
+    print(f"Datasets: {datasets} | Limit: {args.limit} | Queries: {args.queries} | M={args.m} | ef_c={args.ef_construction} | ef_s={args.ef_search} | Threads={args.threads}")
     print("==========================================================================================\n")
 
     for ds in datasets:
@@ -284,6 +297,7 @@ def main():
                 args.m,
                 args.ef_construction,
                 args.ef_search,
+                args.threads,
             )
             elapsed = time.time() - t_start
             all_results.append(record)

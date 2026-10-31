@@ -3983,6 +3983,17 @@ class Table:
         """
         return self._inner.drop_index(column)
 
+    def rebuild_index(self, column: str):
+        """Rebuild a column's index from the data already stored in the table.
+
+        Streams the column back out of the segment Parquet and rebuilds the
+        index artifacts, so this is a *reindex* and not a re-ingest. The
+        algorithm is whatever is currently configured for the column, so call
+        :meth:`add_index` first to change it (including quantizer switches that
+        are driven by environment variables at build time).
+        """
+        return self._inner.rebuild_index(column)
+
     def set_primary_key(self, columns: Union[str, List[str]]):
         """
         Set or replace the table's primary key columns.

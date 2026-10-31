@@ -259,6 +259,7 @@ services:
     networks: [bench]
     environment: *bench-env
     volumes:
+      - ./run_competitor.py:/opt/bench/run_competitor.py:ro
       - ./results:/results
       - ./data:/opt/bench/data
       # BEIR corpus/queries/qrels (read-only) and the report output dir. The
