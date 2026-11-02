@@ -36,13 +36,14 @@ import psutil
 import pyarrow as pa
 
 DEFAULT_DATA_DIR = "/home/ralbright/data/datasets/bigann"
-DIM = 128
+DEFAULT_DIM = 128
 
-# NeurIPS BigANN/Billion-Scale track: file tag -> base vector count.
+# NeurIPS BigANN/Billion-Scale & Dense Retrieval tracks: file tag -> (tag, base_count, default_dim, default_metric).
 DATASETS = {
-    "10m": ("10M", 10_000_000),
-    "100m": ("100M", 100_000_000),
-    "1b": ("1B", 1_000_000_000),
+    "10m": ("10M", 10_000_000, 128, "l2"),
+    "100m": ("100M", 100_000_000, 128, "l2"),
+    "cohere-10m": ("10M", 10_000_000, 768, "inner_product"),
+    "cohere": ("10M", 10_000_000, 768, "inner_product"),
 }
 QUERY_SETS = {
     "public": ("query.public.10K.u8bin", 10_000),
@@ -56,55 +57,132 @@ QUERY_SETS = {
 # --------------------------------------------------------------------------- #
 
 
+def probe_bin_file(path: str):
+    """Probe binary file header [count: int32, dim: int32] and detect dtype."""
+    if not path or not os.path.exists(path):
+        return None, None, np.float32
+    try:
+        with open(path, "rb") as f:
+            header = np.fromfile(f, dtype=np.int32, count=2)
+        if header.size < 2:
+            return None, None, np.float32
+        count, dim = int(header[0]), int(header[1])
+        is_fbin = path.endswith(".fbin") or "fbin" in path.lower() or "float" in path.lower()
+        dtype = np.float32 if is_fbin else np.uint8
+        return count, dim, dtype
+    except Exception:
+        return None, None, np.float32
+
+
 def resolve_dataset(args):
-    """Resolve (base, queries, gt, n) from the selected NeurIPS dataset.
+    """Resolve (base, queries, gt, n, dim, dtype, metric) from dataset args.
 
-    Everything is derived from `--dataset` so the base vectors, the query set
-    and the ground truth always describe the same corpus; `--base`, `--query`
-    and `--gt` exist only as escape hatches.
+    Auto-probes vector count, dimensionality and data type (uint8 / float32)
+    from binary file headers.
     """
-    tag, count = DATASETS[args.dataset]
-    qfile, qcount = QUERY_SETS[args.query_set]
+    if args.dataset in DATASETS:
+        tag, count, def_dim, def_metric = DATASETS[args.dataset]
+    else:
+        tag, count, def_dim, def_metric = (args.dataset, 10_000_000, DEFAULT_DIM, "l2")
 
-    base = args.base or os.path.join(args.data_dir, f"base.{tag}.u8bin")
-    query = getattr(args, "query", None) or os.path.join(args.data_dir, qfile)
+    qfile, qcount = QUERY_SETS.get(args.query_set, (f"query.{args.query_set}.10K.u8bin", 10_000))
 
+    # Candidate paths for base vectors
+    base = args.base
+    if base is None:
+        for cand in (
+            f"base.{tag}.fbin",
+            f"base.{tag}.u8bin",
+            f"base.{tag}.bin",
+            "base.fbin",
+            "base.u8bin",
+            f"base.{tag}",
+        ):
+            p = os.path.join(args.data_dir, cand)
+            if os.path.exists(p):
+                base = p
+                break
+        else:
+            base = os.path.join(args.data_dir, f"base.{tag}.u8bin")
+
+    # Probe file properties from base
+    file_count, file_dim, file_dtype = probe_bin_file(base)
+    dim = args.dim or file_dim or def_dim
+    dtype = file_dtype
+    metric = args.metric or def_metric
+    if metric in ("ip", "inner_product"):
+        metric = "inner_product"
+
+    # Candidate paths for query vectors
+    query = getattr(args, "query", None)
+    if query is None:
+        for cand in (
+            "queries.fbin",
+            "query.fbin",
+            f"query.{tag}.fbin",
+            qfile,
+            f"query.{tag}.u8bin",
+            "queries.u8bin",
+        ):
+            p = os.path.join(args.data_dir, cand)
+            if os.path.exists(p):
+                query = p
+                break
+        else:
+            query = os.path.join(args.data_dir, qfile)
+
+    # Candidate paths for ground truth
     gt = args.gt
     if gt is None:
-        # Official GT naming varies by track; accept the common spellings.
         for cand in (
             f"GT.{tag}.{args.query_set}",
             f"GT.{tag}",
             f"gt.{tag}",
             f"GT.{tag}.10K",
+            "gt_100.fbin",
+            "gt.ibin",
+            "groundtruth.ibin",
+            f"groundtruth.{tag}.ibin",
         ):
-            path = os.path.join(args.data_dir, cand)
-            if os.path.exists(path):
-                gt = path
+            p = os.path.join(args.data_dir, cand)
+            if os.path.exists(p):
+                gt = p
                 break
         else:
             gt = os.path.join(args.data_dir, f"GT.{tag}")
 
-    # `--limit 0` (the default) means "use the whole dataset".
-    n = args.limit if args.limit and args.limit > 0 else count
-    return base, query, gt, n, tag, count, qcount
+    n = args.limit if args.limit and args.limit > 0 else (file_count or count)
+    return base, query, gt, n, tag, (file_count or count), qcount, dim, dtype, metric
 
 
-def load_queries(q_path: str, queries_count: int):
-    queries = np.memmap(q_path, dtype=np.uint8, mode="r", offset=8, shape=(10_000, DIM))
+def load_queries(q_path: str, queries_count: int, dim: int, dtype: np.dtype):
+    q_count, q_dim, q_dtype = probe_bin_file(q_path)
+    if q_dim is None:
+        q_dim = dim
+    if q_dtype is None:
+        q_dtype = dtype
+    if q_count is None:
+        q_count = 10_000
+    queries = np.memmap(q_path, dtype=q_dtype, mode="r", offset=8, shape=(q_count, q_dim))
     q = min(queries_count, len(queries))
     return queries[:q].astype(np.float32), q
 
 
-def exact_ground_truth(base_path: str, queries, n: int, k: int, chunk: int = 1_000_000):
+def exact_ground_truth(base_path: str, queries, n: int, k: int, dim: int, dtype: np.dtype, metric: str = "l2", chunk: int = 1_000_000):
     """Exact top-k for a subset small enough to brute force (<= ~2M vectors)."""
-    base = np.memmap(base_path, dtype=np.uint8, mode="r", offset=8, shape=(n, DIM))
+    base = np.memmap(base_path, dtype=dtype, mode="r", offset=8, shape=(n, dim))
     out = np.empty((len(queries), k), dtype=np.int64)
     for i, qv in enumerate(queries):
-        dists = np.concatenate([
-            np.sum((base[s: s + chunk].astype(np.float32) - qv) ** 2, axis=1)
-            for s in range(0, n, chunk)
-        ])
+        if metric in ("inner_product", "ip"):
+            dists = np.concatenate([
+                -np.dot(base[s: s + chunk].astype(np.float32), qv)
+                for s in range(0, n, chunk)
+            ])
+        else:
+            dists = np.concatenate([
+                np.sum((base[s: s + chunk].astype(np.float32) - qv) ** 2, axis=1)
+                for s in range(0, n, chunk)
+            ])
         out[i] = np.argsort(dists)[:k]
     return out
 
@@ -197,7 +275,7 @@ def db_breakdown(path: str) -> dict:
     }
 
 
-def ingest_stage(bsdb, args, base_path: str) -> dict:
+def ingest_stage(bsdb, args, base_path: str, dim: int = DEFAULT_DIM, dtype: np.dtype = np.uint8) -> dict:
     """Create the table and stream the raw vectors in, without any index."""
     db_path = args.db_dir
     if args.rebuild_db and os.path.exists(db_path):
@@ -206,7 +284,7 @@ def ingest_stage(bsdb, args, base_path: str) -> dict:
 
     n = args.n
     # One row per vector; `--limit` sub-slices larger files.
-    base_mmap = np.memmap(base_path, dtype=np.uint8, mode="r", offset=8, shape=(n, DIM))
+    base_mmap = np.memmap(base_path, dtype=dtype, mode="r", offset=8, shape=(n, dim))
 
     process = psutil.Process(os.getpid())
 
@@ -221,8 +299,8 @@ def ingest_stage(bsdb, args, base_path: str) -> dict:
     t_ingest = time.time()
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
-        batch_floats = base_mmap[start:end].astype(np.float32)
-        fsl = pa.FixedSizeListArray.from_arrays(pa.array(batch_floats.ravel()), DIM)
+        batch_floats = base_mmap[start:end].astype(np.float32, copy=False)
+        fsl = pa.FixedSizeListArray.from_arrays(pa.array(batch_floats.ravel()), dim)
         ids = pa.array(np.arange(start, end, dtype=np.int64))
         tbl = pa.Table.from_arrays([ids, fsl], names=["id", "embedding"])
         table.write(tbl)
@@ -373,7 +451,7 @@ def reindex_and_preload(bsdb, args, mode: str):
         elif mode == "bq4":
             idx_type = "hnsw_bq4"
         elif mode == "sq8":
-            idx_type = "hnsw_tq8"
+            idx_type = "hnsw_sq8"
         elif mode == "pq":
             idx_type = "hnsw_pq"
         else:
@@ -384,7 +462,7 @@ def reindex_and_preload(bsdb, args, mode: str):
                 "type": idx_type,
                 "complexity": args.m,
                 "quality": args.ef_construction,
-                "metric": "l2",
+                "metric": getattr(args, "metric", "l2"),
             },
         )
         table.rebuild_index("embedding")
@@ -794,6 +872,10 @@ def main():
                         help="Number of untimed warmup query probes to fault index shards into RAM (default: 500)")
     parser.add_argument("--cleanup", action="store_true",
                         help="Delete the DB directory when the run finishes")
+    parser.add_argument("--dim", type=int, default=None,
+                        help="Vector dimension (overrides dataset default)")
+    parser.add_argument("--metric", choices=["l2", "ip", "inner_product", "cosine"], default=None,
+                        help="Distance metric (overrides dataset default)")
     parser.add_argument("--out", type=str,
                         default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                              "results", "neurips_bigann"),
@@ -822,8 +904,11 @@ def main():
     args.tmp_dir = tmpdir
     args.db_dir = args.db_dir or os.path.join(args.scratch_dir, "bigann_db")
 
-    base_path, q_path, gt_path, n, tag, dataset_count, qfile_count = resolve_dataset(args)
+    base_path, q_path, gt_path, n, tag, dataset_count, qfile_count, dim, dtype, metric = resolve_dataset(args)
     args.n = n
+    args.dim = dim
+    args.dtype = dtype
+    args.metric = metric
     args.query_path = q_path
     args.queries = min(args.queries, qfile_count)
 
@@ -889,7 +974,7 @@ def main():
     )
     if need_ingest:
         print("--- Stage: INGEST (write the table once, no index) ---", flush=True)
-        ingest_stats = ingest_stage(bsdb, args, base_path)
+        ingest_stats = ingest_stage(bsdb, args, base_path, dim, dtype)
         print(json.dumps(ingest_stats), flush=True)
         print(
             f"    -> Ingested {ingest_stats['n_train']:,} vectors in "
@@ -902,7 +987,7 @@ def main():
         print(f"--- Reusing existing table at {args.db_dir} ---\n", flush=True)
 
     if args.stage in ("both", "query"):
-        test_queries, q = load_queries(q_path, args.queries)
+        test_queries, q = load_queries(q_path, args.queries, dim, dtype)
         gt_indices = load_ground_truth(gt_path, n, dataset_count, q, args.k)
         gt_source = "official file" if gt_indices is not None else None
         if gt_indices is None and gt_path and os.path.exists(gt_path):
@@ -910,7 +995,7 @@ def main():
                   "ignoring it", flush=True)
         if gt_indices is None and n <= 2_000_000:
             print("    -> Computing exact ground truth for the subset ...", flush=True)
-            gt_indices = exact_ground_truth(base_path, test_queries, n, args.k)
+            gt_indices = exact_ground_truth(base_path, test_queries, n, args.k, dim, dtype, metric)
             gt_source = f"exact brute force over {n:,} vectors"
         if gt_indices is None:
             gt_source = "unavailable"
@@ -943,10 +1028,11 @@ def main():
                 rec = search_pass(table, args, test_queries, gt_indices, ef, npr)
                 rec.update(
                     {
-                        "dataset": f"bigann-{n}",
+                        "dataset": f"{args.dataset}-{n}",
                         "mode": mode,
                         "n_train": n,
-                        "dim": DIM,
+                        "dim": dim,
+                        "metric": metric,
                         "hardware": args.hardware,
                         "reindex_s": meta["reindex_s"],
                         "preload_ms": meta["preload_ms"],
@@ -980,14 +1066,15 @@ def main():
                 "git_dirty": bool(_git(["status", "--porcelain"])),
             },
             "dataset": {
-                "name": f"bigann-{args.dataset}",
+                "name": f"{args.dataset}",
                 "base": base_path,
                 "queries": q_path,
                 "gt": gt_path,
                 "gt_source": gt_source,
                 "n_vectors": n,
                 "dataset_vectors": dataset_count,
-                "dim": DIM,
+                "dim": dim,
+                "metric": metric,
             },
             "harness": {
                 "script": os.path.basename(__file__),
