@@ -388,6 +388,55 @@ Themes are ordered by priority.
   - **Multilingual Stemming**: Integration of Snowball stemmers for English, Spanish, French, and German.
   - **CJK Segmentation**: Character/bi-gram tokenization for Chinese, Japanese, and Korean corpora.
 
+### Theme 11: Distributed Query Fan-Out (Multi-Node Scale)
+*Scatter-gather over Arrow Flight for corpora that exceed one node's memory envelope.* — 🟠 **Exploratory**
+
+> **Why now.** The NeurIPS BigANN envelope — 8 vCPU / 16 GiB — is a *deliberate* constraint. It forces a 76 GB index through an 8 GB cache. The f32 Pareto curve at 100M (15 of 16 points, `ef_search` 32–256 × `n_probe` 4–32) is a clean monotone trade:
+>
+> | n_probe | Recall@10 | QPS | p50 |
+> |---|---|---|---|
+> | 4 | 0.14 | 8.7 | 859 ms |
+> | 8 | 0.25 | 5.8 | 1,268 ms |
+> | 16 | 0.43 | 2.1 | 3,630 ms |
+> | 32 | 0.62 | 0.9 | 8,704 ms |
+>
+> `ef_search` is nearly inert across an 8× range (0.1401 → 0.1427 at `n_probe=4`), so recall is dominated by IVF list pruning, not graph beam width. At 100M the IVF list count is `sqrt(n)/5` ≈ 2,000, which makes `n_probe=32` only 1.6% of the lists — the default sweep is calibrated for 1M–10M, not 100M. Reaching 0.90 recall extrapolates to `n_probe` ≈ 100–128, at roughly 0.2–0.3 QPS. **The quantized modes have not been run at 100M yet**, and they are the ones that matter: a 42 GB index cuts I/O per probe by 1.8× against the 76 GB f32 baseline.
+>
+> **The leaderboard is not the right comparison.** Most entries are RAM-resident — they hold the index in memory, or let the page cache hold it — so a QPS rank compares an out-of-core engine against an in-memory one. The axis that matters is **cost per vector at a fixed memory budget**: 76 GB of index served from an 8 GB cache on commodity NVMe, versus 76 GB of RAM on a memory-optimized instance. That is the claim to make, and it is a TCO claim, not a QPS rank.
+>
+> This theme answers a *different* question: what does a customer do when the corpus needs more than one node's envelope? At 420 B/vector of quantized index, 1B vectors is ~420 GB — 13 nodes at 64 GiB, or 53 at the d8lds envelope. Fan-out is the only path past that. It is a product capability that sits alongside the challenge result, not a correction to it.
+
+> **One binary, two topologies.** The engine is already stateless with respect to data: rows live in Iceberg/Parquet on object storage, the index lives in Puffin sidecars, and a node holds only a cache. That makes serverless and distributed the *same* deployment with a different `N`:
+>
+> | | Serverless (today) | Distributed (this theme) |
+> |---|---|---|
+> | Processes | 1, embedded | N workers + 1 coordinator |
+> | Data | S3 / local | S3 / local, shared |
+> | Index | Puffin sidecar, cached | Puffin sidecar, sharded cache |
+> | Coordination | none | catalog commit + shard map |
+> | New code | — | routing index, `DistributedScanExec`, shard map |
+>
+> The coordinator is the same binary in a different role, not a separate service. The shard map and the routing index are metadata, not data. And the failure mode degrades gracefully: if a worker dies, the coordinator can read that shard directly from object storage — slower, but correct — because the node never owned the data in the first place. That property is what serverless already gives us, and it is what makes the distributed mode an addition rather than a second product.
+
+- [ ] **Coordinator-side global routing index** — 🟠 **Exploratory**:
+  - Hold a coarse centroid table at the coordinator (~128 KB for 1B vectors over 1,000 centroids at 128 dims × 1 byte) and route each query to the top-`p` partitions instead of broadcasting to every node. Per-segment centroids already exist; the cross-node union does not.
+- [ ] **Flight scatter-gather `ExecutionPlan`** — 🟠 **Exploratory**:
+  - A `DistributedScanExec` that fans a query vector to N `FlightEndpoint`s and merges local top-k into global top-k. This is a `UnionExec` + `SortExec` + `LimitExec` over remote streams, not a scheduler.
+- [ ] **Recall contract for distributed top-k** — 🟠 **Exploratory**:
+  - Local top-k ≠ global top-k. State an oversample factor (3–5×) and publish a measured recall curve against the single-node baseline. Without it, fan-out is a latency win with an unmeasured accuracy cost.
+- [ ] **Coordination via the catalog, not consensus** — 🟠 **Exploratory**:
+  - Read-only fan-out needs no Raft: every worker reads the same Iceberg snapshot, and the catalog's atomic commit is the only coordination point. Node-to-segment assignment belongs in a manifest property or a sidecar table.
+- [ ] **Failure semantics** — 🟠 **Exploratory**:
+  - Fail-fast on worker loss for v1, with the partial-result recall caveat documented rather than implied.
+
+> **Alternatives considered.**
+> - **Ballista** — right reference architecture, wrong dependency. It already implements `ExecutionPlan` → stage → task → Flight exchange, and its `execution_plans/` module is worth reading. But it is a batch SQL engine: the scheduler round-trip alone exceeds our 10M p50 of 44–49 ms, and it distributes relational operators, not top-k fan-out.
+> - **Ray** — belongs on the **build** path, not the query path. Parallel segment builds, the `ef_construction` sweep, and embedding generation are throughput-bound and tolerate scheduler overhead; per-query fan-out does not.
+> - **Spark connector** — analytics interop, not retrieval. Spark already reads the Iceberg table; a DSv2 connector adds pushdown. Its 100 ms+ task overhead rules it out for ANN.
+> - **Trino connector** — enterprise federation bridge, not low-latency ANN routing. Trino is built for cross-catalog interactive OLAP, but its JVM coordinator, split scheduling, and HTTP exchange buffers impose a 50–200 ms latency floor before vector distance computation begins, turning a 48 ms in-process index traversal into a batch query and requiring a heavy Java daemon cluster.
+
+> **Resolved in v0.14.2.** The `hnsw_tq8` OOM at segment 2 of 20 was buffered graph serialization, not global IVF training: the builder held the whole graph in memory before writing the Puffin, so peak memory scaled with the corpus rather than the segment. `f9015e7c` replaced it with streaming bucket-graph serialization, a direct-to-disk Puffin writer, and a per-segment jemalloc heap trim. The quantized index now builds per segment, which is the precondition for a per-node shard map. **The remaining blocker for this theme is query latency, not build memory.**
+
 ---
 
 ## Benchmarks as Product Work
