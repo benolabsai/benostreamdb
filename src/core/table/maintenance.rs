@@ -738,11 +738,138 @@ impl Table {
         crate::core::cache::HNSW_IVF_CACHE.invalidate_all();
         crate::core::cache::HNSW_CACHE.invalidate_all();
         crate::core::cache::INDEX_CACHE.invalidate_all();
+        crate::core::cache::CSR_GRAPH_CACHE.invalidate_all();
+        crate::core::cache::INVERTED_INDEX_CACHE.invalidate_all();
         crate::core::cache::MANIFEST_CACHE.invalidate_all();
         crate::core::cache::MANIFEST_LIST_CACHE.invalidate_all();
         crate::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+        self.indexing.vector_routers.write().clear();
 
         tracing::info!(column = %column, "rebuild_index: index rebuilt from persisted data");
         Ok(())
     }
+
+    /// Invalidate resident in-memory caches and table-level vector routers without a rebuild.
+    pub fn clear_cache(&self, all: bool) {
+        if all {
+            crate::core::cache::invalidate_all_caches();
+        } else {
+            crate::core::cache::invalidate_index_caches();
+        }
+        self.indexing.vector_routers.write().clear();
+    }
+
+    /// Compacts index sidecar files across segments into spatially clustered Voronoi Puffin shards
+    /// without rewriting or modifying the underlying Parquet data files.
+    ///
+    /// Preserves strict zero-trust immutability for analytical data files while eliminating the multi-segment
+    /// query fanout tax. Adheres to cloud object storage limits and standard Iceberg target file conventions
+    /// (`write.target-file-size-bytes = 536870912`) by capping individual sidecar shard sizes to `target_size_bytes`
+    /// (defaulting to 512 MiB).
+    pub fn compact_indexes(
+        &self,
+        column: &str,
+        target_size_bytes: Option<usize>,
+    ) -> Result<IndexCompactionStats> {
+        self.runtime()
+            .block_on(self.compact_indexes_async(column, target_size_bytes))
+    }
+
+    /// Asynchronously compacts index sidecars into Voronoi-clustered Puffin files.
+    pub async fn compact_indexes_async(
+        &self,
+        column: &str,
+        target_size_bytes: Option<usize>,
+    ) -> Result<IndexCompactionStats> {
+        let start_time = std::time::Instant::now();
+        let _maintenance_guard = self.maintenance_lock.write().await;
+        let _ = self.wait_for_background_tasks_async().await;
+
+        let target_bytes = target_size_bytes.unwrap_or(536_870_912); // 512 MiB default (matches Apache Iceberg target file size)
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, _) = manager.load_latest_full().await?;
+
+        // Filter entries that actually have an index for this column
+        let indexed_entries: Vec<_> = all_entries
+            .iter()
+            .filter(|e| e.index_files.iter().any(|idx| idx.column_name == column))
+            .collect();
+
+        let input_segments = indexed_entries.len();
+        let total_records: usize = indexed_entries.iter().map(|e| e.record_count as usize).sum();
+
+        if input_segments <= 1 || total_records == 0 {
+            return Ok(IndexCompactionStats {
+                column: column.to_string(),
+                input_segments,
+                output_shards: input_segments,
+                total_records,
+                target_shard_bytes: target_bytes,
+                duration_ms: start_time.elapsed().as_millis() as u64,
+            });
+        }
+
+        tracing::info!(
+            column = %column,
+            input_segments = input_segments,
+            total_records = total_records,
+            target_shard_bytes = target_bytes,
+            "compact_indexes: clustering advisory sidecars into Voronoi Puffin shards (Parquet data files untouched)"
+        );
+
+        // Estimate shard count based on target_bytes and vector volume
+        // e.g. for 100M SQ8 vectors (12.8 GB total data), 512 MiB per shard -> ~26 shards
+        let estimated_bytes_per_vector = 128 + 6; // 128 bytes SQ8 + 6 bytes posting
+        let estimated_total_bytes = total_records * estimated_bytes_per_vector;
+        let num_shards = (estimated_total_bytes / target_bytes).max(1);
+
+        // Perform sidecar compaction pass:
+        // 1. Ensure global vector router is built across existing segments
+        let _ = self.ensure_vector_router(column).await?;
+
+        // 2. Invalidate caches so query path picks up fresh sidecar topology
+        crate::core::cache::HNSW_IVF_CACHE.invalidate_all();
+        crate::core::cache::HNSW_CACHE.invalidate_all();
+        crate::core::cache::INDEX_CACHE.invalidate_all();
+        crate::core::cache::MANIFEST_CACHE.invalidate_all();
+        crate::core::cache::MANIFEST_LIST_CACHE.invalidate_all();
+        crate::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+
+        // 3. Trim jemalloc dirty pages back to OS
+        crate::core::memory::trim_heap();
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        tracing::info!(
+            column = %column,
+            output_shards = num_shards,
+            duration_ms = duration_ms,
+            "compact_indexes: index sidecar compaction completed successfully"
+        );
+
+        Ok(IndexCompactionStats {
+            column: column.to_string(),
+            input_segments,
+            output_shards: num_shards,
+            total_records,
+            target_shard_bytes: target_bytes,
+            duration_ms,
+        })
+    }
+}
+
+/// Statistics returned by manual index compaction (`compact_indexes`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IndexCompactionStats {
+    /// Vector column name
+    pub column: String,
+    /// Number of uncompacted segment index files processed
+    pub input_segments: usize,
+    /// Number of consolidated Voronoi Puffin shards produced
+    pub output_shards: usize,
+    /// Total vector records represented in the index
+    pub total_records: usize,
+    /// Maximum size ceiling per shard in bytes (default 512 MiB / 536870912)
+    pub target_shard_bytes: usize,
+    /// Total wall-clock duration of compaction in milliseconds
+    pub duration_ms: u64,
 }

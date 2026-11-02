@@ -1,0 +1,31 @@
+# NeurIPS BigANN harness image.
+#
+# The run is meant to happen inside the official evaluation envelope
+# (Azure Standard_D8lds_v5: 8 vCPU / 16 GiB), which
+# `docker-compose.neurips.yml` enforces via cgroup limits. The harness reads
+# those limits itself (`--hardware auto`) and sizes its caches from them, so the
+# image pins no engine build and no cache budget.
+#
+# Build the harness image (no engine inside):
+#   docker build -f benchmarks/Dockerfile.neurips -t bsdb-neurips .
+#
+# The abi3 wheel is mounted at /wheels and installed at start-up, so the same
+# image works for every engine build:
+#   maturin build --release --out dist
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+# Harness dependencies. psutil is used for RSS/peak reporting and for the
+# fallback memory figure when no cgroup limit is present.
+RUN pip install numpy pandas pyarrow psutil
+
+WORKDIR /opt/bench
+COPY benchmarks/run_neurips_bigann.py /opt/bench/run_neurips_bigann.py
+COPY benchmarks/run_neurips_docker.sh /opt/bench/run_neurips_docker.sh
+RUN chmod +x /opt/bench/run_neurips_docker.sh
+
+# Dataset (read-only), wheel (read-only), scratch (writable).
+VOLUME ["/data/bigann", "/wheels", "/work/scratch"]
+
+ENTRYPOINT ["/opt/bench/run_neurips_docker.sh"]

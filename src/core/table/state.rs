@@ -52,6 +52,7 @@ pub(crate) struct TableIndexState {
     pub index_configs: Arc<parking_lot::RwLock<HashMap<String, ColumnIndexConfig>>>,
     pub default_device: Arc<parking_lot::RwLock<Option<String>>>,
     pub memory_index: Arc<parking_lot::RwLock<Option<InMemoryVectorIndex>>>,
+    pub vector_routers: Arc<parking_lot::RwLock<HashMap<String, Arc<crate::core::index::TableVectorRouter>>>>,
 }
 
 /// Catalog identity and synchronization state for a Table

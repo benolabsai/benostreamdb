@@ -134,21 +134,25 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
 
 Themes are ordered by priority.
 
-### Theme 1: Deprecate & Remove TQ4 and PQ Quantization Engine Options — 🔴 **Highest Priority**
-*Retire 4-bit TurboQuant (`hnsw_tq4` / `tq4`) across the engine, APIs, and Puffin sidecars.*
+### Theme 1: Isotropic Quantization (BenoQuant BQ8 & BQ4) and Native SQ8 — 🟢 **Shipped / Retained in Core**
+*Retain and upgrade 4-bit quantization with float16 length renormalization; preserve PQ for legacy sidecar compatibility.*
 
-> **Rationale & Benchmark Findings.** Comprehensive benchmarking demonstrated that 4-bit TurboQuant (`tq4`) performs significantly worse in recall compared to full-precision `hnsw` and 8-bit TurboQuant (`tq8`), without delivering any compelling added value or Pareto efficiency. `tq8` already provides ~4× compression with resilient recall, and product quantization (`pq`) serves extreme compression use cases far more effectively.
+> **Status & Resolution.** Initial benchmarks showed 4-bit quantization suffering severe recall collapse under uncalibrated nibble packing. However, the introduction of the **2-byte IEEE 754-2008 float16 length normalization scalar ($\alpha$)** combined with **7.5-centered nibbles** in BenoQuant (`hnsw_bq4`) fully resolved norm bias and recall collapse, enabling 4-bit quantization to pack 128-dim vectors into 66 bytes total. 
 >
-> While TQ4 has been removed from benchmark suites, competitor matrixes, and reports for the upcoming release, its full engine code removal is scheduled as the highest priority item for the next release (respecting the current feature freeze).
+> Rather than removing TQ4 and PQ from the core engine (GH Issue #120 closed as won't do), both algorithms are **retained as supported options in the core engine**:
+> - **BenoQuant BQ4 (`hnsw_bq4` / `hnsw_tq4`)**: Retained and upgraded for ultra-compact out-of-core datasets.
+> - **BenoQuant BQ8 (`hnsw_bq8` / `hnsw_tq8`)**: Production isotropic INT8 quantization with Walsh-Hadamard rotation ($H \cdot D$).
+> - **Native SQ8 (`hnsw_sq8`)**: Shipped for axis-aligned INT8 scalar quantization.
+> - **Product Quantization (`hnsw_pq`)**: Retained in the core engine for legacy Iceberg index sidecar compatibility and research baselines.
+> 
+> TQ4 and PQ are omitted from standard public marketing benchmark reports to keep publications focused on `f32` vs `bq8`/`sq8`, but remain fully supported in core Rust and PyO3 APIs.
 
-- [ ] **Remove `IndexAlgorithm::HnswTq4` variant and parser** — 🔴 **Highest Priority**:
-  - Deprecate and remove `IndexAlgorithm::HnswTq4`, `IndexAlgorithm::hnsw_tq4()`, and parser mappings (`"hnsw_tq4"`, `"tq4"`).
-- [ ] **Remove TQ4 quantization pipeline from HNSW/IVF and Segment writers** — 🔴 **Highest Priority**:
-  - Clean up `QuantizerImpl::TurboQuant` 4-bit path in `src/core/index/hnsw_ivf.rs`, `PUFFIN_BLOB_VECTOR_HNSW_TQ4` in `src/core/puffin.rs`, and segment index writers.
-- [ ] **Clean connector and language bindings** — 🔴 **Highest Priority**:
-  - Remove Python `table.quantize(..., "tq4")`, PyO3 helper parsing, MCP tool prompts, Spark/dbt catalog descriptions, and surface parity tests.
-- [ ] **Clean documentation and test suites** — 🔴 **Highest Priority**:
-  - Remove `differential_ann_tq4_recall` and `explain_reports_tq4_index_access_path` tests, update vector API documentation.
+- [x] **2-byte float16 length scalar fix for 4-bit quantization** — 🟢 **Shipped**:
+  - Implemented IEEE 754 binary16 length normalization scalar ($\alpha = \frac{\langle y, \hat{y} \rangle}{\|\hat{y}\|^2}$) trailer and 7.5-centered nibble math in `src/core/index/benoquant.rs` and `distance.rs`.
+- [x] **Native SQ8 index type and routing** — 🟢 **Shipped**:
+  - Added `hnsw_sq8` engine routing and PyO3 bindings (`BSDB_USE_SQ=1`).
+- [x] **Preserve PQ and BQ4 in engine core** — 🟢 **Shipped**:
+  - Retained `IndexAlgorithm::HnswPq` and `IndexAlgorithm::HnswBq4` in core segment writers, readers, and physical planners.
 
 ### Theme 2: Multi-Precision Vector Indexes
 *Let one vector column serve both exact and compressed search.* — 🔴 **High**

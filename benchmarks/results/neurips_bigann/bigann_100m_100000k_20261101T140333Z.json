@@ -1,0 +1,67 @@
+{
+  "meta": {
+    "generated_utc": "2026-11-01T14:03:33Z",
+    "engine": {
+      "version": "0.14.1",
+      "git_rev": "unknown",
+      "git_dirty": true
+    },
+    "dataset": {
+      "name": "bigann-100m",
+      "base": "/data/neurips21/bigann/base.100M.u8bin",
+      "queries": "/data/neurips21/bigann/query.public.10K.u8bin",
+      "gt": "/data/neurips21/bigann/GT.100M",
+      "gt_source": "official file",
+      "n_vectors": 100000000,
+      "dataset_vectors": 100000000,
+      "dim": 128
+    },
+    "harness": {
+      "script": "run_neurips_bigann.py",
+      "metric_version": 2,
+      "stage": "query",
+      "all_modes": false,
+      "m": 16,
+      "ef_construction": 200,
+      "flush_every": 5000000,
+      "k": 10,
+      "queries": 1000
+    },
+    "envelope": {
+      "hardware": "d8lds",
+      "threads": 8,
+      "cache_gb": 8,
+      "preload_gb": 8.0
+    },
+    "grid": [
+      {
+        "ef_search": 200,
+        "n_probe": 8
+      }
+    ]
+  },
+  "records": [
+    {
+      "queries": 1000,
+      "k": 10,
+      "threads": 8,
+      "ef_search": 200,
+      "n_probe": 8,
+      "recall_at_k": 0.2487,
+      "pure_qps": 14.2,
+      "p50_ms": 419.34,
+      "p99_ms": 3299.81,
+      "peak_rss_mb": 23262.4,
+      "dataset": "bigann-100000000",
+      "mode": "bq8",
+      "n_train": 100000000,
+      "dim": 128,
+      "hardware": "d8lds",
+      "reindex_s": 0.0,
+      "preload_ms": 148,
+      "index_size_mb": 41283.89,
+      "data_size_mb": 50357.78,
+      "db_size_mb": 91679.75
+    }
+  ]
+}

@@ -32,6 +32,25 @@ async fn create_test_batch(start_id: i32, num_rows: usize) -> RecordBatch {
     RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(name_array)]).unwrap()
 }
 
+/// Collect the `id` column from a result set, sorted.
+///
+/// Durability is a claim about *which* rows survived, not how many. A crash
+/// that loses one row and duplicates another passes a cardinality check.
+fn collect_ids(batches: &[RecordBatch]) -> Vec<i32> {
+    let mut ids = Vec::new();
+    for b in batches {
+        if let Some(col) = b.column_by_name("id") {
+            let arr = col
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("id must be Int32");
+            ids.extend(arr.iter().flatten());
+        }
+    }
+    ids.sort_unstable();
+    ids
+}
+
 /// Test 1: WAL Transaction Identity & Sequence Tagging
 /// Verifies that WAL records can be stamped with transaction IDs and sequence numbers,
 /// and retrieved upon replay.
@@ -402,8 +421,11 @@ async fn test_wal_durability_modes() -> Result<()> {
     {
         let table = Table::new_async(uri.clone()).await?;
         let rows = table.read_async(None, None, None).await?;
-        let total: usize = rows.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total, 20, "Sync durability must recover all 20 rows");
+        assert_eq!(
+            collect_ids(&rows),
+            (1..=20).collect::<Vec<i32>>(),
+            "Sync durability must recover ids 1..=20 exactly"
+        );
     }
 
     // 2. Async Table using write_buffered_async
@@ -424,10 +446,10 @@ async fn test_wal_durability_modes() -> Result<()> {
     {
         let table = Table::new_async(uri2).await?;
         let rows = table.read_async(None, None, None).await?;
-        let total: usize = rows.iter().map(|b| b.num_rows()).sum();
         assert_eq!(
-            total, 30,
-            "Buffered async with flush_wal_async must recover 30 rows"
+            collect_ids(&rows),
+            (100..=129).collect::<Vec<i32>>(),
+            "Buffered async with flush_wal_async must recover ids 100..=129 exactly"
         );
     }
 
@@ -449,8 +471,11 @@ async fn test_write_buffer_preservation_on_flush_error() -> Result<()> {
 
     // In-memory buffer contains the 15 rows before flush
     let initial_read = table.read_async(None, None, None).await?;
-    let initial_rows: usize = initial_read.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(initial_rows, 15);
+    assert_eq!(
+        collect_ids(&initial_read),
+        (1..=15).collect::<Vec<i32>>(),
+        "in-memory buffer must hold ids 1..=15 before flush"
+    );
 
     // Make table root directory read-only to inject a failure on manifest commit or parquet write
     let table_path = temp_dir.path();
@@ -471,10 +496,10 @@ async fn test_write_buffer_preservation_on_flush_error() -> Result<()> {
 
     // CRITICAL: The write buffer MUST still contain the 15 rows despite the failed flush!
     let read_after_fail = table.read_async(None, None, None).await?;
-    let rows_after_fail: usize = read_after_fail.iter().map(|b| b.num_rows()).sum();
     assert_eq!(
-        rows_after_fail, 15,
-        "Write buffer must retain in-memory rows when flush fails"
+        collect_ids(&read_after_fail),
+        (1..=15).collect::<Vec<i32>>(),
+        "Write buffer must retain ids 1..=15 when flush fails"
     );
 
     // Now retry flush with write permissions restored — must succeed!
@@ -482,8 +507,11 @@ async fn test_write_buffer_preservation_on_flush_error() -> Result<()> {
 
     // Verify all rows remain accessible after successful retry
     let read_final = table.read_async(None, None, None).await?;
-    let rows_final: usize = read_final.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(rows_final, 15);
+    assert_eq!(
+        collect_ids(&read_final),
+        (1..=15).collect::<Vec<i32>>(),
+        "all ids 1..=15 must remain accessible after a successful retry"
+    );
 
     Ok(())
 }

@@ -134,16 +134,27 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                 quality: 200,
                 compression: 8,
             }),
-            "hnsw_tq4" | "tq4" => Ok(IndexAlgorithm::HnswTq4 {
+            "hnsw_bq4" | "bq4" | "hnsw_tq4" | "tq4" => Ok(IndexAlgorithm::HnswTq4 {
                 metric: "l2".to_string(),
                 complexity: 16,
                 quality: 200,
             }),
-            "hnsw_tq8" | "tq8" => Ok(IndexAlgorithm::HnswTq8 {
-                metric: "l2".to_string(),
-                complexity: 16,
-                quality: 200,
-            }),
+            "hnsw_sq8" | "sq8" => {
+                std::env::set_var("BSDB_USE_SQ", "1");
+                Ok(IndexAlgorithm::HnswTq8 {
+                    metric: "l2".to_string(),
+                    complexity: 16,
+                    quality: 200,
+                })
+            }
+            "hnsw_bq8" | "bq8" | "hnsw_tq8" | "tq8" => {
+                std::env::set_var("BSDB_USE_SQ", "0");
+                Ok(IndexAlgorithm::HnswTq8 {
+                    metric: "l2".to_string(),
+                    complexity: 16,
+                    quality: 200,
+                })
+            }
             "bm25" => Ok(IndexAlgorithm::Bm25 {
                 k1: 1.2,
                 b: 0.75,
@@ -251,7 +262,7 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                     compression,
                 })
             }
-            "hnsw_tq4" | "tq4" => {
+            "hnsw_bq4" | "bq4" | "hnsw_tq4" | "tq4" => {
                 let metric = dict
                     .get_item("metric")?
                     .and_then(|v| v.extract::<String>().ok())
@@ -282,7 +293,40 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                     quality,
                 })
             }
-            "hnsw_tq8" | "tq8" => {
+            "hnsw_sq8" | "sq8" => {
+                std::env::set_var("BSDB_USE_SQ", "1");
+                let metric = dict
+                    .get_item("metric")?
+                    .and_then(|v| v.extract::<String>().ok())
+                    .unwrap_or_else(|| "l2".to_string());
+                let complexity = dict
+                    .get_item("complexity")?
+                    .and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| {
+                        dict.get_item("m")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.extract::<usize>().ok())
+                    })
+                    .unwrap_or(16);
+                let quality = dict
+                    .get_item("quality")?
+                    .and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| {
+                        dict.get_item("ef_construction")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.extract::<usize>().ok())
+                    })
+                    .unwrap_or(200);
+                Ok(IndexAlgorithm::HnswTq8 {
+                    metric,
+                    complexity,
+                    quality,
+                })
+            }
+            "hnsw_bq8" | "bq8" | "hnsw_tq8" | "tq8" => {
+                std::env::set_var("BSDB_USE_SQ", "0");
                 let metric = dict
                     .get_item("metric")?
                     .and_then(|v| v.extract::<String>().ok())
@@ -734,4 +778,16 @@ pub fn registered_ddl_statements() -> Vec<String> {
 #[pyfunction]
 pub fn registered_table_actions() -> Vec<String> {
     crate::core::sql::catalog_ddl::table_action_names()
+}
+
+/// Invalidate global BenoStreamDB in-memory caches without rebuilding indexes.
+#[pyfunction]
+#[pyo3(signature = (all=false))]
+pub fn clear_cache(all: bool) -> pyo3::PyResult<()> {
+    if all {
+        crate::core::cache::invalidate_all_caches();
+    } else {
+        crate::core::cache::invalidate_index_caches();
+    }
+    Ok(())
 }

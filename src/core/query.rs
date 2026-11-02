@@ -291,6 +291,7 @@ pub struct VectorSearchRequest {
     pub ef_search: Option<usize>,
     pub columns: Option<Vec<String>>,
     pub use_mmap: bool,
+    pub targeted_clusters: Option<std::sync::Arc<std::collections::HashMap<String, Vec<usize>>>>,
 }
 
 impl VectorSearchRequest {
@@ -311,7 +312,16 @@ impl VectorSearchRequest {
             ef_search: None,
             columns: None,
             use_mmap,
+            targeted_clusters: None,
         }
+    }
+
+    pub fn with_targeted_clusters(
+        mut self,
+        targeted: Option<std::sync::Arc<std::collections::HashMap<String, Vec<usize>>>>,
+    ) -> Self {
+        self.targeted_clusters = targeted;
+        self
     }
 
     pub fn with_filter(mut self, filter: Option<FilterExpr>) -> Self {
@@ -553,6 +563,7 @@ pub async fn execute_vector_search_with_config(
             let columns_clone = request.columns.clone();
 
             let data_store_clone = data_store.clone();
+            let targeted_clusters_clone = request.targeted_clusters.clone();
 
             async move {
                 // Acquire semaphore permit (blocks if max_parallel reached)
@@ -562,13 +573,13 @@ pub async fn execute_vector_search_with_config(
                     .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
 
                 let file_path_str = entry.file_path.clone();
-                let segment_id = file_path_str
+                let name = file_path_str
                     .split('/')
                     .next_back()
-                    .unwrap_or(&file_path_str)
-                    .strip_suffix(".parquet")
-                    .unwrap_or(&file_path_str)
-                    .to_string();
+                    .unwrap_or(&file_path_str);
+                let name = name.strip_suffix(".puffin").unwrap_or(name);
+                let name = name.strip_suffix(".parquet").unwrap_or(name);
+                let segment_id = name.to_string();
 
                 tracing::info!(
                     "Query execution: Entry {} has index files: {:?}",
@@ -615,6 +626,14 @@ pub async fn execute_vector_search_with_config(
                     None
                 };
 
+                let target_clusters = targeted_clusters_clone
+                    .as_ref()
+                    .and_then(|m| {
+                        m.get(&segment_id)
+                            .or_else(|| m.get(&file_path_str))
+                            .map(|v| v.as_slice())
+                    });
+
                 let results = reader
                     .vector_search_index(
                         &column,
@@ -625,6 +644,7 @@ pub async fn execute_vector_search_with_config(
                         ef_search_val,
                         target_schema,
                         request.use_mmap,
+                        target_clusters,
                     )
                     .await?;
                 // Tag each result batch with its segment ID
@@ -718,19 +738,20 @@ pub async fn execute_vector_search_raw_with_config(
             let ef_search_val = request.ef_search;
             let metric = request.metric;
             let data_store_clone = data_store.clone();
+            let targeted_clusters_clone = request.targeted_clusters.clone();
             async move {
                 let _permit = semaphore
                     .acquire()
                     .await
                     .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
                 let file_path_str = entry.file_path.clone();
-                let segment_id = file_path_str
+                let name = file_path_str
                     .split('/')
                     .next_back()
-                    .unwrap_or(&file_path_str)
-                    .strip_suffix(".parquet")
-                    .unwrap_or(&file_path_str)
-                    .to_string();
+                    .unwrap_or(&file_path_str);
+                let name = name.strip_suffix(".puffin").unwrap_or(name);
+                let name = name.strip_suffix(".parquet").unwrap_or(name);
+                let segment_id = name.to_string();
                 let path = std::path::Path::new(&file_path_str);
                 let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
                 let full_base_uri = if rel_parent.is_empty() {
@@ -747,6 +768,14 @@ pub async fn execute_vector_search_raw_with_config(
                     .with_file_checksum(entry.file_checksum.clone());
                 let reader =
                     crate::core::reader::HybridReader::new(config, store.clone(), &base_uri);
+                let target_clusters = targeted_clusters_clone
+                    .as_ref()
+                    .and_then(|m| {
+                        m.get(&segment_id)
+                            .or_else(|| m.get(&file_path_str))
+                            .map(|v| v.as_slice())
+                    });
+
                 let results = reader
                     .vector_search_index_raw(
                         &column,
@@ -755,6 +784,7 @@ pub async fn execute_vector_search_raw_with_config(
                         metric,
                         ef_search_val,
                         request.use_mmap,
+                        target_clusters,
                     )
                     .await?;
                 let tagged: Vec<crate::core::search::ScoredResult> = results

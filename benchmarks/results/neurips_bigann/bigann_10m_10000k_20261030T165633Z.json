@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "generated_utc": "2026-10-30T16:56:33Z",
+    "engine": {
+      "version": "0.14.1",
+      "git_rev": "1ed8715f",
+      "git_dirty": true
+    },
+    "dataset": {
+      "name": "bigann-10m",
+      "base": "/home/ralbright/data/datasets/bigann/base.10M.u8bin",
+      "queries": "/home/ralbright/data/datasets/bigann/query.public.10K.u8bin",
+      "gt": "/home/ralbright/data/datasets/bigann/GT.10M",
+      "gt_source": "official file",
+      "n_vectors": 10000000,
+      "dataset_vectors": 10000000,
+      "dim": 128
+    },
+    "harness": {
+      "script": "run_neurips_bigann.py",
+      "stage": "both",
+      "all_modes": false,
+      "m": 16,
+      "ef_construction": 200,
+      "k": 10,
+      "queries": 1000
+    },
+    "envelope": {
+      "hardware": "d8lds",
+      "threads": 8,
+      "cache_gb": 8,
+      "preload_gb": 8.0
+    },
+    "grid": [
+      {
+        "ef_search": 64,
+        "n_probe": 8
+      },
+      {
+        "ef_search": 64,
+        "n_probe": 16
+      }
+    ]
+  },
+  "records": [
+    {
+      "queries": 1000,
+      "k": 10,
+      "threads": 8,
+      "ef_search": 64,
+      "n_probe": 8,
+      "recall_at_k": 0.0007,
+      "pure_qps": 20.5,
+      "p50_ms": 47.0,
+      "p99_ms": 2790.72,
+      "peak_rss_mb": 39685.6,
+      "dataset": "bigann-10000000",
+      "mode": "sq8",
+      "n_train": 10000000,
+      "dim": 128,
+      "hardware": "d8lds",
+      "reindex_s": 996.67,
+      "preload_ms": 716,
+      "index_size_mb": 9165.86
+    },
+    {
+      "queries": 1000,
+      "k": 10,
+      "threads": 8,
+      "ef_search": 64,
+      "n_probe": 16,
+      "recall_at_k": 0.0007,
+      "pure_qps": 19.2,
+      "p50_ms": 48.73,
+      "p99_ms": 2743.28,
+      "peak_rss_mb": 41449.3,
+      "dataset": "bigann-10000000",
+      "mode": "sq8",
+      "n_train": 10000000,
+      "dim": 128,
+      "hardware": "d8lds",
+      "reindex_s": 996.67,
+      "preload_ms": 716,
+      "index_size_mb": 9165.86
+    }
+  ]
+}

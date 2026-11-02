@@ -963,6 +963,7 @@ impl HybridReader {
         ef_search: Option<usize>,
         target_schema: Option<arrow::datatypes::SchemaRef>,
         use_mmap: bool,
+        target_clusters: Option<&[usize]>,
     ) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
         // Resolve scalar filter to combined bitmap if present
         tracing::debug!("vector_search_index called with filter: {:?}", filter);
@@ -1089,7 +1090,7 @@ impl HybridReader {
                     ..Default::default()
                 };
                 match self
-                    .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap)
+                    .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap, target_clusters)
                     .await
                 {
                     Ok(m) => m,
@@ -1107,13 +1108,15 @@ impl HybridReader {
                 let ef_c = ef_search;
                 let k_c = k;
                 let use_mmap_c = use_mmap;
+                let tc_owned = target_clusters.map(|tc| tc.to_vec());
                 let futures: Vec<_> = chunk_indices
                     .iter()
                     .map(|idx_info| {
                         let idx = idx_info.clone();
                         let q = query_c.clone();
+                        let tc = tc_owned.clone();
                         async move {
-                            self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c)
+                            self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c, tc.as_deref())
                                 .await
                         }
                     })
@@ -1164,6 +1167,7 @@ impl HybridReader {
         metric: VectorMetric,
         ef_search: Option<usize>,
         use_mmap: bool,
+        target_clusters: Option<&[usize]>,
     ) -> Result<Vec<(usize, f32)>> {
         // Deduplicate Puffin blob entries (centroids/graph/mapping) down to one
         // per logical vector index.
@@ -1208,7 +1212,7 @@ impl HybridReader {
                 ..Default::default()
             };
             match self
-                .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap)
+                .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap, target_clusters)
                 .await
             {
                 Ok(m) => Ok(m),
@@ -1223,13 +1227,15 @@ impl HybridReader {
             let ef_c = ef_search;
             let k_c = k;
             let use_mmap_c = use_mmap;
+            let tc_owned = target_clusters.map(|tc| tc.to_vec());
             let futures: Vec<_> = chunk_indices
                 .iter()
                 .map(|idx_info| {
                     let idx = idx_info.clone();
                     let q = query_c.clone();
+                    let tc = tc_owned.clone();
                     async move {
-                        self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c)
+                        self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c, tc.as_deref())
                             .await
                     }
                 })
@@ -2501,6 +2507,7 @@ impl HybridReader {
         _metric: VectorMetric,
         ef_search: Option<usize>,
         use_mmap: bool,
+        target_clusters: Option<&[usize]>,
     ) -> Result<Vec<(usize, f32)>> {
         let idx_path_str = idx_info.file_path.clone();
 
@@ -2569,14 +2576,25 @@ impl HybridReader {
             n_probe
         );
 
+        let target_clusters_owned = target_clusters.map(|tc| tc.to_vec());
         let matches = tokio::task::spawn_blocking(move || {
-            hnsw_ivf_clone.search(
-                &query_clone,
-                k,
-                n_probe,
-                allowed_bm_clone.as_ref(),
-                ef_search,
-            )
+            if let Some(ref tc) = target_clusters_owned {
+                hnsw_ivf_clone.search_targeted_clusters(
+                    &query_clone,
+                    k,
+                    tc,
+                    allowed_bm_clone.as_ref(),
+                    ef_search,
+                )
+            } else {
+                hnsw_ivf_clone.search(
+                    &query_clone,
+                    k,
+                    n_probe,
+                    allowed_bm_clone.as_ref(),
+                    ef_search,
+                )
+            }
         })
         .await??;
 

@@ -1,3 +1,52 @@
+## [0.14.2] - 2026-11-02
+
+Follow-up release introducing BenoQuant isotropic quantization (BQ8/BQ4), native SQ8 scalar quantization, Voronoi Puffin sharding compaction, memory-budgeted out-of-core index preloading, and the official NeurIPS BigANN evaluation suite.
+
+### Added
+- **BenoQuant Isotropic Quantization (BQ8 and BQ4)** — Implemented randomized Fast
+  Walsh-Hadamard Transform ($H \cdot D$) with Rademacher diagonal sign matrices ($D$)
+  to equalize dimensional variance across high-dimensional vector spaces, eliminating
+  anisotropy and dimension collapse:
+  - **BQ8 (8-bit)**: Rotated INT8 quantization achieving 163.6 QPS at 94.55% Recall@10
+    on 10M vectors (+11.3% throughput gain and lower median latency over standard SQ8).
+  - **BQ4 (4-bit)**: High-compression 4-bit nibble packing (64 bytes for 128 dims)
+    paired with an IEEE 754-2008 binary16 length normalization scalar
+    ($\alpha = \frac{\langle y, \hat{y} \rangle}{\|\hat{y}\|^2}$), storing 128-dim vectors
+    in 66 bytes total. Nibbles centered at 7.5 prevent norm bias.
+- **Native Scalar Quantization (SQ8)** — Added native `hnsw_sq8` index algorithm
+  (`BSDB_USE_SQ=1`, `BSDB_USE_RADEMACHER=0`), enabling axis-aligned INT8 scalar
+  quantization without rotation for direct intra-engine ablation.
+- **Voronoi Puffin Sharding & Compaction (`compact_indexes`)** — Implemented
+  `Table.compact_indexes(column, target_shard_bytes=536870912)` in `maintenance.rs`
+  to compact multiple segment index sidecars into clustered Voronoi Puffin shards
+  (`.puffin`), enabling streaming sequential NVMe reads during deep vector probes.
+- **Memory-Budgeted Index Preload (`preload_indexes`)** — Implemented
+  `Table.preload_indexes(max_memory_bytes, spill_to_disk=False)` in `preload.rs`.
+  Selectively preloads Voronoi centroids and upper-layer HNSW graphs into an advisory
+  RAM budget (e.g. 8 GiB) while keeping leaf inverted lists on NVMe.
+- **Global Cache Invalidation (`clear_cache`)** — Exposed `benostreamdb.clear_cache(all=False)`
+  in Python and Rust (`src/core/cache.rs`) to cleanly flush HNSW, IVF, Voronoi, CSR graph,
+  and block/byte caches with `moka` synchronization and page cache eviction integration.
+- **Official NeurIPS BigANN Benchmark Suite** — Added `benchmarks/run_neurips_bigann.py`,
+  local Docker configuration (`benchmarks/Dockerfile.neurips.local`), and standardized
+  multi-mode evaluation harness across 1M, 10M, and 100M datasets under the Azure
+  `Standard_D8lds_v5` profile (8 vCPU, 16 GiB RAM).
+
+### Fixed
+- **BQ4 norm bias and length scalar renormalization** — Fixed 4-bit quantization
+  collapse by appending the IEEE 754-2008 float16 length scalar $\alpha$ as a 2-byte
+  trailer per vector and centering nibble arithmetic around 7.5 in `benoquant.rs` and
+  `distance.rs`.
+- **PyO3 string and dictionary index configuration parsing** — Added explicit
+  `"hnsw_sq8" | "sq8"` matching in `src/python/helpers.rs` to decouple native scalar
+  quantization from TQ8/BQ8.
+
+### Performance
+- **Out-of-Core Memory Safety at 10M & 100M Scale** — Validated 10M BigANN across all 5
+  modes (80 operating points) and 100M F32 across 24 Voronoi Puffin shards (76.08 GB index),
+  operating stably at 14.89–15.09 GiB RSS under a strict 16 GiB cgroup memory envelope
+  without OOM events across 15+ Terabytes of NVMe read I/O.
+
 ## [0.14.1] - 2026-10-28
 
 Follow-up to the developer preview: two vector-search defects that suppressed
@@ -34,13 +83,15 @@ needed to publish the resulting numbers honestly.
   is streamed) is now documented alongside it.
 
 ### Removed
-- **Product quantization is out of the benchmark suite** — the `hnsw_pq` engine
-  label is gone from `docker_bench.sh` (CPU and GPU engine lists),
-  `run_bench.sh`, and the ANN self-characterization, and its stored competitor
-  artifacts are deleted. The variant is being removed from the engine with the
-  4-bit TurboQuant option in v0.15, so measuring it advertises a path that is
-  going away; lancedb's `IVF_PQ` stays, because that is a competitor's index, not
-  ours. The report's precision comparison is now `f32` vs `tq8`.
+- **Product quantization is out of the primary benchmark suite** — the `hnsw_pq`
+  engine label is gone from `docker_bench.sh` (CPU and GPU engine lists),
+  `run_bench.sh`, and the primary ANN self-characterization report to focus
+  standard publications on `f32` vs `bq8`/`sq8`. Both Product Quantization
+  (`hnsw_pq`) and 4-bit quantization (`hnsw_tq4` / `hnsw_bq4`) are retained in the
+  core engine: PQ is preserved for legacy Iceberg index sidecars and baseline
+  comparisons, while 4-bit quantization is retained and upgraded with the 2-byte
+  float16 length normalization scalar ($\alpha$) fix and centered nibbles. LanceDB's
+  `IVF_PQ` stays in competitor sweeps.
 
 ### Added
 - **Benchmark sessions record the machine state** — `benchmarks/session_provenance.py`

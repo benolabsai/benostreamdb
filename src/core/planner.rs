@@ -107,6 +107,10 @@ pub struct VectorSearchParams {
     pub use_mmap: bool,
     /// Optional maximum distance radius for early pruning.
     pub radius: Option<f32>,
+    /// Optional table-level routing candidates: only these segments contain candidate clusters
+    pub candidate_segments: Option<std::sync::Arc<std::collections::HashSet<String>>>,
+    /// Optional targeted clusters to probe per segment: segment_id -> Vec<cluster_id>
+    pub targeted_clusters: Option<std::sync::Arc<std::collections::HashMap<String, Vec<usize>>>>,
 }
 
 impl VectorSearchParams {
@@ -122,7 +126,20 @@ impl VectorSearchParams {
             stats_only: false,
             use_mmap: true, // Default to true for zero-copy
             radius: None,
+            candidate_segments: None,
+            targeted_clusters: None,
         }
+    }
+
+    /// Set table-level routing candidates and per-segment cluster targets.
+    pub fn with_routing(
+        mut self,
+        candidate_segments: std::sync::Arc<std::collections::HashSet<String>>,
+        targeted_clusters: std::sync::Arc<std::collections::HashMap<String, Vec<usize>>>,
+    ) -> Self {
+        self.candidate_segments = Some(candidate_segments);
+        self.targeted_clusters = Some(targeted_clusters);
+        self
     }
 
     /// Set the distance metric for vector search.
@@ -1393,10 +1410,28 @@ impl QueryPlanner {
 
     /// Check if a manifest entry might contain vectors matching the query.
     ///
-    /// Uses vector stats (norm bounds, per-dimension min/max) to prune segments
-    /// that are unlikely to contain relevant results. Returns `true` if no stats
-    /// are available (conservative: must scan).
+    /// Uses vector stats (norm bounds, per-dimension min/max) and table-level router
+    /// candidates to prune segments that are unlikely to contain relevant results.
+    /// Returns `true` if no stats are available (conservative: must scan).
     pub fn might_match_vector(&self, entry: &ManifestEntry, params: &VectorSearchParams) -> bool {
+        // Table-level router pruning: if candidate segments are specified, only
+        // segments containing probed centroids are allowed.
+        if let Some(ref candidates) = params.candidate_segments {
+            let file_path = &entry.file_path;
+            let name = file_path
+                .rsplit_once('/')
+                .map(|(_, name)| name)
+                .unwrap_or(file_path);
+            let name = name.strip_suffix(".puffin").unwrap_or(name);
+            let name = name.strip_suffix(".parquet").unwrap_or(name);
+            let seg_id = name;
+
+            if !candidates.contains(seg_id) && !candidates.contains(file_path) {
+                metrics::counter!("bsdb.pruned.vector_router").increment(1);
+                return false;
+            }
+        }
+
         let stats = if let Some(s) = entry.column_stats.get(&params.column) {
             s
         } else {

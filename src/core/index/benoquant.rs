@@ -16,6 +16,69 @@ pub fn rademacher_sign(i: usize) -> f32 {
     if (x & 1) == 0 { 1.0 } else { -1.0 }
 }
 
+/// Converts an f32 scalar into a 2-byte IEEE 754-2008 binary16 (f16) in little-endian order.
+#[inline(always)]
+pub fn f32_to_f16_bytes(val: f32) -> [u8; 2] {
+    let bits = val.to_bits();
+    let sign = (bits >> 31) & 0x1;
+    let exp = ((bits >> 23) & 0xFF) as i32;
+    let mant = bits & 0x7FFFFF;
+
+    let h_bits = if exp == 255 {
+        // Inf / NaN
+        ((sign as u16) << 15) | 0x7C00 | ((mant >> 13) as u16)
+    } else if exp > 142 {
+        // Overflow -> Clamp to finite max (~65504.0)
+        ((sign as u16) << 15) | 0x7BFF
+    } else if exp < 103 {
+        // Underflow -> 0
+        (sign as u16) << 15
+    } else if exp < 113 {
+        // Subnormal
+        let m = (mant | 0x800000) >> (113 - exp);
+        ((sign as u16) << 15) | ((m >> 13) as u16)
+    } else {
+        // Normal
+        let new_exp = (exp - 127 + 15) as u16;
+        let new_mant = (mant >> 13) as u16;
+        ((sign as u16) << 15) | (new_exp << 10) | new_mant
+    };
+    h_bits.to_le_bytes()
+}
+
+/// Converts a 2-byte IEEE 754-2008 binary16 (f16) into an f32.
+#[inline(always)]
+pub fn f16_bytes_to_f32(bytes: [u8; 2]) -> f32 {
+    let h_bits = u16::from_le_bytes(bytes);
+    let sign = ((h_bits >> 15) & 0x1) as u32;
+    let exp = ((h_bits >> 10) & 0x1F) as u32;
+    let mant = (h_bits & 0x3FF) as u32;
+
+    let f_bits = if exp == 0 {
+        if mant == 0 {
+            sign << 31
+        } else {
+            // Subnormal
+            let mut m = mant;
+            let mut e = 113;
+            while (m & 0x400) == 0 {
+                m <<= 1;
+                e -= 1;
+            }
+            m &= 0x3FF;
+            (sign << 31) | (e << 23) | (m << 13)
+        }
+    } else if exp == 31 {
+        // Inf / NaN
+        (sign << 31) | 0x7F800000 | (mant << 13)
+    } else {
+        // Normal
+        let new_exp = exp + 127 - 15;
+        (sign << 31) | (new_exp << 23) | (mant << 13)
+    };
+    f32::from_bits(f_bits)
+}
+
 fn default_true() -> bool {
     true
 }
@@ -59,30 +122,10 @@ impl BenoQuantEncoder {
         self
     }
 
-    pub fn with_rademacher(mut self, enabled: bool) -> Self {
-        self.use_rademacher = enabled;
-        self
-    }
-
     /// Train the quantizer by finding the min/max values across a sample of rotated vectors.
+    /// BenoQuant ALWAYS uses deterministic Rademacher sign modulation ($H \cdot D$)
+    /// to eliminate DC energy spikes on non-negative domains.
     pub fn train(vectors: &[Vec<f32>], bits: usize, metric: VectorMetric) -> Result<Self> {
-        let env_override = std::env::var("BSDB_USE_RADEMACHER")
-            .ok()
-            .map(|v| v != "0" && v.to_lowercase() != "false");
-        let use_rademacher = env_override.unwrap_or(true);
-        Self::train_configured(vectors, bits, metric, use_rademacher)
-    }
-
-    pub fn train_vanilla(vectors: &[Vec<f32>], bits: usize, metric: VectorMetric) -> Result<Self> {
-        Self::train_configured(vectors, bits, metric, false)
-    }
-
-    pub fn train_configured(
-        vectors: &[Vec<f32>],
-        bits: usize,
-        metric: VectorMetric,
-        use_rademacher: bool,
-    ) -> Result<Self> {
         let dim = vectors[0].len();
         let mut global_min = f32::MAX;
         let mut global_max = f32::MIN;
@@ -109,10 +152,8 @@ impl BenoQuantEncoder {
                 rotated.resize(next_pow2, 0.0);
             }
             // Deterministic Rademacher sign modulation: eliminates DC spike on non-negative domains
-            if use_rademacher {
-                for (j, val) in rotated.iter_mut().enumerate() {
-                    *val *= rademacher_sign(j);
-                }
+            for (j, val) in rotated.iter_mut().enumerate() {
+                *val *= rademacher_sign(j);
             }
             fwht(&mut rotated);
 
@@ -138,7 +179,7 @@ impl BenoQuantEncoder {
             offset: global_min,
             scale,
             metric,
-            use_rademacher,
+            use_rademacher: true,
         })
     }
 }
@@ -164,10 +205,8 @@ impl Quantizer for BenoQuantEncoder {
             rotated.resize(next_pow2, 0.0);
         }
         // Deterministic Rademacher sign modulation: eliminates DC spike on non-negative domains
-        if self.use_rademacher {
-            for (j, val) in rotated.iter_mut().enumerate() {
-                *val *= rademacher_sign(j);
-            }
+        for (j, val) in rotated.iter_mut().enumerate() {
+            *val *= rademacher_sign(j);
         }
         fwht(&mut rotated);
 
@@ -181,13 +220,32 @@ impl Quantizer for BenoQuantEncoder {
             .collect();
 
         if self.bits == 4 {
+            // Compute optimal 2-byte least-squares length renormalization scalar:
+            // alpha = <y, y_hat> / ||y_hat||^2
+            let mut dot = 0.0f32;
+            let mut norm_sq = 0.0f32;
+            let inv_scale = 1.0 / self.scale;
+            for (&y, &q) in rotated.iter().zip(quantized.iter()) {
+                let y_hat = (q as f32 * inv_scale) + self.offset;
+                dot += y * y_hat;
+                norm_sq += y_hat * y_hat;
+            }
+            let alpha = if norm_sq > 1e-12 {
+                (dot / norm_sq).clamp(0.01, 100.0)
+            } else {
+                1.0
+            };
+            let alpha_bytes = f32_to_f16_bytes(alpha);
+
             // Pack two 4-bit nibbles into one byte
-            let mut packed = Vec::with_capacity(quantized.len().div_ceil(2));
+            let mut packed = Vec::with_capacity(quantized.len().div_ceil(2) + 2);
             for chunk in quantized.chunks(2) {
                 let low = chunk[0] & 0x0F;
                 let high = if chunk.len() > 1 { chunk[1] & 0x0F } else { 0 };
                 packed.push(low | (high << 4));
             }
+            // Append 2-byte float16 scalar
+            packed.extend_from_slice(&alpha_bytes);
             packed
         } else {
             quantized
@@ -195,21 +253,27 @@ impl Quantizer for BenoQuantEncoder {
     }
 
     fn decode(&self, bytes: &[u8]) -> Vec<f32> {
-        let decoded_bytes = if self.bits == 4 {
-            // Unpack nibbles
-            let mut unpacked = Vec::with_capacity(bytes.len() * 2);
-            for &b in bytes {
+        let (decoded_bytes, alpha) = if self.bits == 4 {
+            // Check for trailing 2-byte f16 scalar
+            let (nibble_bytes, alpha) = if bytes.len() >= 2 && (bytes.len() - 2) * 2 >= self.dim {
+                let alpha_bytes = [bytes[bytes.len() - 2], bytes[bytes.len() - 1]];
+                (&bytes[..bytes.len() - 2], f16_bytes_to_f32(alpha_bytes))
+            } else {
+                (bytes, 1.0f32)
+            };
+            let mut unpacked = Vec::with_capacity(nibble_bytes.len() * 2);
+            for &b in nibble_bytes {
                 unpacked.push(b & 0x0F);
                 unpacked.push((b >> 4) & 0x0F);
             }
-            unpacked
+            (unpacked, alpha)
         } else {
-            bytes.to_vec()
+            (bytes.to_vec(), 1.0f32)
         };
 
         let mut rotated: Vec<f32> = decoded_bytes
             .iter()
-            .map(|&b| (b as f32 / self.scale) + self.offset)
+            .map(|&b| ((b as f32 / self.scale) + self.offset) * alpha)
             .collect();
 
         // Invert FWHT (FWHT is self-inverse up to scaling by 1/N)
@@ -218,10 +282,8 @@ impl Quantizer for BenoQuantEncoder {
         rotated.iter_mut().for_each(|x| *x /= n);
 
         // Invert Rademacher sign modulation: s_j * s_j = 1
-        if self.use_rademacher {
-            for (j, val) in rotated.iter_mut().enumerate() {
-                *val *= rademacher_sign(j);
-            }
+        for (j, val) in rotated.iter_mut().enumerate() {
+            *val *= rademacher_sign(j);
         }
 
         // Truncate to original dimension
@@ -249,10 +311,8 @@ impl Quantizer for BenoQuantEncoder {
             let next_pow2 = rotated_query.len().next_power_of_two();
             rotated_query.resize(next_pow2, 0.0);
         }
-        if self.use_rademacher {
-            for (j, val) in rotated_query.iter_mut().enumerate() {
-                *val *= rademacher_sign(j);
-            }
+        for (j, val) in rotated_query.iter_mut().enumerate() {
+            *val *= rademacher_sign(j);
         }
         fwht(&mut rotated_query);
 
@@ -261,15 +321,21 @@ impl Quantizer for BenoQuantEncoder {
         let inv_scale = 1.0 / self.scale;
 
         if self.bits == 4 {
-            for (i, &b) in encoded.iter().enumerate() {
+            let (nibble_bytes, alpha) = if encoded.len() >= 2 && (encoded.len() - 2) * 2 >= self.dim {
+                let alpha_bytes = [encoded[encoded.len() - 2], encoded[encoded.len() - 1]];
+                (&encoded[..encoded.len() - 2], f16_bytes_to_f32(alpha_bytes))
+            } else {
+                (encoded, 1.0f32)
+            };
+            for (i, &b) in nibble_bytes.iter().enumerate() {
                 // Low nibble
-                let decoded_low = ((b & 0x0F) as f32 * inv_scale) + self.offset;
+                let decoded_low = (((b & 0x0F) as f32 * inv_scale) + self.offset) * alpha;
                 if i * 2 < rotated_query.len() {
                     let diff = rotated_query[i * 2] - decoded_low;
                     dist_sq += diff * diff;
                 }
                 // High nibble
-                let decoded_high = (((b >> 4) & 0x0F) as f32 * inv_scale) + self.offset;
+                let decoded_high = ((((b >> 4) & 0x0F) as f32 * inv_scale) + self.offset) * alpha;
                 if i * 2 + 1 < rotated_query.len() {
                     let diff = rotated_query[i * 2 + 1] - decoded_high;
                     dist_sq += diff * diff;
@@ -286,11 +352,7 @@ impl Quantizer for BenoQuantEncoder {
     }
 
     fn name(&self) -> String {
-        if self.use_rademacher {
-            format!("benoquant_{}bit", self.bits)
-        } else {
-            format!("vanilla_turboquant_{}bit", self.bits)
-        }
+        format!("benoquant_{}bit", self.bits)
     }
 
     fn bits(&self) -> usize {
@@ -418,6 +480,64 @@ mod tests {
         assert!(
             overlap >= 8,
             "BenoQuant Cosine top-10 overlap should be >= 8, got {}",
+            overlap
+        );
+    }
+
+    #[test]
+    fn test_benoquant_4bit_recall_monotonicity() {
+        let dim = 64;
+        let mut rng_state: u64 = 12345;
+        let mut rand_f32 = || {
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((rng_state >> 33) as f32 / (1u32 << 31) as f32) - 1.0
+        };
+
+        let mut vectors: Vec<Vec<f32>> = Vec::new();
+        for _ in 0..200 {
+            let scale = 1.0 + rand_f32().abs() * 5.0;
+            let v: Vec<f32> = (0..dim).map(|_| rand_f32() * scale).collect();
+            vectors.push(v);
+        }
+
+        let encoder = BenoQuantEncoder::train(&vectors, 4, VectorMetric::L2).unwrap();
+        assert_eq!(encoder.bits, 4);
+
+        let encoded: Vec<Vec<u8>> = vectors.iter().map(|v| encoder.encode(v)).collect();
+        // 64 dimensions / 2 nibbles per byte + 2 bytes f16 scalar = 34 bytes
+        assert_eq!(encoded[0].len(), dim / 2 + 2);
+
+        let q: Vec<f32> = (0..dim).map(|_| rand_f32() * 3.0).collect();
+
+        let mut exact_dists: Vec<(usize, f32)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, crate::core::index::distance::l2_distance(&q, v)))
+            .collect();
+        exact_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let exact_top10: std::collections::HashSet<usize> =
+            exact_dists.iter().take(10).map(|(i, _)| *i).collect();
+
+        let q_encoded = encoder.encode(&q);
+        assert_eq!(q_encoded.len(), dim / 2 + 2);
+
+        let dist_fn = crate::core::index::distance::DistL2u4;
+        let self_dist = dist_fn.distance(&q_encoded, &q_encoded);
+        assert!(self_dist.abs() < 1e-4, "Self distance should be ~0, got {self_dist}");
+
+        let mut bq_dists: Vec<(usize, f32)> = encoded
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, dist_fn.distance(&q_encoded, v)))
+            .collect();
+        bq_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let bq_top10: std::collections::HashSet<usize> =
+            bq_dists.iter().take(10).map(|(i, _)| *i).collect();
+
+        let overlap = exact_top10.intersection(&bq_top10).count();
+        assert!(
+            overlap >= 6,
+            "BenoQuant 4-bit L2 top-10 overlap should be >= 6 (got {})",
             overlap
         );
     }

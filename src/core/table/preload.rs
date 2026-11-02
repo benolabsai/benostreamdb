@@ -140,6 +140,15 @@ impl Table {
         // each pass. Warm each (container, column, algorithm) exactly once.
         let mut warmed_vector_indexes: HashSet<(String, String, String)> = HashSet::new();
 
+        let mut router_records: std::collections::HashMap<
+            String,
+            (
+                usize,
+                crate::core::index::VectorMetric,
+                Vec<crate::core::index::vector_router::CentroidRecord>,
+            ),
+        > = std::collections::HashMap::new();
+
         for (seg_dir, idx) in work {
             let kind = classify(&idx);
             let wanted = match kind {
@@ -219,8 +228,54 @@ impl Table {
 
             if warmed {
                 stats.indexes_warmed += 1;
+                if kind == IndexKind::Vector {
+                    let cache_key = if idx.blob_offset.is_some() {
+                        crate::core::index::hnsw_ivf::HnswIvfIndex::puffin_vector_cache_key(
+                            &self.uri,
+                            &full_path,
+                            &idx.column_name,
+                            &idx.algorithm,
+                        )
+                    } else {
+                        cache_key_for(&self.uri, &full_path, &idx)
+                    };
+                    if let Some(cached) = crate::core::cache::HNSW_IVF_CACHE.get(&cache_key).await {
+                        let name = full_path
+                            .rsplit_once('/')
+                            .map(|(_, name)| name)
+                            .unwrap_or(&full_path);
+                        let name = name.strip_suffix(".puffin").unwrap_or(name);
+                        let name = name.strip_suffix(".parquet").unwrap_or(name);
+                        let seg_id = name.to_string();
+
+                        let entry = router_records
+                            .entry(idx.column_name.clone())
+                            .or_insert_with(|| (cached.dim(), cached.metric(), Vec::new()));
+
+                        for (c_id, centroid) in cached.centroids().iter().enumerate() {
+                            entry.2.push(crate::core::index::vector_router::CentroidRecord {
+                                segment_id: seg_id.clone(),
+                                cluster_id: c_id,
+                                centroid: centroid.clone(),
+                            });
+                        }
+                    }
+                }
             } else {
                 stats.indexes_skipped += 1;
+            }
+        }
+
+        // Populate table-level vector routers from loaded segment centroids
+        for (col, (dim, metric, records)) in router_records {
+            if !records.is_empty() {
+                let router = Arc::new(crate::core::index::TableVectorRouter::new(dim, metric, records));
+                tracing::info!(
+                    column = %col,
+                    centroids = router.len(),
+                    "preload: initialized table-level vector router"
+                );
+                self.indexing.vector_routers.write().insert(col, router);
             }
         }
 
@@ -235,6 +290,106 @@ impl Table {
             "preload: index caches warmed"
         );
         Ok(stats)
+    }
+
+    /// Ensure a table-level vector router exists for the given column, constructing
+    /// it from segment index centroids if not already resident.
+    pub async fn ensure_vector_router(
+        &self,
+        column: &str,
+    ) -> Result<Option<Arc<crate::core::index::TableVectorRouter>>> {
+        if let Some(router) = self.indexing.vector_routers.read().get(column).cloned() {
+            return Ok(Some(router));
+        }
+
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, entries, _version) = manager.load_latest_full().await?;
+
+        let mut records = Vec::new();
+        let mut dim = 0;
+        let mut metric = crate::core::index::VectorMetric::L2;
+        let mut loaded_segments = std::collections::HashSet::new();
+
+        for entry in &entries {
+            let seg_dir = entry
+                .file_path
+                .rsplit_once('/')
+                .map(|(dir, _)| dir.to_string())
+                .unwrap_or_default();
+
+            for idx in &entry.index_files {
+                if idx.column_name == column && idx.index_category == "vector" {
+                    let full_path = if idx.file_path.contains('/') || seg_dir.is_empty() {
+                        idx.file_path.clone()
+                    } else {
+                        format!("{}/{}", seg_dir, idx.file_path)
+                    };
+
+                    let name = full_path
+                        .rsplit_once('/')
+                        .map(|(_, name)| name)
+                        .unwrap_or(&full_path);
+                    let name = name.strip_suffix(".puffin").unwrap_or(name);
+                    let name = name.strip_suffix(".parquet").unwrap_or(name);
+                    let seg_id = name.to_string();
+
+                    if !loaded_segments.insert((seg_id.clone(), idx.column_name.clone())) {
+                        continue;
+                    }
+
+                    let loaded = if idx.blob_offset.is_some() {
+                        let cache_key = crate::core::index::hnsw_ivf::HnswIvfIndex::puffin_vector_cache_key(
+                            &self.uri,
+                            &full_path,
+                            &idx.column_name,
+                            &idx.algorithm,
+                        );
+                        crate::core::index::hnsw_ivf::HnswIvfIndex::load_from_puffin(
+                            self.store.clone(),
+                            &full_path,
+                            &cache_key,
+                            true,
+                            &idx.column_name,
+                        )
+                        .await
+                    } else {
+                        let cache_key = format!("{}/{}", self.uri, full_path);
+                        crate::core::index::hnsw_ivf::HnswIvfIndex::load_async_with_cache_key(
+                            self.store.clone(),
+                            &full_path,
+                            &cache_key,
+                            true,
+                        )
+                        .await
+                    };
+
+                    if let Ok(index) = loaded {
+                        dim = index.dim();
+                        metric = index.metric();
+
+                        for (c_id, centroid) in index.centroids().iter().enumerate() {
+                            records.push(crate::core::index::vector_router::CentroidRecord {
+                                segment_id: seg_id.clone(),
+                                cluster_id: c_id,
+                                centroid: centroid.clone(),
+                            });
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        if !records.is_empty() {
+            let router = Arc::new(crate::core::index::TableVectorRouter::new(dim, metric, records));
+            self.indexing
+                .vector_routers
+                .write()
+                .insert(column.to_string(), router.clone());
+            Ok(Some(router))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Best-effort size of an index file (or its multi-file family).
@@ -295,7 +450,7 @@ impl Table {
                         self.store.clone(),
                         full_path,
                         &cache_key,
-                        false,
+                        true,
                         &idx.column_name,
                     )
                     .await?;
@@ -304,7 +459,7 @@ impl Table {
                         self.store.clone(),
                         full_path,
                         &cache_key,
-                        false,
+                        true,
                     )
                     .await?;
                 }

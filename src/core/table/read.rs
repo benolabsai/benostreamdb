@@ -455,7 +455,7 @@ impl Table {
     pub async fn read_expr_stream_async(
         &self,
         expr: Option<FilterExpr>,
-        vector_filters: Option<Vec<VectorSearchParams>>,
+        mut vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
         config: QueryConfig,
         filter_str: Option<&str>,
@@ -474,24 +474,54 @@ impl Table {
                 }
             }
         };
-        let entries_to_read = if version > 0 {
-            if expr.is_some() || vector_filters.is_some() {
-                let planner = QueryPlanner::new();
-                planner
-                    .prune_entries(&all_entries, expr.as_ref(), vector_filters.as_ref())
-                    .into_iter()
-                    .map(|(e, _)| e)
-                    .collect()
-            } else {
-                all_entries.clone()
+
+        // If vector filters are present, evaluate table-level vector routing to enable
+        // segment pruning and direct targeted cluster search across segments.
+        if let Some(ref mut vps) = vector_filters {
+            for vp in vps.iter_mut() {
+                if vp.candidate_segments.is_none() {
+                    if let Ok(Some(router)) = self.ensure_vector_router(&vp.column).await {
+                        let probes = vp.probes.unwrap_or_else(|| {
+                            if let Ok(val) = std::env::var("BSDB_HNSW_N_PROBE") {
+                                val.parse::<usize>().unwrap_or(16)
+                            } else {
+                                16
+                            }
+                        });
+                        let plan = match &vp.query {
+                            crate::core::index::VectorValue::Float32(q_f32) => {
+                                Some(router.route(q_f32, probes))
+                            }
+                            _ => None,
+                        };
+                        if let Some(plan) = plan {
+                            if !plan.candidate_segments.is_empty() {
+                                tracing::info!(
+                                    column = %vp.column,
+                                    probes = probes,
+                                    candidates = plan.candidate_segments.len(),
+                                    "vector_router: routed query across global centroids"
+                                );
+                                vp.candidate_segments = Some(std::sync::Arc::new(plan.candidate_segments));
+                                vp.targeted_clusters = Some(std::sync::Arc::new(plan.segment_clusters));
+                            }
+                        }
+                    }
+                }
             }
+        }
+
+        let entries_to_read = if version == 0 && manifest_manager.exists().await.unwrap_or(false) {
+            Vec::new() // Strictly follow the empty manifest
+        } else if expr.is_some() || vector_filters.is_some() {
+            let planner = QueryPlanner::new();
+            planner
+                .prune_entries(&all_entries, expr.as_ref(), vector_filters.as_ref())
+                .into_iter()
+                .map(|(e, _)| e)
+                .collect()
         } else {
-            // Version 0. Check if we want autodetection.
-            if manifest_manager.exists().await.unwrap_or(false) {
-                Vec::new() // Strictly follow the empty manifest
-            } else {
-                all_entries.clone() // Already contains discovered segments if in autodetection path
-            }
+            all_entries.clone()
         };
 
         // --- SMART HYBRID TRIGGER ---
@@ -597,6 +627,7 @@ impl Table {
                     .with_filter(expr.clone())
                     .with_config(config.clone())
                     .with_ef_search(vs_params.ef_search)
+                    .with_targeted_clusters(vs_params.targeted_clusters.clone())
                     .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect())),
                 );
             }

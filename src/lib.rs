@@ -158,6 +158,7 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
         python_binding::registered_table_actions,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(python_binding::clear_cache, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(
         python_binding::create_catalog_from_config,

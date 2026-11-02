@@ -4327,3 +4327,16 @@ def vector(data: Union[List[float], Any]) -> List[float]:
         return [float(x) for x in data.tolist()]
     return [float(x) for x in data]
 
+
+def clear_cache(all: bool = False) -> None:
+    """Invalidate all global BenoStreamDB index and metadata in-memory caches.
+
+    If `all` is True, also flushes raw block, parquet, delete, and byte caches.
+    """
+    try:
+        from .benostreamdb import clear_cache as _native_clear_cache
+        _native_clear_cache(all)
+    except Exception:
+        pass
+
+

@@ -1,0 +1,41 @@
+# NeurIPS BigANN harness image — local-source variant.
+#
+# The committed `Dockerfile.neurips` is based on `python:3.12-slim` (Debian
+# bookworm, glibc 2.36) and therefore only accepts a manylinux wheel. A wheel
+# built on this host (Ubuntu 26.04, glibc 2.43) links against GLIBC_2.43 and
+# fails to import there with:
+#
+#   ImportError: /lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.43' not found
+#
+# This variant matches the host toolchain so `maturin build --release` output
+# can be mounted at /wheels and imported. Use it for local-source runs; keep
+# the committed image for leaderboard-comparable runs built in manylinux.
+#
+#   .venv/bin/maturin build --release --out dist
+#   docker build -f benchmarks/Dockerfile.neurips.local -t bsdb-neurips:local .
+FROM ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-pip ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Harness dependencies. psutil is used for RSS/peak reporting and for the
+# fallback memory figure when no cgroup limit is present.
+RUN pip install --upgrade pip \
+    && pip install numpy pandas pyarrow psutil
+
+WORKDIR /opt/bench
+COPY benchmarks/run_neurips_bigann.py /opt/bench/run_neurips_bigann.py
+COPY benchmarks/run_neurips_docker.sh /opt/bench/run_neurips_docker.sh
+RUN chmod +x /opt/bench/run_neurips_docker.sh
+
+# Dataset (read-only), wheel (read-only), scratch (writable).
+VOLUME ["/data/bigann", "/wheels", "/work/scratch"]
+
+ENTRYPOINT ["/opt/bench/run_neurips_docker.sh"]

@@ -281,3 +281,172 @@ async fn test_puffin_hybrid_segment_writer_and_reader() -> Result<(), Box<dyn st
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_puffin_hnsw_ivf_lazy_loading_and_fuzz() -> Result<(), Box<dyn std::error::Error>> {
+    use benostreamdb::core::index::hnsw_ivf::HnswIvfIndex;
+    use benostreamdb::core::index::{VectorMetric, VectorValue};
+    use benostreamdb::core::manifest::IndexAlgorithm;
+    use benostreamdb::core::puffin::{
+        PuffinIndexWriter, PUFFIN_BLOB_HNSW_CLUSTER_GRAPH, PUFFIN_BLOB_HNSW_CLUSTER_MAPPING,
+        PUFFIN_BLOB_HNSW_IVF_CENTROIDS,
+    };
+    use object_store::local::LocalFileSystem;
+    use rand::Rng;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp_dir = tempfile::tempdir()?;
+    let tmp_dir_path = tmp_dir.path().to_str().unwrap().to_string();
+    let seg_id = "puffin_lazy_seg_001";
+    let col_name = "embedding";
+
+    let dim = 16;
+    let n_vectors = 200;
+
+    // Generate well-separated vectors
+    let mut vectors = Vec::with_capacity(n_vectors);
+    for i in 0..n_vectors {
+        let mut v = vec![0.0f32; dim];
+        v[0] = i as f32 * 2.0;
+        v[1] = (i % 7) as f32;
+        vectors.push(v);
+    }
+
+    // 1. Build an IVF index with 4 coarse clusters
+    let algo = IndexAlgorithm::hnsw();
+    let index = HnswIvfIndex::build(
+        vectors.clone(),
+        VectorMetric::L2,
+        Some(4),
+        Some(16),
+        &algo,
+        0,
+    )?;
+
+    // 2. Save individual artifacts to disk
+    let base_path = format!("{}/{}.{}", tmp_dir_path, seg_id, col_name);
+    let saved_files = index.save(&base_path)?;
+    assert!(!saved_files.is_empty());
+
+    // 3. Pack artifacts into a Puffin container
+    let puffin_filename = format!("{}.puffin", seg_id);
+    let puffin_file_path = format!("{}/{}", tmp_dir_path, puffin_filename);
+    let puffin_file = std::fs::File::create(&puffin_file_path)?;
+    let mut writer = PuffinIndexWriter::new(
+        std::io::BufWriter::new(puffin_file),
+        puffin_filename.clone(),
+        1001,
+        "dummy_chk".to_string(),
+        n_vectors as i64,
+    )?;
+
+    for file_path in &saved_files {
+        let file_name = std::path::Path::new(file_path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let blob_type = if file_name.ends_with(".centroids.parquet") {
+            PUFFIN_BLOB_HNSW_IVF_CENTROIDS
+        } else if file_name.ends_with(".mapping.parquet") {
+            PUFFIN_BLOB_HNSW_CLUSTER_MAPPING
+        } else if file_name.ends_with(".hnsw.graph") {
+            PUFFIN_BLOB_HNSW_CLUSTER_GRAPH
+        } else {
+            continue;
+        };
+
+        let mut props = HashMap::new();
+        props.insert("filename".to_string(), file_name);
+
+        writer.add_index_blob_from_file(
+            "vector",
+            "hnsw",
+            col_name,
+            blob_type,
+            file_path,
+            vec![],
+            props,
+        )?;
+    }
+    writer.finish()?;
+
+    // 4. Load from Puffin container via LocalFileSystem object store
+    let local_store: Arc<dyn object_store::ObjectStore> =
+        Arc::new(LocalFileSystem::new_with_prefix(tmp_dir.path())?);
+    let cache_key = format!("test_puffin_{}", seg_id);
+
+    let loaded = HnswIvfIndex::load_from_puffin(
+        local_store.clone(),
+        &puffin_filename,
+        &cache_key,
+        true,
+        col_name,
+    )
+    .await?;
+
+    // 5. Verify lazy properties
+    assert!(loaded.is_lazy(), "Index loaded from puffin must be lazy");
+    assert_eq!(
+        loaded.cluster_cache_count(),
+        0,
+        "Cluster cache must be empty initially before search"
+    );
+
+    // 6. Search query targeting vector 42 with n_probe = 1
+    let query_42 = VectorValue::Float32(vectors[42].clone());
+    let res_42 = loaded.search(&query_42, 5, 1, None, None)?;
+    assert!(!res_42.is_empty(), "Search must return results");
+    assert_eq!(res_42[0].0, 42, "Nearest neighbor should be exact match 42");
+    assert_eq!(
+        loaded.cluster_cache_count(),
+        1,
+        "Only 1 probed cluster should be cached after n_probe=1"
+    );
+
+    // 7. Search query targeting vector 80 with n_probe = 2
+    let query_80 = VectorValue::Float32(vectors[80].clone());
+    let res_80 = loaded.search(&query_80, 5, 2, None, None)?;
+    assert!(!res_80.is_empty());
+    assert_eq!(res_80[0].0, 80, "Nearest neighbor should be exact match 80");
+    assert!(
+        loaded.cluster_cache_count() <= 3,
+        "Cache entry count should not exceed total probed clusters so far"
+    );
+
+    // 8. Fuzz testing: 50 iterations with random inputs and edge cases
+    let mut rng = rand::thread_rng();
+    for _ in 0..50 {
+        let mut random_vec = vec![0.0f32; dim];
+        for val in &mut random_vec {
+            *val = rng.gen_range(-100.0..100.0);
+        }
+        let rand_k = rng.gen_range(1..=100);
+        let rand_n_probe = rng.gen_range(0..=10); // 0 tests clamp to 1
+
+        let fuzz_query = VectorValue::Float32(random_vec);
+        let search_res = loaded.search(&fuzz_query, rand_k, rand_n_probe, None, None);
+        assert!(search_res.is_ok(), "Search should not panic or fail on random vector");
+        let results = search_res.unwrap();
+        assert!(results.len() <= rand_k, "Results length must be bounded by k");
+
+        // Verify sorted ordering
+        for w in results.windows(2) {
+            assert!(
+                w[0].1 <= w[1].1,
+                "Results must be strictly sorted by ascending distance: {} vs {}",
+                w[0].1,
+                w[1].1
+            );
+        }
+    }
+
+    // 9. Edge-case test: Out-of-bounds cluster access returns None without crashing
+    assert!(loaded.get_cluster(999_999).is_none(), "Invalid cluster must return None");
+    assert!(loaded.get_cluster(usize::MAX).is_none(), "usize::MAX cluster must return None");
+
+    Ok(())
+}

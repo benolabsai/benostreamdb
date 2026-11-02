@@ -143,6 +143,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
             None,
             None,
             false, // use_mmap
+            None,
         )
         .await?;
 
@@ -308,6 +309,7 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
             None,
             None,
             false,
+            None,
         )
         .await?;
 

@@ -15,9 +15,9 @@
 
 | Tier | Capabilities | Status |
 | :--- | :--- | :--- |
-| **Preview-Ready** | Embedded Python & Rust engine, Apache Iceberg (V2/V3) Parquet read/write, HNSW (Float32) vector search, in-process CSR graph analytics (PageRank, shortest path), DuckDB/DataFusion SQL compatibility, Puffin sidecar management | ✅ Fully supported & tested for evaluation |
+| **Preview-Ready** | Embedded Python & Rust engine, Apache Iceberg (V2/V3) Parquet read/write, HNSW (Float32, BQ8, BQ4, SQ8) vector search, Voronoi Puffin sharding compaction, in-process CSR graph analytics (PageRank, shortest path), DuckDB/DataFusion SQL compatibility, Puffin sidecar management | ✅ Fully supported & tested for evaluation |
 | **Connectors** | [Apache Spark](docs/integrations/SPARK.md) (3.5 & 4.x, exactly-once writes), [Trino](docs/integrations/TRINO.md) (bands 482–483 and 484+), [dbt](docs/integrations/DBT.md) adapter, [MCP](docs/integrations/MCP.md) server (stdio + HTTP/SSE), [Flight SQL](docs/integrations/FLIGHT_SQL.md) | ⚠️ Functional; each guide lists the supported versions |
-| **Experimental** | 8-bit TurboQuant (TQ8), OpenSearch 7.10 & Qdrant REST gateway compatibility, Arrow Flight SQL server | ⚠️ Functional; APIs and performance tuning are actively evolving |
+| **Experimental** | OpenSearch 7.10 & Qdrant REST gateway compatibility, Arrow Flight SQL server | ⚠️ Functional; APIs and performance tuning are actively evolving |
 
 > **Serverless by default.** BenoStreamDB runs directly against object storage and does not require a database server or always-on cluster. For applications that prefer a network-accessible database endpoint, BenoStreamDB also provides an optional Arrow Flight SQL server interface.
 >
@@ -578,29 +578,44 @@ async fn main() -> anyhow::Result<()> {
 - **Performance**: Same underlying optimized execution as traditional APIs
 - **Interoperable**: Mix with SQL queries and traditional `to_pandas()` calls
 - **GPU Acceleration**: Automatic GPU context propagation for vector operations
-- **TurboQuant Optimized**: Seamless integration with 8-bit/4-bit quantization
+- **BenoQuant & Quantization Optimized**: Seamless integration with 8-bit/4-bit isotropic and scalar quantization
 
-### TurboQuant Quantization (TQ8 / TQ4)
+### BenoQuant Isotropic Quantization (BQ8 / BQ4) & Native SQ8
 
-BenoStreamDB features **TurboQuant**, an optimized quantization engine that reduces vector storage costs while maintaining high search accuracy:
+BenoStreamDB provides native vector quantization algorithms designed for out-of-core memory efficiency and high-dimensional variance equalization:
 
-- **TQ8 (8-bit)**: 4x compression vs. float32. Near-lossless accuracy (typically >99% recall retention). Ideal for general-purpose RAG.
-- **TQ4 (4-bit)**: 8x compression vs. float32. Maximum efficiency for massive datasets where storage cost is the primary bottleneck.
+- **BQ8 (8-bit BenoQuant)**: Rotated INT8 quantization using a randomized Fast Walsh-Hadamard Transform ($H \cdot D$). Equalizes dimensional variance across anisotropic vector spaces (such as dense LLM embeddings), eliminating centroid skew and delivering +11.3% higher throughput (163.6 QPS at 94.55% Recall@10 on 10M BigANN) with reduced median and tail latencies.
+- **BQ4 (4-bit BenoQuant)**: Ultra-compact 4-bit nibble packing (64 bytes per 128 dims) with an IEEE 754-2008 binary16 length normalization scalar ($\alpha = \frac{\langle y, \hat{y} \rangle}{\|\hat{y}\|^2}$), packing 128-dim vectors into 66 bytes total. Nibble arithmetic centered at 7.5 prevents norm bias and quantization collapse.
+- **SQ8 (8-bit Scalar Quantization)**: Native axis-aligned INT8 scalar quantization without rotation (`hnsw_sq8`), offering 4x compression and fast indexing for isotropic datasets.
 
 ```python
-# High-performance community default (HNSW-TQ8)
-table.add_index("embedding", "hnsw_tq8")
+# BenoQuant 8-bit isotropic quantization (Recommended for production & LLM embeddings)
+table.add_index("embedding", "hnsw_bq8")
 
-# High-compression mode
-table.add_index("embedding", "hnsw_tq4")
+# BenoQuant 4-bit high-compression mode (66 bytes/vector at 128-dim)
+table.add_index("embedding", "hnsw_bq4")
 
-# Custom HNSW-PQ configuration
-table.add_index("embedding", {
-    "type": "hnsw_pq",
-    "complexity": 32,
-    "quality": 300,
-    "compression": 32 # PQ subspaces
-})
+# Native 8-bit scalar quantization (fast index build)
+table.add_index("embedding", "hnsw_sq8")
+
+# Standard uncompressed Float32 HNSW
+table.add_index("embedding", "hnsw")
+```
+
+### Voronoi Puffin Sharding & Out-of-Core Memory Management
+
+When operating on multi-million or 100M+ vector tables, BenoStreamDB maintains out-of-core memory safety through physical Voronoi shard compaction and advisory memory budgeting:
+
+```python
+# 1. Compact segment index sidecars into clustered Voronoi Puffin shards (512 MB target)
+table.compact_indexes("embedding", target_shard_bytes=536870912)
+
+# 2. Preload Voronoi centroids and top-layer graphs up to an advisory RAM budget (e.g. 8 GiB)
+table.preload_indexes(max_memory_bytes=8 * 1024**3, spill_to_disk=False)
+
+# 3. Invalidate global engine caches (HNSW, IVF, Voronoi, CSR, and block caches)
+import benostreamdb as bsdb
+bsdb.clear_cache(all=True)
 ```
 
 ### Python Vector Distance API with GPU Acceleration

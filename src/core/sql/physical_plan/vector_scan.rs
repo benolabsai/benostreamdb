@@ -203,7 +203,8 @@ impl ExecutionPlan for VectorScanExec {
                     )
                     .with_filter(filter_expr.clone())
                     .with_config(table.query_config().clone())
-                    .with_ef_search(vp.ef_search);
+                    .with_ef_search(vp.ef_search)
+                    .with_targeted_clusters(vp.targeted_clusters.clone());
 
                     if let Some(ref proj_names) = col_names_owned {
                         request = request.with_columns(Some(proj_names.clone()));

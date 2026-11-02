@@ -47,17 +47,14 @@ fn vector_batch(n: i32, dim: usize) -> anyhow::Result<RecordBatch> {
 }
 
 fn params(query: &VectorValue, k: usize) -> VectorSearchParams {
-    VectorSearchParams {
-        column: "embedding".to_string(),
-        query: query.clone(),
-        k,
-        metric: VectorMetric::L2,
-        ef_search: Some(200),
-        probes: None,
-        stats_only: false,
-        use_mmap: true,
-        radius: None,
-    }
+    let mut p = VectorSearchParams::new("embedding", query.clone(), k);
+    p.metric = VectorMetric::L2;
+    p.ef_search = Some(200);
+    p.probes = None;
+    p.stats_only = false;
+    p.use_mmap = true;
+    p.radius = None;
+    p
 }
 
 #[tokio::test]

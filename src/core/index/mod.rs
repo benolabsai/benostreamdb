@@ -24,11 +24,13 @@ pub mod pq;
 pub mod sq;
 pub mod tokenizer;
 pub mod turboquant;
+pub mod vector_router;
 
 pub use benoquant::{fwht, rademacher_sign, BenoQuantEncoder};
 pub use pq::PqEncoder;
 pub use sq::SqEncoder;
 pub use turboquant::TurboQuantEncoder;
+pub use vector_router::TableVectorRouter;
 
 use anyhow::Result;
 use roaring::RoaringBitmap;

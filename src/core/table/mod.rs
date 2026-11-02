@@ -37,6 +37,7 @@ pub mod index_config;
 pub mod ingest;
 pub use ingest::{IngestOptions, IngestReport};
 pub mod maintenance;
+pub use maintenance::IndexCompactionStats;
 pub mod merge;
 pub use merge::MergeMode;
 pub mod preload;

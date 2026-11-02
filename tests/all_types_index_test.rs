@@ -10,6 +10,25 @@ use benostreamdb::Table;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
+/// Collect the `id` column from a result set, sorted.
+///
+/// The comments in this test already name the expected rows. A count assertion
+/// passes when the index returns the wrong rows; this does not.
+fn collect_ids(batches: &[RecordBatch]) -> Vec<i32> {
+    let mut ids = Vec::new();
+    for b in batches {
+        let arr = b
+            .column_by_name("id")
+            .expect("id column")
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id must be Int32");
+        ids.extend(arr.iter().flatten());
+    }
+    ids.sort_unstable();
+    ids
+}
+
 #[test]
 fn test_all_types_indexing() -> anyhow::Result<()> {
     let rt = Runtime::new()?;
@@ -78,7 +97,11 @@ fn test_all_types_indexing() -> anyhow::Result<()> {
 
         // A. Boolean Index: flag = true (should be 1, 3, 5)
         let res = table.read_async(Some("flag = true"), None, None).await?;
-        assert_eq!(res.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        assert_eq!(
+            collect_ids(&res),
+            vec![1, 3, 5],
+            "flag = true must return ids 1, 3, 5"
+        );
 
         // B. Time Index: time > 2500 (should be 3, 4, 5)
         // Note: Filter parser needs to support time literals or we pass explicit integer?
@@ -88,7 +111,11 @@ fn test_all_types_indexing() -> anyhow::Result<()> {
         let res = table
             .read_async(Some("cast(time as bigint) > 2500"), None, None)
             .await?;
-        assert_eq!(res.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        assert_eq!(
+            collect_ids(&res),
+            vec![3, 4, 5],
+            "time > 2500 must return ids 3, 4, 5"
+        );
 
         // C. Binary Index: blob = 'foo'
         // DataFusion issues Utf8View vs Utf8. Cast both to string.
@@ -100,14 +127,22 @@ fn test_all_types_indexing() -> anyhow::Result<()> {
             )
             .await?;
         // 'foo' is row 1
-        assert_eq!(res.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+        assert_eq!(
+            collect_ids(&res),
+            vec![1],
+            "blob = 'foo' must return id 1"
+        );
 
         // D. Decimal Index: money > 3.00
         // DataFusion Decimal > Float requires cast.
         let res = table
             .read_async(Some("cast(money as double) > 3.0"), None, None)
             .await?;
-        assert_eq!(res.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        assert_eq!(
+            collect_ids(&res),
+            vec![3, 4, 5],
+            "money > 3.0 must return ids 3, 4, 5"
+        );
 
         // E. Dictionary Index: unpacks to "cat", "dog", "bird"
         // Row 1: cat, Row 2: dog, Row 3: cat, Row 4: dog, Row 5: bird
@@ -115,7 +150,11 @@ fn test_all_types_indexing() -> anyhow::Result<()> {
         let res = table
             .read_async(Some("category = 'cat'"), None, None)
             .await?;
-        assert_eq!(res.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+        assert_eq!(
+            collect_ids(&res),
+            vec![1, 3],
+            "category = 'cat' must return ids 1, 3"
+        );
 
         Ok(())
     })

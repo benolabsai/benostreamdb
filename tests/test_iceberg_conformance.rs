@@ -31,6 +31,26 @@ fn int_batch(start: i32, n: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![Arc::new(ids)]).unwrap()
 }
 
+/// Collect the `id` column from a result set, sorted.
+///
+/// A cardinality check (`count(*) == 9`) passes when the engine returns the
+/// wrong rows. A set check does not. Every assertion about *which* rows a
+/// delete, an index, or a recovery path produced should go through this.
+fn collect_ids(batches: &[RecordBatch]) -> Vec<i32> {
+    let mut ids = Vec::new();
+    for b in batches {
+        if let Some(col) = b.column_by_name("id") {
+            let arr = col
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("id must be Int32");
+            ids.extend(arr.iter().flatten());
+        }
+    }
+    ids.sort_unstable();
+    ids
+}
+
 /// Read the highest-numbered `metadata/v{N}.metadata.json` as raw JSON.
 async fn latest_metadata_json(store: &Arc<dyn ObjectStore>) -> anyhow::Result<serde_json::Value> {
     let mut stream = store.list(Some(&ObjPath::from("metadata")));
@@ -316,25 +336,29 @@ async fn delete_is_reflected_in_manifest() -> anyhow::Result<()> {
     }
 
     let table = Table::new_async(uri.clone()).await?;
-    let batches = table.sql("SELECT count(*) FROM t").await?;
-    let count = batches[0]
-        .column(0)
-        .as_any()
-        .downcast_ref::<arrow::array::Int64Array>()
-        .unwrap()
-        .value(0);
-    assert_eq!(count, 9, "delete must remove exactly one row");
+
+    // Assert *which* row was removed, not how many remain. A delete that
+    // removes id=0 instead of id=5 also leaves 9 rows, and a count-only
+    // assertion cannot tell the difference.
+    let out = table.read_async(None, None, None).await?;
+    assert_eq!(
+        collect_ids(&out),
+        vec![0, 1, 2, 3, 4, 6, 7, 8, 9],
+        "delete must remove id=5 and only id=5"
+    );
 
     // The manifest must reference a delete file (merge-on-read) or a rewritten
-    // segment; either way the live entry set must be consistent.
+    // segment. Merge-on-read keeps the 10-row data file and adds a delete file;
+    // a rewrite produces a 9-row data file. Both are valid, but the manifest
+    // must not report a row count outside that set.
     let store = create_object_store(&uri)?;
     let manifest_path = find_data_manifest(&store).await?;
     let bytes = store.get(&manifest_path).await?.bytes().await?;
     let entries = read_manifest(&bytes[..])?;
     let total: i64 = entries.iter().map(|e| e.data_file.record_count).sum();
     assert!(
-        total >= 9,
-        "manifest must still reference the live data (got {total} rows)"
+        total == 9 || total == 10,
+        "manifest must reference 9 (rewritten) or 10 (merge-on-read) data rows, got {total}"
     );
 
     Ok(())

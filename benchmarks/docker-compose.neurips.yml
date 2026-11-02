@@ -1,0 +1,69 @@
+# NeurIPS BigANN ablation under the official evaluation envelope.
+#
+# The envelope is Azure Standard_D8lds_v5: 8 vCPU / 16 GiB RAM / local NVMe. It
+# is applied as cgroup limits, and the harness reads those limits itself
+# (`--hardware auto`) to size its thread count and cache budgets — a 48 GiB
+# cache budget on a 16 GiB machine is not a faster engine, it is an OOM kill.
+#
+#   # 1. engine wheel (host)
+#   maturin build --release --out dist
+#
+#   # 2. harness image
+#   docker build -f benchmarks/Dockerfile.neurips -t bsdb-neurips .
+#
+#   # 3. one ablation, 10M vectors, full Pareto grid
+#   DATASET_DIR=/home/ralbright/data/datasets/bigann \
+#     docker compose -f benchmarks/docker-compose.neurips.yml run --rm neurips
+#
+#   # 4. a 100M run (ingest first, reuse the table across modes)
+#   DATASET=100m LIMIT=0 STAGE=both \
+#     docker compose -f benchmarks/docker-compose.neurips.yml run --rm neurips
+#
+# Every number produced here is comparable to the leaderboard because cpus,
+# memory and cache budgets all come from the same envelope.
+name: bsdb-neurips
+
+services:
+  neurips:
+    build:
+      context: ..
+      dockerfile: benchmarks/Dockerfile.neurips
+    image: bsdb-neurips:latest
+
+    # --- the envelope -------------------------------------------------------
+    cpus: "${BENCH_CPUS:-8}"
+    mem_limit: "${BENCH_MEM:-16g}"
+    memswap_limit: "${BENCH_MEM:-16g}"
+    deploy:
+      resources:
+        limits:
+          cpus: "${BENCH_CPUS:-8}"
+          memory: "${BENCH_MEM:-16g}"
+
+    volumes:
+      # Raw NeurIPS files (base.<N>.u8bin, query.*, GT.*) — mounted read-only.
+      - "${DATASET_DIR:?set DATASET_DIR to the bigann dataset directory}:/data/bigann:ro"
+      # Table DB + scratch. Keep this on the fast disk; the index lives here.
+      - "${SCRATCH_DIR:-./scratch_neurips}:/work/scratch"
+      # abi3 wheel built on the host (`maturin build --release --out dist`).
+      - "${WHEEL_DIR:-../dist}:/wheels:ro"
+
+    environment:
+      # Puffin materialization and temp vector files go to the scratch volume,
+      # never to the container's tmpfs (16 GiB is the whole budget).
+      TMPDIR: /work/scratch/tmp
+
+    # Passed to run_neurips_bigann.py by the entrypoint. `--strict-hardware`
+    # aborts if the cgroup limits are missing, so an unconstrained (meaningless)
+    # run cannot silently produce a number.
+    command: >
+      --dataset ${DATASET:-10m}
+      --data-dir /data/bigann
+      --scratch-dir /work/scratch
+      --out /work/scratch/results
+      --limit ${LIMIT:-0}
+      --queries ${QUERIES:-10000}
+      --stage ${STAGE:-both}
+      --all-modes
+      --sweep
+      --hardware d8lds --strict-hardware

@@ -396,6 +396,46 @@ impl AsRef<[u8]> for MmapOwner {
     }
 }
 
+/// Lazy loader for per-cluster HNSW graphs and mappings packed inside a Puffin container.
+///
+/// Holds the memory-mapped or owned byte buffer of the `.puffin` container and the byte
+/// slices `(offset, length)` of all cluster graphs and mappings. Slices are deserialized
+/// strictly on demand when an IVF coarse query probes that specific cluster list.
+pub struct LazyPuffinBlobs {
+    container: bytes::Bytes,
+    cluster_slices: HashMap<usize, ((usize, usize), (usize, usize))>,
+    quantizer: Option<QuantizerImpl>,
+    metric: VectorMetric,
+}
+
+impl LazyPuffinBlobs {
+    pub fn load_cluster(&self, cluster_id: usize) -> Result<(HnswGraph, Vec<usize>)> {
+        let (graph_slice, mapping_slice) = self
+            .cluster_slices
+            .get(&cluster_id)
+            .ok_or_else(|| anyhow::anyhow!("Cluster {} not found in puffin container", cluster_id))?;
+
+        let graph_bytes = self
+            .container
+            .slice(graph_slice.0..graph_slice.0 + graph_slice.1);
+        let mapping_bytes = self
+            .container
+            .slice(mapping_slice.0..mapping_slice.0 + mapping_slice.1);
+
+        HnswIvfIndex::deserialize_single_cluster(
+            cluster_id,
+            graph_bytes,
+            mapping_bytes,
+            self.quantizer.as_ref(),
+            self.metric,
+        )
+    }
+
+    pub fn total_clusters(&self) -> usize {
+        self.cluster_slices.len()
+    }
+}
+
 /// HNSW-IVF Hybrid Index
 pub struct HnswIvfIndex {
     /// Cluster centroids for coarse quantization
@@ -403,7 +443,11 @@ pub struct HnswIvfIndex {
     /// Distance metric used for search
     metric: VectorMetric,
     /// Per-cluster HNSW graphs: cluster_id -> (hnsw_index, row_id_mapping)
-    cluster_graphs: HashMap<usize, (HnswGraph, Vec<usize>)>,
+    cluster_graphs: HashMap<usize, Arc<(HnswGraph, Vec<usize>)>>,
+    /// In-memory LRU cache of deserialized probed clusters (used when lazy loading from Puffin)
+    cluster_cache: moka::sync::Cache<usize, Arc<(HnswGraph, Vec<usize>)>>,
+    /// Lazy blob slices inside a Puffin container for on-demand cluster deserialization
+    lazy_blobs: Option<Arc<LazyPuffinBlobs>>,
     /// True when the per-cluster graphs are zero-copy views over `mmap`'d files.
     /// In that case the graph bytes live in the OS page cache rather than the
     /// process heap, so [`Self::size_in_bytes`] must not charge them against the
@@ -1324,10 +1368,17 @@ impl HnswIvfIndex {
             start.elapsed()
         );
 
+        let cluster_graphs = cluster_graphs
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+
         Ok(Self {
             centroids,
             metric,
             cluster_graphs,
+            cluster_cache: moka::sync::Cache::builder().max_capacity(64).build(),
+            lazy_blobs: None,
             mmap_backed: false,
             _n_lists: n_lists,
             dim,
@@ -1616,10 +1667,17 @@ impl HnswIvfIndex {
             cluster_graphs.len()
         );
 
+        let cluster_graphs = cluster_graphs
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+
         Ok(HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
+            cluster_cache: moka::sync::Cache::builder().max_capacity(64).build(),
+            lazy_blobs: None,
             mmap_backed: false,
             _n_lists: n_lists,
             dim,
@@ -1628,26 +1686,338 @@ impl HnswIvfIndex {
         })
     }
 
-    /// Search for k nearest neighbors
-    pub fn search(
-        &self,
-        query: &VectorValue,
-        k: usize,
-        n_probe: usize,
-        filter: Option<&roaring::RoaringBitmap>,
-        ef_search: Option<usize>,
-    ) -> Result<Vec<(usize, f32)>> {
-        let t_start = std::time::Instant::now();
-        let query_f32 = match query {
-            VectorValue::Float32(v) => v,
-            VectorValue::Float16(v) => v,
-            VectorValue::Binary(_) => return Ok(vec![]),
-            VectorValue::Sparse(_) => return Ok(vec![]),
-            VectorValue::Keyword(_) => return Ok(vec![]),
+    /// Retrieve cluster HNSW graph and row id mapping by cluster id.
+    ///
+    /// If the index was eagerly constructed or loaded, returns the cluster from
+    /// `cluster_graphs`. If the index was lazily loaded from a Puffin container,
+    /// checks `cluster_cache` (LRU) and deserializes only the requested cluster
+    /// from the container on demand.
+    pub fn get_cluster(&self, cluster_id: usize) -> Option<Arc<(HnswGraph, Vec<usize>)>> {
+        if let Some(cg) = self.cluster_graphs.get(&cluster_id) {
+            return Some(cg.clone());
+        }
+        if let Some(hit) = self.cluster_cache.get(&cluster_id) {
+            return Some(hit);
+        }
+        if let Some(ref lazy) = self.lazy_blobs {
+            match lazy.load_cluster(cluster_id) {
+                Ok(cluster_data) => {
+                    let arc_data = Arc::new(cluster_data);
+                    self.cluster_cache.insert(cluster_id, arc_data.clone());
+                    return Some(arc_data);
+                }
+                Err(e) => {
+                    tracing::warn!(cluster_id, error = %e, "Failed to load lazy cluster");
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
+    pub fn is_lazy(&self) -> bool {
+        self.lazy_blobs.is_some()
+    }
+
+    pub fn cluster_cache_count(&self) -> usize {
+        self.cluster_cache.run_pending_tasks();
+        self.cluster_cache.entry_count() as usize
+    }
+
+    pub fn deserialize_single_cluster(
+        cluster_id: usize,
+        graph_bytes: bytes::Bytes,
+        mapping_bytes: bytes::Bytes,
+        quantizer: Option<&QuantizerImpl>,
+        metric: VectorMetric,
+    ) -> Result<(HnswGraph, Vec<usize>)> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let hnsw = if let Some(q_impl) = quantizer {
+            match q_impl {
+                QuantizerImpl::BenoQuant(q) => {
+                    if q.bits() == 4 {
+                        HnswGraph::TurboQuant4Arrow(
+                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                                graph_bytes,
+                                crate::core::index::distance::DistL2u4,
+                            )
+                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                        )
+                    } else {
+                        HnswGraph::TurboQuant8Arrow(
+                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                                graph_bytes,
+                                crate::core::index::distance::DistL2u8,
+                            )
+                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                        )
+                    }
+                }
+                QuantizerImpl::Sq(_) => {
+                    HnswGraph::TurboQuant8Arrow(
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                            graph_bytes,
+                            crate::core::index::distance::DistL2u8,
+                        )
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                    )
+                }
+                QuantizerImpl::Pq(pq) => {
+                    let dist = crate::core::index::pq::DistPqSdc {
+                        pq: std::sync::Arc::new(pq.clone()),
+                    };
+                    HnswGraph::PqArrow(
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                            graph_bytes,
+                            dist,
+                        )
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                    )
+                }
+            }
+        } else {
+            match metric {
+                VectorMetric::L2 => HnswGraph::L2Arrow(
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                        graph_bytes,
+                        DistL2,
+                    )
+                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                ),
+                VectorMetric::Cosine => HnswGraph::CosineArrow(
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                        graph_bytes,
+                        DistCosine,
+                    )
+                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                ),
+                VectorMetric::InnerProduct => HnswGraph::DotArrow(
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                        graph_bytes,
+                        DistDot,
+                    )
+                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                ),
+                VectorMetric::L1 => HnswGraph::L1Arrow(
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                        graph_bytes,
+                        DistL1,
+                    )
+                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                ),
+                VectorMetric::Hamming => HnswGraph::HammingArrow(
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                        graph_bytes,
+                        DistHamming,
+                    )
+                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                ),
+                VectorMetric::Jaccard => HnswGraph::JaccardArrow(
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                        graph_bytes,
+                        DistJaccard,
+                    )
+                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                ),
+            }
         };
 
-        // Pre-quantize query if needed for faster graph traversal (SDC)
-        let effective_query = match self.quantizer {
+        let map_builder = ParquetRecordBatchReaderBuilder::try_new(mapping_bytes)?;
+        let map_reader = map_builder.build()?;
+        let batches: Vec<RecordBatch> = map_reader
+            .map(|r| r.map_err(anyhow::Error::from))
+            .collect::<Result<Vec<_>>>()?;
+        if batches.is_empty() {
+            return Err(anyhow::anyhow!("No data in mapping file for cluster {}", cluster_id));
+        }
+        let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
+        let row_id_mapping = Self::extract_row_id_mapping_from_col(batch.column(0));
+
+        Ok((hnsw, row_id_mapping))
+    }
+
+    pub fn load_lazy_from_container(
+        container: bytes::Bytes,
+        puffin_path: &str,
+        column_name: &str,
+        use_mmap: bool,
+    ) -> Result<Self> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let entries: Vec<(String, usize, usize)> = {
+            let reader = crate::core::puffin::PuffinReader::new(std::io::Cursor::new(container.as_ref()))?;
+            let mut list = Vec::new();
+            for (i, b) in reader.footer().blobs.iter().enumerate() {
+                let name = b
+                    .properties
+                    .get("filename")
+                    .cloned()
+                    .unwrap_or_else(|| format!("blob_{i}"));
+                let offset = usize::try_from(b.offset)
+                    .map_err(|_| anyhow::anyhow!("negative blob offset in {}", puffin_path))?;
+                let length = usize::try_from(b.length)
+                    .map_err(|_| anyhow::anyhow!("negative blob length in {}", puffin_path))?;
+                if offset.checked_add(length).map_or(true, |end| end > container.len()) {
+                    anyhow::bail!(
+                        "blob '{}' [{offset}..{offset}+{length}] exceeds container size {}",
+                        name,
+                        container.len()
+                    );
+                }
+                list.push((name, offset, length));
+            }
+            list
+        };
+
+        let marker = format!(".{column_name}.");
+        let (base_path, centroids_offset, centroids_length) = entries
+            .iter()
+            .find_map(|(name, offset, length)| {
+                if name.contains(&marker) && name.ends_with(".centroids.parquet") {
+                    let base = name.strip_suffix(".centroids.parquet")?.to_string();
+                    Some((base, *offset, *length))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                entries.iter().find_map(|(name, offset, length)| {
+                    if name.ends_with(".centroids.parquet") {
+                        let base = name.strip_suffix(".centroids.parquet")?.to_string();
+                        Some((base, *offset, *length))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Puffin bundle '{}' has no centroids blob for column '{}'",
+                    puffin_path,
+                    column_name
+                )
+            })?;
+
+        let centroids_bytes = container.slice(centroids_offset..centroids_offset + centroids_length);
+        let builder = ParquetRecordBatchReaderBuilder::try_new(centroids_bytes.clone())?;
+        let reader = builder.build()?;
+        let batches: Vec<RecordBatch> = reader
+            .map(|r| r.map_err(anyhow::Error::from))
+            .collect::<Result<Vec<_>>>()?;
+        if batches.is_empty() {
+            anyhow::bail!("No data in centroids file");
+        }
+        let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
+        let centroids = Self::extract_centroids_from_batch(&batch)?;
+        if centroids.is_empty() {
+            anyhow::bail!("No centroids extracted from centroids file");
+        }
+        let n_lists = centroids.len();
+        let dim = centroids[0].len();
+
+        let parquet_reader = parquet::file::reader::SerializedFileReader::new(centroids_bytes)?;
+        let file_metadata = parquet_reader.metadata().file_metadata();
+        let mut metric = VectorMetric::L2;
+        let mut quantizer = None;
+        if let Some(kv_list) = file_metadata.key_value_metadata() {
+            for kv in kv_list {
+                if kv.key == "vector_metric" {
+                    if let Some(ref val) = kv.value {
+                        metric = val.parse::<VectorMetric>().unwrap_or(VectorMetric::L2);
+                    }
+                } else if kv.key == "quantizer_config" {
+                    if let Some(ref val) = kv.value {
+                        if let Ok(mut q) = serde_json::from_str::<QuantizerImpl>(val) {
+                            if let QuantizerImpl::Pq(ref mut pq) = q {
+                                pq.init_lut();
+                            }
+                            quantizer = Some(q);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut graph_slices: HashMap<usize, (usize, usize)> = HashMap::new();
+        let mut mapping_slices: HashMap<usize, (usize, usize)> = HashMap::new();
+
+        for (name, offset, length) in &entries {
+            if !name.starts_with(&base_path) {
+                continue;
+            }
+            if name.ends_with(".hnsw.graph") {
+                if let Some(start) = name.rfind(".cluster_") {
+                    if let Some(end) = name.rfind(".hnsw.graph") {
+                        if start + 9 < end {
+                            if let Ok(cid) = name[start + 9..end].parse::<usize>() {
+                                graph_slices.insert(cid, (*offset, *length));
+                            }
+                        }
+                    }
+                }
+            } else if name.ends_with(".mapping.parquet") {
+                if let Some(start) = name.rfind(".cluster_") {
+                    if let Some(end) = name.rfind(".mapping.parquet") {
+                        if start + 9 < end {
+                            if let Ok(cid) = name[start + 9..end].parse::<usize>() {
+                                mapping_slices.insert(cid, (*offset, *length));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut cluster_slices: HashMap<usize, ((usize, usize), (usize, usize))> = HashMap::new();
+        for (cid, g_slice) in graph_slices {
+            if let Some(m_slice) = mapping_slices.get(&cid) {
+                cluster_slices.insert(cid, (g_slice, *m_slice));
+            }
+        }
+
+        let lazy_blobs = Arc::new(LazyPuffinBlobs {
+            container,
+            cluster_slices,
+            quantizer: quantizer.clone(),
+            metric,
+        });
+
+        let cluster_cache = moka::sync::Cache::builder()
+            .max_capacity(64)
+            .build();
+
+        Ok(HnswIvfIndex {
+            centroids,
+            metric,
+            cluster_graphs: HashMap::new(),
+            cluster_cache,
+            lazy_blobs: Some(lazy_blobs),
+            mmap_backed: use_mmap,
+            _n_lists: n_lists,
+            dim,
+            quantizer,
+            _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
+        })
+    }
+
+    /// Cluster centroids for coarse quantization.
+    pub fn centroids(&self) -> &[Vec<f32>] {
+        &self.centroids
+    }
+
+    /// Metric used by this index.
+    pub fn metric(&self) -> VectorMetric {
+        self.metric
+    }
+
+    /// Dimensionality of vectors in this index.
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn quantize_query(&self, query_f32: &[f32], query: &VectorValue) -> VectorValue {
+        match self.quantizer {
             Some(QuantizerImpl::BenoQuant(ref q)) => {
                 let mut q_vec = query_f32.to_vec();
                 if self.metric == VectorMetric::Cosine {
@@ -1679,7 +2049,52 @@ impl HnswIvfIndex {
                 VectorValue::Binary(q.encode(&q_vec))
             }
             _ => query.clone(),
+        }
+    }
+
+    /// Search specific targeted clusters directly without running coarse search
+    /// across all local centroids. Used when a table-level vector router has already
+    /// resolved the global candidate clusters for this segment.
+    pub fn search_targeted_clusters(
+        &self,
+        query: &VectorValue,
+        k: usize,
+        target_clusters: &[usize],
+        filter: Option<&roaring::RoaringBitmap>,
+        ef_search: Option<usize>,
+    ) -> Result<Vec<(usize, f32)>> {
+        let t_start = std::time::Instant::now();
+        let query_f32 = match query {
+            VectorValue::Float32(v) => v,
+            VectorValue::Float16(v) => v,
+            VectorValue::Binary(_) => return Ok(vec![]),
+            VectorValue::Sparse(_) => return Ok(vec![]),
+            VectorValue::Keyword(_) => return Ok(vec![]),
         };
+
+        let effective_query = self.quantize_query(query_f32, query);
+        self.search_clusters_internal(&effective_query, target_clusters, k, filter, ef_search, t_start)
+    }
+
+    /// Search for k nearest neighbors
+    pub fn search(
+        &self,
+        query: &VectorValue,
+        k: usize,
+        n_probe: usize,
+        filter: Option<&roaring::RoaringBitmap>,
+        ef_search: Option<usize>,
+    ) -> Result<Vec<(usize, f32)>> {
+        let t_start = std::time::Instant::now();
+        let query_f32 = match query {
+            VectorValue::Float32(v) => v,
+            VectorValue::Float16(v) => v,
+            VectorValue::Binary(_) => return Ok(vec![]),
+            VectorValue::Sparse(_) => return Ok(vec![]),
+            VectorValue::Keyword(_) => return Ok(vec![]),
+        };
+
+        let effective_query = self.quantize_query(query_f32, query);
 
         // Step 1: Find n_probe nearest clusters (coarse search)
         // (Centroids are always f32 for stability)
@@ -1739,6 +2154,19 @@ impl HnswIvfIndex {
             .collect();
         tracing::debug!("Sorted cluster distances: {:?}", cluster_distances);
         tracing::debug!("Clusters to search: {:?}", clusters_to_search);
+
+        self.search_clusters_internal(&effective_query, &clusters_to_search, k, filter, ef_search, t_start)
+    }
+
+    fn search_clusters_internal(
+        &self,
+        effective_query: &VectorValue,
+        clusters_to_search: &[usize],
+        k: usize,
+        filter: Option<&roaring::RoaringBitmap>,
+        ef_search: Option<usize>,
+        t_start: std::time::Instant,
+    ) -> Result<Vec<(usize, f32)>> {
         let t_coarse = t_start.elapsed();
         let t_fine_start = std::time::Instant::now();
 
@@ -1748,8 +2176,9 @@ impl HnswIvfIndex {
 
         let mut candidates: Vec<(usize, f32)> = clusters_to_search
             .into_par_iter()
-            .flat_map_iter(|cluster_id| {
-                if let Some((hnsw, row_id_mapping)) = self.cluster_graphs.get(&cluster_id) {
+            .flat_map_iter(|&cluster_id| {
+                if let Some(cluster_data) = self.get_cluster(cluster_id) {
+                    let (hnsw, row_id_mapping) = cluster_data.as_ref();
                     let mut local_filter_opt: Option<roaring::RoaringBitmap> = None;
                     if let Some(f) = filter {
                         let mut bm = roaring::RoaringBitmap::new();
@@ -1765,7 +2194,7 @@ impl HnswIvfIndex {
                     let cluster_ef = ef.min((row_id_mapping.len() * 3) / 4).max(cluster_k);
 
                     let results = hnsw.search(
-                        &effective_query,
+                        effective_query,
                         cluster_k,
                         cluster_ef,
                         local_filter_opt.as_ref(),
@@ -1810,23 +2239,16 @@ impl HnswIvfIndex {
         tracing::debug!("Candidates after dedup: len={}", candidates.len());
         candidates.truncate(k);
         if std::env::var("BSDB_TRACE_SEARCH").is_ok() {
-            let mapping_lens: Vec<usize> =
-                self.cluster_graphs.values().map(|(_, m)| m.len()).collect();
-            let (mn, mx) = match (mapping_lens.iter().min(), mapping_lens.iter().max()) {
-                (Some(a), Some(b)) => (*a, *b),
-                _ => (0, 0),
+            let loaded_count = if !self.cluster_graphs.is_empty() {
+                self.cluster_graphs.len()
+            } else {
+                self.cluster_cache.entry_count() as usize
             };
-            let first = self.cluster_graphs.iter().next().map(|(cid, (_, m))| {
-                (*cid, m.iter().take(8).copied().collect::<Vec<_>>())
-            });
             eprintln!(
-                "[trace] hnsw_ivf.search centroids={} clusters_loaded={} mapping_len[{}..{}] first_cluster={:?} final={:?}",
+                "[trace] hnsw_ivf.search centroids={} clusters_active={} candidates={}",
                 self.centroids.len(),
-                self.cluster_graphs.len(),
-                mn,
-                mx,
-                first,
-                candidates.iter().map(|(id, d)| (*id, *d)).collect::<Vec<_>>(),
+                loaded_count,
+                candidates.len(),
             );
         }
         let t_fine = t_fine_start.elapsed();
@@ -1946,7 +2368,8 @@ impl HnswIvfIndex {
         saved_files.push(centroids_path);
 
         // 2. Save per-cluster HNSW graphs
-        for (cluster_id, (hnsw, row_id_mapping)) in &self.cluster_graphs {
+        for (cluster_id, cluster_data) in &self.cluster_graphs {
+            let (hnsw, row_id_mapping) = cluster_data.as_ref();
             let cluster_base = format!("{}.cluster_{}", local_path, cluster_id);
             let cluster_tmp = format!("{}.tmp", cluster_base);
 
@@ -2240,111 +2663,20 @@ impl HnswIvfIndex {
                 .map(|cb_res| {
                     let cb = cb_res?;
                     let cluster_id = cb.cluster_id;
-
-                let hnsw = if let Some(q_impl) = quantizer_for_deser.clone() {
-                    match q_impl {
-                        QuantizerImpl::BenoQuant(q) => {
-                            if q.bits() == 4 {
-                                HnswGraph::TurboQuant4Arrow(
-                                    match cb.graph {
-                                        GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u4),
-                                        GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, crate::core::index::distance::DistL2u4),
-                                    }
-                                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                                )
-                            } else {
-                                HnswGraph::TurboQuant8Arrow(
-                                    match cb.graph {
-                                        GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u8),
-                                        GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, crate::core::index::distance::DistL2u8),
-                                    }
-                                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                                )
-                            }
-                        }
-                        QuantizerImpl::Sq(_) => {
-                            HnswGraph::TurboQuant8Arrow(
-                                match cb.graph {
-                                    GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u8),
-                                    GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, crate::core::index::distance::DistL2u8),
-                                }
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                            )
-                        }
-                        QuantizerImpl::Pq(pq) => {
-                            let dist = crate::core::index::pq::DistPqSdc {
-                                pq: std::sync::Arc::new(pq.clone()),
-                            };
-                            HnswGraph::PqArrow(
-                                match cb.graph {
-                                    GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, dist),
-                                    GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, dist),
-                                }
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                            )
-                        }
-                    }
-                } else {
-                    match metric {
-                        VectorMetric::L2 => HnswGraph::L2Arrow(
-                            match cb.graph {
-                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistL2),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistL2),
-                            }
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                        ),
-                        VectorMetric::Cosine => HnswGraph::CosineArrow(
-                            match cb.graph {
-                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistCosine),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistCosine),
-                            }
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                        ),
-                        VectorMetric::InnerProduct => HnswGraph::DotArrow(
-                            match cb.graph {
-                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistDot),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistDot),
-                            }
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                        ),
-                        VectorMetric::L1 => HnswGraph::L1Arrow(
-                            match cb.graph {
-                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistL1),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistL1),
-                            }
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                        ),
-                        VectorMetric::Hamming => HnswGraph::HammingArrow(
-                            match cb.graph {
-                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistHamming),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistHamming),
-                            }
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                        ),
-                        VectorMetric::Jaccard => HnswGraph::JaccardArrow(
-                            match cb.graph {
-                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistJaccard),
-                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(b, DistJaccard),
-                            }
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                        ),
-                    }
-                };
-
-                let map_builder = ParquetRecordBatchReaderBuilder::try_new(cb.mapping)?;
-                let map_reader = map_builder.build()?;
-                let batches: Vec<RecordBatch> = map_reader
-                    .map(|r| r.map_err(anyhow::Error::from))
-                    .collect::<Result<Vec<_>>>()?;
-                if batches.is_empty() {
-                    return Err(anyhow::anyhow!("No data in mapping file"));
-                }
-                let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
-                let row_id_mapping = Self::extract_row_id_mapping_from_col(batch.column(0));
-
-                Ok((cluster_id, (hnsw, row_id_mapping)))
-            })
-            .collect()
+                    let graph_bytes = match cb.graph {
+                        GraphData::Mmap(m) => bytes::Bytes::from_owner(MmapOwner(m)),
+                        GraphData::Bytes(b) => b,
+                    };
+                    let (hnsw, row_id_mapping) = Self::deserialize_single_cluster(
+                        cluster_id,
+                        graph_bytes,
+                        cb.mapping,
+                        quantizer_for_deser.as_ref(),
+                        metric,
+                    )?;
+                    Ok((cluster_id, (hnsw, row_id_mapping)))
+                })
+                .collect()
             });
 
         let mut cluster_graphs = HashMap::new();
@@ -2355,10 +2687,17 @@ impl HnswIvfIndex {
 
         tracing::debug!("Loaded {} cluster graphs (Async)", cluster_graphs.len());
 
+        let cluster_graphs = cluster_graphs
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+
         let index = HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
+            cluster_cache: moka::sync::Cache::builder().max_capacity(64).build(),
+            lazy_blobs: None,
             mmap_backed: use_mmap,
             _n_lists: n_lists,
             dim,
@@ -2445,25 +2784,19 @@ impl HnswIvfIndex {
                 .await?
         };
 
-        // Zero-copy blob views; falls back to the temp-dir materialization if the
-        // container has no usable `filename` properties (legacy writers).
-        match crate::core::puffin::PuffinContainerStore::from_container(
-            container,
-            puffin_path,
-            column_name,
-        )
-        .await
-        {
-            Ok((blob_store, base_path)) => {
-                let blob_store: Arc<dyn ObjectStore> = Arc::new(blob_store);
-                let disk_cache = DiskCache::disabled(blob_store.clone());
-                Self::load_async_inner(blob_store, &base_path, cache_key, use_mmap, disk_cache).await
+        // Zero-copy lazy loading directly from the container; falls back to the
+        // temp-dir materialization if the container has no usable properties.
+        match Self::load_lazy_from_container(container, puffin_path, column_name, use_mmap) {
+            Ok(index) => {
+                let arc_index = Arc::new(index);
+                HNSW_IVF_CACHE.insert(cache_key_str, arc_index.clone()).await;
+                Ok(arc_index)
             }
             Err(e) => {
                 tracing::warn!(
                     puffin = %puffin_path,
                     error = %e,
-                    "load_from_puffin: zero-copy slicing unavailable, materializing blobs"
+                    "load_from_puffin: lazy loading unavailable, materializing blobs"
                 );
                 Self::load_from_puffin_materialized(store, puffin_path, cache_key, column_name)
                     .await
@@ -2685,10 +3018,17 @@ impl HnswIvfIndex {
 
         tracing::debug!("Loaded {} cluster graphs", cluster_graphs.len());
 
+        let cluster_graphs = cluster_graphs
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect();
+
         Ok(HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
+            cluster_cache: moka::sync::Cache::builder().max_capacity(64).build(),
+            lazy_blobs: None,
             mmap_backed: false,
             _n_lists: n_lists,
             dim,
@@ -2710,12 +3050,20 @@ impl HnswIvfIndex {
         for c in &self.centroids {
             size += c.len() * std::mem::size_of::<f32>();
         }
-        for (hnsw, mapping) in self.cluster_graphs.values() {
+        for cluster_data in self.cluster_graphs.values() {
+            let (hnsw, mapping) = cluster_data.as_ref();
             // Row-id mapping is one usize per point.
             size += mapping.len() * std::mem::size_of::<usize>();
             // Graph + codes. mmap-backed graphs alias the file (page-cache
             // backed, not heap), so they are not charged against the moka
             // budget; owned-byte graphs (remote store / materialized) are.
+            if !self.mmap_backed {
+                size += hnsw.footprint_bytes();
+            }
+        }
+        for (_, cluster_data) in self.cluster_cache.iter() {
+            let (hnsw, mapping) = cluster_data.as_ref();
+            size += mapping.len() * std::mem::size_of::<usize>();
             if !self.mmap_backed {
                 size += hnsw.footprint_bytes();
             }
@@ -2852,7 +3200,7 @@ mod tests {
         }
 
         fn total_points(idx: &HnswIvfIndex) -> usize {
-            idx.cluster_graphs.values().map(|(_, ids)| ids.len()).sum()
+            idx.cluster_graphs.values().map(|c| c.1.len()).sum()
         }
 
         let dir = tempfile::tempdir().unwrap();

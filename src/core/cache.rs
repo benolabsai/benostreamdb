@@ -791,6 +791,32 @@ pub async fn invalidate_file_caches(root_uri: &str, path: &str) {
     }
 }
 
+/// Invalidate all index and metadata caches across all tables without a rebuild.
+pub fn invalidate_index_caches() {
+    HNSW_IVF_CACHE.invalidate_all();
+    HNSW_CACHE.invalidate_all();
+    INDEX_CACHE.invalidate_all();
+    CSR_GRAPH_CACHE.invalidate_all();
+    INVERTED_INDEX_CACHE.invalidate_all();
+    MANIFEST_CACHE.invalidate_all();
+    MANIFEST_LIST_CACHE.invalidate_all();
+    LATEST_VERSION_CACHE.invalidate_all();
+}
+
+/// Invalidate all in-memory caches including block, parquet, delete and metadata caches.
+pub fn invalidate_all_caches() {
+    invalidate_index_caches();
+    BYTE_CACHE.invalidate_all();
+    PARQUET_BYTES_CACHE.invalidate_all();
+    PARQUET_META_CACHE.invalidate_all();
+    BLOCK_CACHE.invalidate_all();
+    BLOOM_FILTER_CACHE.invalidate_all();
+    POSITION_DELETE_CACHE.invalidate_all();
+    FULL_DELETE_FILE_CACHE.invalidate_all();
+    EQUALITY_DELETE_CACHE.invalidate_all();
+    ANALYZER_META_CACHE.invalidate_all();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

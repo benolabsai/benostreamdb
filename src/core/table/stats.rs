@@ -92,64 +92,7 @@ impl Table {
 
     /// List all data files in the table (with index metadata)
     pub fn list_data_files(&self) -> Result<Vec<DataFileInfo>> {
-        self.runtime().block_on(async {
-            let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-            let (_manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
-
-            let mut results = Vec::new();
-
-            for entry in all_entries {
-                let mut min_values = std::collections::HashMap::new();
-                let mut max_values = std::collections::HashMap::new();
-
-                for (col, stats) in &entry.column_stats {
-                    if let Some(min) = &stats.min {
-                        min_values.insert(col.clone(), min.to_string());
-                    }
-                    if let Some(max) = &stats.max {
-                        max_values.insert(col.clone(), max.to_string());
-                    }
-                }
-
-                let has_scalar_indexes = entry
-                    .index_files
-                    .iter()
-                    .any(|f| f.index_category == "scalar" || f.is_lexical());
-                let has_vector_indexes = entry
-                    .index_files
-                    .iter()
-                    .any(|f| f.index_category == "vector" || f.index_category == "hnsw");
-
-                let indexed_columns = entry
-                    .index_files
-                    .iter()
-                    .map(|f| f.column_name.clone())
-                    .collect();
-
-                // Ensure absolute path if possible.
-                let file_path = if entry.file_path.contains("://") {
-                    entry.file_path.clone()
-                } else {
-                    // Try to join with uri
-                    let base = self.uri.trim_end_matches('/');
-                    let relative = entry.file_path.trim_start_matches('/');
-                    format!("{}/{}", base, relative)
-                };
-
-                results.push(DataFileInfo {
-                    file_path,
-                    row_count: entry.record_count as u64,
-                    file_size_bytes: entry.file_size_bytes as u64,
-                    min_values,
-                    max_values,
-                    has_scalar_indexes,
-                    has_vector_indexes,
-                    indexed_columns,
-                    index_files: entry.index_files.clone(),
-                });
-            }
-            Ok(results)
-        })
+        self.runtime().block_on(self.list_data_files_async())
     }
 
     /// Physical scan splits for connector-side parallelism.

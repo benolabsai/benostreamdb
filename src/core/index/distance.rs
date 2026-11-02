@@ -625,35 +625,65 @@ pub fn l2_distance_adc(query: &[f32], encoded: &[u8], offset: f32, scale: f32) -
     sum
 }
 
-/// Optimized L2 distance for packed 4-bit quantized vectors (u4)
+/// Optimized L2 distance for packed 4-bit quantized vectors (u4),
+/// supporting trailing 2-byte float16 scalar length factor (alpha).
 #[inline(always)]
 pub fn l2_distance_u4(a: &[u8], b: &[u8]) -> f32 {
-    let mut sum = 0;
-    let chunks_a = a.chunks_exact(16);
-    let chunks_b = b.chunks_exact(16);
-    let rem_a = chunks_a.remainder();
-    let rem_b = chunks_b.remainder();
+    let (slice_a, slice_b, alpha_a, alpha_b) = if a.len() == b.len() && a.len() >= 4 && (a.len() - 2) % 2 == 0 {
+        let n = a.len() - 2;
+        let aa = crate::core::index::benoquant::f16_bytes_to_f32([a[n], a[n + 1]]);
+        let ab = crate::core::index::benoquant::f16_bytes_to_f32([b[n], b[n + 1]]);
+        (&a[..n], &b[..n], aa, ab)
+    } else {
+        (a, b, 1.0f32, 1.0f32)
+    };
 
-    for (ca, cb) in chunks_a.zip(chunks_b) {
-        for i in 0..16 {
-            let x = ca[i];
-            let y = cb[i];
-            // Low nibbles
+    let scale_diff = (alpha_a - alpha_b).abs();
+    if scale_diff < 1e-4 && (alpha_a - 1.0).abs() < 1e-4 {
+        let mut sum = 0;
+        let chunks_a = slice_a.chunks_exact(16);
+        let chunks_b = slice_b.chunks_exact(16);
+        let rem_a = chunks_a.remainder();
+        let rem_b = chunks_b.remainder();
+
+        for (ca, cb) in chunks_a.zip(chunks_b) {
+            for i in 0..16 {
+                let x = ca[i];
+                let y = cb[i];
+                // Low nibbles
+                let diff_low = ((x & 0x0F) as i32) - ((y & 0x0F) as i32);
+                sum += diff_low * diff_low;
+                // High nibbles
+                let diff_high = ((x >> 4) as i32) - ((y >> 4) as i32);
+                sum += diff_high * diff_high;
+            }
+        }
+
+        for (&x, &y) in rem_a.iter().zip(rem_b.iter()) {
             let diff_low = ((x & 0x0F) as i32) - ((y & 0x0F) as i32);
             sum += diff_low * diff_low;
-            // High nibbles
             let diff_high = ((x >> 4) as i32) - ((y >> 4) as i32);
             sum += diff_high * diff_high;
         }
-    }
+        sum as f32
+    } else {
+        // When norms vary (alpha_a != alpha_b), 4-bit nibbles in [0, 15] must be centered
+        // around their Gaussian FWHT midpoint (7.5). Otherwise, zero-mean coordinates
+        // incur a spurious distance penalty proportional to (7.5 * (alpha_a - alpha_b))^2.
+        let mut sum = 0.0f32;
+        for (&x, &y) in slice_a.iter().zip(slice_b.iter()) {
+            let x_low = (x & 0x0F) as f32 - 7.5;
+            let y_low = (y & 0x0F) as f32 - 7.5;
+            let d_low = alpha_a * x_low - alpha_b * y_low;
+            sum += d_low * d_low;
 
-    for (&x, &y) in rem_a.iter().zip(rem_b.iter()) {
-        let diff_low = ((x & 0x0F) as i32) - ((y & 0x0F) as i32);
-        sum += diff_low * diff_low;
-        let diff_high = ((x >> 4) as i32) - ((y >> 4) as i32);
-        sum += diff_high * diff_high;
+            let x_high = ((x >> 4) & 0x0F) as f32 - 7.5;
+            let y_high = ((y >> 4) & 0x0F) as f32 - 7.5;
+            let d_high = alpha_a * x_high - alpha_b * y_high;
+            sum += d_high * d_high;
+        }
+        sum
     }
-    sum as f32
 }
 
 #[derive(Debug, Clone, Copy)]

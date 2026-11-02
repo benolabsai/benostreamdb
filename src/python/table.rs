@@ -454,12 +454,12 @@ impl PyTable {
         quality: usize,
     ) -> PyResult<()> {
         let algo = match type_.to_lowercase().as_str() {
-            "tq8" | "hnsw_tq8" => IndexAlgorithm::HnswTq8 {
+            "bq8" | "hnsw_bq8" | "tq8" | "hnsw_tq8" => IndexAlgorithm::HnswTq8 {
                 metric: metric.to_string(),
                 complexity,
                 quality,
             },
-            "tq4" | "hnsw_tq4" => IndexAlgorithm::HnswTq4 {
+            "bq4" | "hnsw_bq4" | "tq4" | "hnsw_tq4" => IndexAlgorithm::HnswTq4 {
                 metric: metric.to_string(),
                 complexity,
                 quality,
@@ -472,7 +472,7 @@ impl PyTable {
             },
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "Unsupported quantization type: {}. Use TQ8, TQ4, or PQ.",
+                    "Unsupported quantization type: {}. Use BQ8, TQ8, TQ4, or PQ.",
                     type_
                 )))
             }
@@ -497,6 +497,21 @@ impl PyTable {
     fn rebuild_index(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
         py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.rebuild_index(column)))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Invalidate resident index and metadata caches without rebuilding indexes.
+    ///
+    /// If `all` is true, also flushes raw byte, block, parquet, and delete caches.
+    #[pyo3(signature = (all=false))]
+    fn clear_cache(&self, _py: Python<'_>, all: bool) -> PyResult<()> {
+        self.table.clear_cache(all);
+        Ok(())
+    }
+
+    /// Alias for `clear_cache`.
+    #[pyo3(signature = (all=false))]
+    fn invalidate_caches(&self, py: Python<'_>, all: bool) -> PyResult<()> {
+        self.clear_cache(py, all)
     }
 
     /// Alias for `drop_index`: remove all indexing strategies from a column cleanly.
@@ -1331,6 +1346,29 @@ impl PyTable {
     #[pyo3(signature = (min_file_size_bytes=None))]
     fn compact(&self, py: Python<'_>, min_file_size_bytes: Option<i64>) -> PyResult<()> {
         self.rewrite_data_files(py, min_file_size_bytes)
+    }
+
+    /// Compact index sidecars across segments into Voronoi-clustered Puffin files
+    /// without rewriting underlying Parquet data files.
+    #[pyo3(signature = (column, target_size_bytes=None))]
+    fn compact_indexes(
+        &self,
+        py: Python<'_>,
+        column: String,
+        target_size_bytes: Option<usize>,
+    ) -> PyResult<PyObject> {
+        let stats = py
+            .allow_threads(|| self.table.compact_indexes(&column, target_size_bytes))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let dict = PyDict::new(py);
+        dict.set_item("column", stats.column)?;
+        dict.set_item("input_segments", stats.input_segments)?;
+        dict.set_item("output_shards", stats.output_shards)?;
+        dict.set_item("total_records", stats.total_records)?;
+        dict.set_item("target_shard_bytes", stats.target_shard_bytes)?;
+        dict.set_item("duration_ms", stats.duration_ms)?;
+        Ok(dict.into())
     }
 
     /// Replace the table's sort order
