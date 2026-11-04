@@ -1,4 +1,6 @@
-## [Unreleased]
+## [0.15.0] - Target: 2026-11-05
+
+Major release consolidating vector search, out-of-core indexing, and performance optimizations developed since crates.io v0.14.1 and re-synchronizing PyPI (which last tracked v0.13.1) with crates.io. This release introduces table-level cluster indexing (`ClusterIndex`) across sequential 512 MiB rolling Puffin shards, zero-copy memory mapping (`memmap2`), Rayon multi-threaded compaction concurrency, BenoQuant isotropic quantization (BQ8/BQ4), native SQ8 scalar quantization, memory-budgeted out-of-core index preloading, and the official NeurIPS BigANN evaluation suite.
 
 ### Added
 - **Table-Level Cluster Indexing & Sequential 512 MiB Puffin Sharding (`ClusterIndex`)** —
@@ -15,7 +17,7 @@
   - **Zero-Copy Memory-Mapped Puffin Shards (`memmap2`)**: Wrapped sealed shard containers
     in `memmap2::Mmap` via `Bytes::from_owner(MmapOwner(Arc::new(mmap)))`, streaming
     compaction writes directly to disk (`BufWriter<File>`) and maintaining flat, bounded
-    memory consumption ($\sim 2.2 - 3.3\text{ GiB} / 16.0\text{ GiB}$) across 10M vector
+    memory consumption ($\sim 2.2 - 3.5\text{ GiB} / 16.0\text{ GiB}$) across 10M vector
     compaction runs with zero cgroup OOM crashes.
   - **Python API**: Exposed `Table.rebuild_cluster_index(column, k=1024, m=16, ef_construction=200, target_shard_bytes=536870912)`
     for programmatic table-level cluster index construction.
@@ -27,23 +29,6 @@
     build independent cluster HNSW subgraphs (`cluster_ids.par_iter().map(...)`) into
     in-memory `BuiltClusterBlobs` payloads, followed by sequential append to the active Puffin
     shard to preserve monotonic cluster range invariants without thread contention.
-- **Manifest Shard Tracking & Query Fast-Path Integration** —
-  Updated Iceberg table manifest V2/V3 metadata with `shard_files: Vec<String>` in `TableIndexFile`.
-  Vector query planning (`read_expr_stream_async` and `execute_vector_search_as_scored_filtered`)
-  dynamically detects table-level cluster artifacts, bypassing segment-level fan-out and
-  hydrating kNN winners directly from segment tables in a single traversal pass.
-
-### Performance
-- **Compaction Throughput Acceleration**: Rayon multi-threading saturates 8 vCPUs at $300\% - 600\%$
-  utilization during Pass 2 and Pass 3, reducing 10M 768-dim vector compaction wall-clock latency
-  from $3922\text{ s}$ ($\sim 65.3\text{ minutes}$) down to $\sim 18 - 20\text{ minutes}$ on
-  Azure `Standard_D8lds_v5` hardware under strict 16 GiB zero-swap cgroups.
-
-## [0.14.2] - 2026-11-02
-
-Follow-up release introducing BenoQuant isotropic quantization (BQ8/BQ4), native SQ8 scalar quantization, Voronoi Puffin sharding compaction, memory-budgeted out-of-core index preloading, and the official NeurIPS BigANN evaluation suite.
-
-### Added
 - **BenoQuant Isotropic Quantization (BQ8 and BQ4)** — Implemented randomized Fast
   Walsh-Hadamard Transform ($H \cdot D$) with Rademacher diagonal sign matrices ($D$)
   to equalize dimensional variance across high-dimensional vector spaces, eliminating
@@ -68,21 +53,21 @@ Follow-up release introducing BenoQuant isotropic quantization (BQ8/BQ4), native
 - **Global Cache Invalidation (`clear_cache`)** — Exposed `benostreamdb.clear_cache(all=False)`
   in Python and Rust (`src/core/cache.rs`) to cleanly flush HNSW, IVF, Voronoi, CSR graph,
   and block/byte caches with `moka` synchronization and page cache eviction integration.
+- **Manifest Shard Tracking & Query Fast-Path Integration** —
+  Updated Iceberg table manifest V2/V3 metadata with `shard_files: Vec<String>` in `TableIndexFile`.
+  Vector query planning (`read_expr_stream_async` and `execute_vector_search_as_scored_filtered`)
+  dynamically detects table-level cluster artifacts, bypassing segment-level fan-out and
+  hydrating kNN winners directly from segment tables in a single traversal pass.
 - **Official NeurIPS BigANN Benchmark Suite** — Added `benchmarks/run_neurips_bigann.py`,
   local Docker configuration (`benchmarks/Dockerfile.neurips.local`), and standardized
   multi-mode evaluation harness across 1M, 10M, and 100M datasets under the Azure
   `Standard_D8lds_v5` profile (8 vCPU, 16 GiB RAM).
 
-### Fixed
-- **BQ4 norm bias and length scalar renormalization** — Fixed 4-bit quantization
-  collapse by appending the IEEE 754-2008 float16 length scalar $\alpha$ as a 2-byte
-  trailer per vector and centering nibble arithmetic around 7.5 in `benoquant.rs` and
-  `distance.rs`.
-- **PyO3 string and dictionary index configuration parsing** — Added explicit
-  `"hnsw_sq8" | "sq8"` matching in `src/python/helpers.rs` to decouple native scalar
-  quantization from TQ8/BQ8.
-
 ### Performance
+- **Compaction Throughput Acceleration**: Rayon multi-threading saturates 8 vCPUs at $300\% - 600\%$
+  utilization during Pass 2 and Pass 3, reducing 10M 768-dim vector compaction wall-clock latency
+  from $3922\text{ s}$ ($\sim 65.3\text{ minutes}$) down to $\sim 18 - 20\text{ minutes}$ on
+  Azure `Standard_D8lds_v5` hardware under strict 16 GiB zero-swap cgroups.
 - **Out-of-Core Memory Safety at 10M & 100M Scale** — Validated 10M BigANN across all 5
   modes (80 operating points) and 100M F32 across 24 Voronoi Puffin shards (76.08 GB index),
   operating stably at 14.89–15.09 GiB RSS under a strict 16 GiB cgroup memory envelope
