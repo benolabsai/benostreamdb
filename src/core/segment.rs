@@ -356,14 +356,20 @@ impl HybridSegmentWriter {
         let mut props_builder = parquet::file::properties::WriterProperties::builder()
             .set_compression(parquet::basic::Compression::UNCOMPRESSED)
             .set_dictionary_enabled(false)
-            // Chunk-level statistics (per column chunk min/max, null counts).
-            // These were disabled, which meant `merge_parquet_stats` had nothing
-            // to read and every manifest entry ended up with empty `ColumnStats`
-            // — making the planner's whole stats-pruning branch inert (only
-            // partition pruning did any work). Chunk granularity is what
-            // row-group pruning needs, at far less overhead than per-page stats.
-            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Chunk)
-            .set_data_page_size_limit(8192); // 8KB pages for highly granular random access
+            // Page-level statistics. Chunk-level was enough for row-group
+            // pruning, but the rerank path (`rescore_candidates`) reads a few
+            // dozen rows scattered across a 1M-row group: without a page index
+            // that is a 512 MB read per row group touched, and a 5M-row segment
+            // has five of them. Page stats write the ColumnIndex/OffsetIndex so
+            // `RowSelection` can skip to the page holding each candidate.
+            // Page stats are a superset of chunk stats, so `merge_parquet_stats`
+            // still sees the chunk min/max it needs.
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
+            // 32 KB pages hold 64 rows at 128 dims x f32. Small enough that a
+            // 40-candidate rerank touches ~40 pages (~1.3 MB) instead of a whole
+            // row group, large enough that the page index stays ~3 MB/segment
+            // rather than ~13 MB at 8 KB pages.
+            .set_data_page_size_limit(32 * 1024);
 
         // Enable Bloom Filters for Primary Keys if defined
         for pk in &self.primary_key {

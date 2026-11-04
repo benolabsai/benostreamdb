@@ -144,6 +144,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
             None,
             false, // use_mmap
             None,
+            None, // refine_factor
         )
         .await?;
 
@@ -169,6 +170,41 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
         }
     }
     assert!(found, "Should find the exact match (ID 50)");
+
+    // Test Two-Stage Rescoring with refine_factor = 4
+    let rescored_results = reader
+        .vector_search_index(
+            "embedding",
+            &query_val,
+            k,
+            None,
+            benostreamdb::core::index::VectorMetric::L2,
+            None,
+            None,
+            false,
+            None,
+            Some(4), // refine_factor = 4
+        )
+        .await?;
+
+    assert!(!rescored_results.is_empty(), "Reranked results should not be empty");
+    let (r_batch, r_dists) = &rescored_results[0];
+    assert!(r_batch.num_rows() > 0);
+    assert_eq!(r_dists.len(), r_batch.num_rows());
+    let r_ids = r_batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+
+    let mut found_rescored = false;
+    for (i, &dist) in r_dists.iter().enumerate() {
+        if r_ids.value(i) == 50 {
+            found_rescored = true;
+            assert!(dist.abs() < 1e-4, "Exact rescored distance for ID 50 must be 0.0");
+        }
+    }
+    assert!(found_rescored, "ID 50 must be present in rescored results");
 
     Ok(())
 }
@@ -310,6 +346,7 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
             None,
             false,
             None,
+            None, // refine_factor
         )
         .await?;
 

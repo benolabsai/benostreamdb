@@ -680,7 +680,7 @@ class Table:
         primary_key: Column name (or list) to use as primary key.
         explain:     If ``True``, return query plans instead of results.
     """
-    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, device: Optional[Any] = None, index_all: bool = False, primary_key: Optional[str] = None, explain: bool = False):
+    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, device: Optional[Any] = None, index_all: bool = False, primary_key: Optional[str] = None, explain: bool = False, auto_warmup: Optional[bool] = None):
         uri = _resolve_uri(uri)
         # Stored privately: a public `self.explain` attribute would shadow the
         # `explain()` method below (Python resolves instance attributes before
@@ -689,7 +689,7 @@ class Table:
         if inner_table:
             self._inner = inner_table
         else:
-            self._inner = _RustTable(uri, device=device)
+            self._inner = _RustTable(uri, device=device, auto_warmup=auto_warmup)
         self._inner.set_index_all(index_all)
         if primary_key:
             if isinstance(primary_key, str):

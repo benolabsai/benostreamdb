@@ -592,7 +592,7 @@ impl HybridReader {
 
             let size = object_meta.size;
             let mut reader = ParquetObjectReader::new(store.clone(), object_meta.location);
-            let options = ArrowReaderOptions::default();
+            let options = ArrowReaderOptions::new().with_page_index(true);
             let arrow_meta = match ArrowReaderMetadata::load_async(&mut reader, options).await {
                 Ok(m) => m,
                 Err(e) if e.to_string().contains("not found") || e.to_string().contains("404") => {
@@ -964,6 +964,8 @@ impl HybridReader {
         target_schema: Option<arrow::datatypes::SchemaRef>,
         use_mmap: bool,
         target_clusters: Option<&[usize]>,
+        refine_factor: Option<usize>,
+        probes: Option<usize>,
     ) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
         // Resolve scalar filter to combined bitmap if present
         tracing::debug!("vector_search_index called with filter: {:?}", filter);
@@ -1081,7 +1083,14 @@ impl HybridReader {
                 .cloned()
                 .collect();
 
-            let idx_matches = if chunk_indices.is_empty() {
+            let effective_refine = refine_factor.unwrap_or(1);
+            let search_k = if effective_refine > 1 {
+                k.saturating_mul(effective_refine)
+            } else {
+                k
+            };
+
+            let mut matches = if chunk_indices.is_empty() {
                 let idx_path = self.resolve_object_path(column).to_string();
                 let idx_info = crate::core::manifest::IndexFile {
                     file_path: idx_path,
@@ -1090,7 +1099,7 @@ impl HybridReader {
                     ..Default::default()
                 };
                 match self
-                    .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap, target_clusters)
+                    .search_hnsw_ivf(&idx_info, query, search_k, &None, metric, ef_search, use_mmap, target_clusters, probes)
                     .await
                 {
                     Ok(m) => m,
@@ -1106,7 +1115,7 @@ impl HybridReader {
                 let query_c = query.clone();
                 let metric_c = metric;
                 let ef_c = ef_search;
-                let k_c = k;
+                let search_k_c = search_k;
                 let use_mmap_c = use_mmap;
                 let tc_owned = target_clusters.map(|tc| tc.to_vec());
                 let futures: Vec<_> = chunk_indices
@@ -1116,7 +1125,7 @@ impl HybridReader {
                         let q = query_c.clone();
                         let tc = tc_owned.clone();
                         async move {
-                            self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c, tc.as_deref())
+                            self.search_hnsw_ivf(&idx, &q, search_k_c, &None, metric_c, ef_c, use_mmap_c, tc.as_deref(), probes)
                                 .await
                         }
                     })
@@ -1136,15 +1145,32 @@ impl HybridReader {
                     }
                 }
                 if !any_ok {
-                    self.vector_search_flat(column, query, k, &None, metric)
-                        .await?
+                    self.vector_search_flat(column, query, k, &None, metric).await?
                 } else {
-                    // Sort by distance ascending (best first) and take top-k.
-                    merged
-                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    merged.truncate(k);
                     merged
                 }
+            };
+
+            matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            let idx_matches = if effective_refine > 1 && !matches.is_empty() {
+                matches.truncate(search_k);
+                match self.rescore_candidates(column, matches.clone(), query, metric).await {
+                    Ok(mut rescored) => {
+                        rescored.truncate(k);
+                        rescored
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Candidate rescore failed, falling back to approximate distances: {}",
+                            e
+                        );
+                        matches.truncate(k);
+                        matches
+                    }
+                }
+            } else {
+                matches.truncate(k);
+                matches
             };
 
             self.fetch_rows_with_distances(idx_matches, target_schema, filter)
@@ -1168,6 +1194,7 @@ impl HybridReader {
         ef_search: Option<usize>,
         use_mmap: bool,
         target_clusters: Option<&[usize]>,
+        probes: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
         // Deduplicate Puffin blob entries (centroids/graph/mapping) down to one
         // per logical vector index.
@@ -1212,7 +1239,7 @@ impl HybridReader {
                 ..Default::default()
             };
             match self
-                .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap, target_clusters)
+                .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap, target_clusters, probes)
                 .await
             {
                 Ok(m) => Ok(m),
@@ -1235,7 +1262,7 @@ impl HybridReader {
                     let q = query_c.clone();
                     let tc = tc_owned.clone();
                     async move {
-                        self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c, tc.as_deref())
+                        self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c, tc.as_deref(), probes)
                             .await
                     }
                 })
@@ -1939,7 +1966,7 @@ impl HybridReader {
         out
     }
 
-    async fn fetch_rows_with_distances(
+    pub(crate) async fn fetch_rows_with_distances(
         &self,
         matches: Vec<(usize, f32)>,
         target_schema: Option<arrow::datatypes::SchemaRef>,
@@ -2023,10 +2050,9 @@ impl HybridReader {
                 .await
                 .context("Failed to get segment metadata")?;
             let size = object_meta.size as usize;
-            let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-            let b = ParquetRecordBatchStreamBuilder::new(reader).await?;
-            let options = ArrowReaderOptions::default();
-            let arrow_meta = ArrowReaderMetadata::try_new(b.metadata().clone(), options)?;
+            let mut reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+            let options = ArrowReaderOptions::new().with_page_index(true);
+            let arrow_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
             let meta = Arc::new(arrow_meta);
             crate::core::cache::PARQUET_META_CACHE
                 .insert(cache_key.clone(), (meta.clone(), size))
@@ -2397,17 +2423,18 @@ impl HybridReader {
                 .await
                 .context("Failed to get segment metadata")?;
             let size = object_meta.size;
-            let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-            let b = ParquetRecordBatchStreamBuilder::new(reader).await?;
-            let options = ArrowReaderOptions::default();
-            let arrow_meta = ArrowReaderMetadata::try_new(b.metadata().clone(), options)?;
+            let mut reader = ParquetObjectReader::new(self.store.clone(), object_meta.location.clone());
+            let options = ArrowReaderOptions::new().with_page_index(true);
+            let arrow_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
+            let meta = Arc::new(arrow_meta);
             crate::core::cache::PARQUET_META_CACHE
                 .insert(
                     format!("{}/{}", self.root_uri, pq_path_str),
-                    (Arc::new(arrow_meta), size as usize),
+                    (meta.clone(), size as usize),
                 )
                 .await;
-            b
+            let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+            ParquetRecordBatchStreamBuilder::new_with_metadata(reader, (*meta).clone())
         };
 
         // Apply row selection to read only filtered rows
@@ -2498,6 +2525,267 @@ impl HybridReader {
             .await
     }
 
+    /// Read only the vector column for a set of row IDs directly from Parquet using the
+    /// Page/Offset Index, bypassing RecordBatch projection and schema evolution overhead.
+    pub(crate) async fn read_vector_column_for_rows(
+        &self,
+        column: &str,
+        bitmap: &RoaringBitmap,
+    ) -> Result<Option<arrow::array::ArrayRef>> {
+        if bitmap.is_empty() {
+            return Ok(None);
+        }
+
+        let pq_path = self.resolve_object_path("parquet");
+        let pq_path_str = pq_path.to_string();
+        let cache_key = format!("{}/{}", self.root_uri, pq_path_str);
+
+        use crate::core::cache::CacheExt;
+
+        let (meta, size) = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE
+            .get_with_metrics(&cache_key, "parquet_meta")
+            .await
+        {
+            (meta, size)
+        } else {
+            let object_meta = self
+                .store
+                .head(&pq_path)
+                .await
+                .context("Failed to get segment metadata")?;
+            let size = object_meta.size as usize;
+            let mut reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+            let options = ArrowReaderOptions::new().with_page_index(true);
+            let arrow_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
+            let meta = Arc::new(arrow_meta);
+            crate::core::cache::PARQUET_META_CACHE
+                .insert(cache_key.clone(), (meta.clone(), size))
+                .await;
+            (meta, size)
+        };
+
+        let object_meta = ObjectMeta {
+            location: pq_path.clone(),
+            last_modified: Utc::now(),
+            size: size as u64,
+            e_tag: None,
+            version: None,
+        };
+        let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+        let arrow_meta = (*meta).clone();
+        let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
+
+        // Prune to the row groups covering the requested rows
+        let groups = Self::row_groups_covering(builder.metadata(), bitmap);
+        let num_groups = builder.metadata().num_row_groups();
+        if !groups.is_empty() && groups.len() < num_groups {
+            let mut shifted = RoaringBitmap::new();
+            let mut base: u32 = 0;
+            for (rg, group_start) in &groups {
+                let rows = builder.metadata().row_group(*rg).num_rows() as u32;
+                for id in bitmap.iter() {
+                    let id = id as usize;
+                    if id >= *group_start && id < *group_start + rows as usize {
+                        shifted.insert(base + (id as u32 - *group_start as u32));
+                    }
+                }
+                base += rows;
+            }
+            builder = builder.with_row_groups(groups.iter().map(|(rg, _)| *rg).collect());
+            let selection = self.bitmap_to_row_selection(&shifted, base as usize);
+            builder = builder.with_row_selection(selection);
+        } else {
+            let selection = self.bitmap_to_row_selection(
+                bitmap,
+                builder.metadata().file_metadata().num_rows() as usize,
+            );
+            builder = builder.with_row_selection(selection);
+        }
+
+        // Apply column projection: project ONLY the vector column
+        let parquet_schema = builder.metadata().file_metadata().schema_descr();
+        let file_arrow_schema = builder.schema();
+        let col_idx = match file_arrow_schema.index_of(column) {
+            Ok(idx) => idx,
+            Err(_) => return Ok(None),
+        };
+        let projection = ProjectionMask::roots(parquet_schema, vec![col_idx]);
+        builder = builder.with_projection(projection);
+
+        let mut stream = builder.build()?;
+        let mut arrays = Vec::new();
+        use futures::StreamExt;
+        while let Some(batch_result) = stream.next().await {
+            let batch = batch_result?;
+            if let Some(c) = batch.column_by_name(column) {
+                arrays.push(c.clone());
+            }
+        }
+
+        if arrays.is_empty() {
+            return Ok(None);
+        }
+
+        if arrays.len() == 1 {
+            Ok(Some(arrays.remove(0)))
+        } else {
+            let array_refs: Vec<&dyn arrow::array::Array> =
+                arrays.iter().map(|a| a.as_ref()).collect();
+            Ok(Some(arrow::compute::concat(&array_refs)?))
+        }
+    }
+
+    /// Rescore approximate vector search candidates by point-looking up their
+    /// uncompressed Float32 representations from Parquet and computing exact SIMD distances.
+    pub(crate) async fn rescore_candidates(
+        &self,
+        column: &str,
+        candidates: Vec<(usize, f32)>,
+        query: &crate::core::index::VectorValue,
+        metric: VectorMetric,
+    ) -> Result<Vec<(usize, f32)>> {
+        if candidates.is_empty() {
+            return Ok(candidates);
+        }
+
+        let q_vec = match query {
+            crate::core::index::VectorValue::Float32(v) => v,
+            _ => return Ok(candidates),
+        };
+
+        // Reconstruct row IDs in order (sorted bitmap row IDs minus deletes)
+        let deleted = self.load_merged_deletes().await.unwrap_or_default();
+        let mut bitmap = RoaringBitmap::new();
+        for (row_id, _) in &candidates {
+            bitmap.insert(*row_id as u32);
+        }
+        if !deleted.is_empty() {
+            bitmap -= &deleted;
+        }
+        let sorted_row_ids: Vec<u32> = bitmap.iter().collect();
+        if sorted_row_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Direct scatter-gather read of ONLY the vector column, bypassing RecordBatch synthesis
+        let col = match self.read_vector_column_for_rows(column, &bitmap).await? {
+            Some(c) => c,
+            None => return Ok(candidates),
+        };
+
+        let mut rescored = Vec::with_capacity(sorted_row_ids.len());
+
+        // Fast zero-copy SIMD path for FixedSizeListArray (standard BenoStreamDB vector column)
+        if let Some(list) = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
+            let dim = list.value_length() as usize;
+            if let Some(floats) = list.values().as_any().downcast_ref::<arrow::array::Float32Array>() {
+                let raw_floats = floats.values();
+                for (i, &row_id) in sorted_row_ids.iter().enumerate() {
+                    let start = i * dim;
+                    let end = start + dim;
+                    if end <= raw_floats.len() {
+                        let v_slice = &raw_floats[start..end];
+                        let exact_dist = match metric {
+                            VectorMetric::L2 => crate::core::index::distance::l2_distance(v_slice, q_vec),
+                            VectorMetric::Cosine => crate::core::index::distance::cosine_distance(v_slice, q_vec),
+                            VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(v_slice, q_vec),
+                            VectorMetric::L1 => crate::core::index::distance::l1_distance(v_slice, q_vec),
+                            _ => {
+                                candidates
+                                    .iter()
+                                    .find(|(id, _)| *id == row_id as usize)
+                                    .map(|(_, d)| *d)
+                                    .unwrap_or(0.0)
+                            }
+                        };
+                        rescored.push((row_id as usize, exact_dist));
+                    }
+                }
+                rescored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                return Ok(rescored);
+            }
+        }
+
+        // Fallback path for ListArray or Float64Array
+        let vectors: Vec<Vec<f32>> = match col.data_type() {
+            arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::FixedSizeListArray>()
+                    .context("Invalid cast to FixedSizeListArray")?;
+                (0..list.len())
+                    .map(|i| {
+                        let item = list.value(i);
+                        if let Some(floats) =
+                            item.as_any().downcast_ref::<arrow::array::Float32Array>()
+                        {
+                            floats.values().to_vec()
+                        } else if let Some(doubles) =
+                            item.as_any().downcast_ref::<arrow::array::Float64Array>()
+                        {
+                            doubles.values().iter().map(|&d| d as f32).collect()
+                        } else {
+                            vec![0.0; item.len()]
+                        }
+                    })
+                    .collect()
+            }
+            arrow::datatypes::DataType::List(_) => {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::ListArray>()
+                    .context("Invalid cast to ListArray")?;
+                (0..list.len())
+                    .map(|i| {
+                        let item = list.value(i);
+                        if let Some(floats) =
+                            item.as_any().downcast_ref::<arrow::array::Float32Array>()
+                        {
+                            floats.values().to_vec()
+                        } else if let Some(doubles) =
+                            item.as_any().downcast_ref::<arrow::array::Float64Array>()
+                        {
+                            doubles.values().iter().map(|&d| d as f32).collect()
+                        } else {
+                            vec![0.0; item.len()]
+                        }
+                    })
+                    .collect()
+            }
+            _ => return Ok(candidates),
+        };
+
+        if vectors.len() != sorted_row_ids.len() {
+            tracing::warn!(
+                "rescore_candidates vector count mismatch: got {} vectors, expected {} row IDs",
+                vectors.len(),
+                sorted_row_ids.len()
+            );
+            return Ok(candidates);
+        }
+
+        for (i, v) in vectors.iter().enumerate() {
+            let row_id = sorted_row_ids[i] as usize;
+            let exact_dist = match metric {
+                VectorMetric::L2 => crate::core::index::distance::l2_distance(v, q_vec),
+                VectorMetric::Cosine => crate::core::index::distance::cosine_distance(v, q_vec),
+                VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(v, q_vec),
+                VectorMetric::L1 => crate::core::index::distance::l1_distance(v, q_vec),
+                _ => {
+                    candidates
+                        .iter()
+                        .find(|(id, _)| *id == row_id)
+                        .map(|(_, d)| *d)
+                        .unwrap_or(0.0)
+                }
+            };
+            rescored.push((row_id, exact_dist));
+        }
+
+        rescored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(rescored)
+    }
+
     async fn search_hnsw_ivf(
         &self,
         idx_info: &crate::core::manifest::IndexFile,
@@ -2508,6 +2796,7 @@ impl HybridReader {
         ef_search: Option<usize>,
         use_mmap: bool,
         target_clusters: Option<&[usize]>,
+        probes: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
         let idx_path_str = idx_info.file_path.clone();
 
@@ -2553,23 +2842,28 @@ impl HybridReader {
         let allowed_bm_clone = allowed_bitmap.clone();
         let hnsw_ivf_clone = hnsw_ivf.clone();
 
-        // Determine n_probe based on filtering or session config
-        let n_probe_env = std::env::var("BSDB_HNSW_N_PROBE")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok());
-        let n_probe = n_probe_env.unwrap_or_else(|| {
-            if allowed_bitmap.is_some() {
-                20
-            } else if let Some(ef) = ef_search {
-                if ef >= 100 {
-                    32
+        // Prefer the explicit parameter. The environment read is a fallback for
+        // callers that have not been migrated, and it takes a global lock, so it
+        // must not be the primary path.
+        let n_probe = probes
+            .or_else(|| {
+                std::env::var("BSDB_HNSW_N_PROBE")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .unwrap_or_else(|| {
+                if allowed_bitmap.is_some() {
+                    20
+                } else if let Some(ef) = ef_search {
+                    if ef >= 100 {
+                        32
+                    } else {
+                        16
+                    }
                 } else {
-                    16
+                    10
                 }
-            } else {
-                10
-            }
-        });
+            });
         tracing::debug!(
             "search_hnsw_ivf allowed_bitmap is_some={}, n_probe={}",
             allowed_bitmap.is_some(),

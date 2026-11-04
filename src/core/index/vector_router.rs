@@ -13,8 +13,10 @@
 //! centroids across the entire table, and prunes the 80–90% of segments whose Voronoi
 //! cells are far from the query vector.
 
-use std::collections::{HashMap, HashSet};
-use rayon::prelude::*;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 use crate::core::index::distance;
@@ -52,25 +54,23 @@ pub enum RoutingPolicy {
 
 impl Default for RoutingPolicy {
     fn default() -> Self {
-        if let Ok(mode) = std::env::var("BSDB_ROUTING_MODE") {
-            match mode.to_ascii_lowercase().as_str() {
-                "global" | "pruning" => RoutingPolicy::GlobalPruning,
-                "per_segment" | "targeting" => RoutingPolicy::PerSegmentTargeting,
-                _ => {
-                    let factor = std::env::var("BSDB_ROUTING_ADAPTIVE_FACTOR")
-                        .ok()
-                        .and_then(|f| f.parse::<f32>().ok())
-                        .unwrap_or(1.35);
-                    RoutingPolicy::Adaptive { factor }
-                }
-            }
-        } else {
+        // Resolved once per process. `std::env::var` takes a global lock and
+        // allocates a String, and `route()` sits on the per-query path.
+        static DEFAULT_POLICY: OnceLock<RoutingPolicy> = OnceLock::new();
+        *DEFAULT_POLICY.get_or_init(|| {
             let factor = std::env::var("BSDB_ROUTING_ADAPTIVE_FACTOR")
                 .ok()
                 .and_then(|f| f.parse::<f32>().ok())
                 .unwrap_or(1.35);
-            RoutingPolicy::Adaptive { factor }
-        }
+            match std::env::var("BSDB_ROUTING_MODE") {
+                Ok(mode) => match mode.to_ascii_lowercase().as_str() {
+                    "global" | "pruning" => RoutingPolicy::GlobalPruning,
+                    "per_segment" | "targeting" => RoutingPolicy::PerSegmentTargeting,
+                    _ => RoutingPolicy::Adaptive { factor },
+                },
+                Err(_) => RoutingPolicy::Adaptive { factor },
+            }
+        })
     }
 }
 
@@ -85,6 +85,125 @@ pub struct VectorRoutingPlan {
     pub min_centroid_distance: f32,
 }
 
+/// A centroid distance paired with its row index.
+///
+/// Ordered by distance so a `BinaryHeap` is a max-heap of the *worst* retained
+/// candidate: `peek()` is the largest distance among the top-k, which is exactly
+/// the element to evict when a closer centroid arrives.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Candidate {
+    dist: f32,
+    idx: usize,
+}
+
+impl Eq for Candidate {}
+
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.dist
+            .partial_cmp(&other.dist)
+            .unwrap_or(Ordering::Equal)
+    }
+}
+
+/// Keep the `k` smallest distances seen so far, in a heap of at most `k + 1`.
+#[inline]
+fn push_bounded(heap: &mut BinaryHeap<Candidate>, k: usize, cand: Candidate) {
+    if k == 0 {
+        return;
+    }
+    if heap.len() < k {
+        heap.push(cand);
+    } else if let Some(worst) = heap.peek() {
+        if cand.dist < worst.dist {
+            heap.pop();
+            heap.push(cand);
+        }
+    }
+}
+
+/// Distance under the router's metric. Inner product is negated so that
+/// "smaller is closer" holds for every metric.
+#[inline]
+fn distance_for(metric: VectorMetric, q: &[f32], c: &[f32]) -> f32 {
+    match metric {
+        VectorMetric::L2 => distance::l2_distance(q, c),
+        VectorMetric::Cosine => distance::cosine_distance(q, c),
+        VectorMetric::InnerProduct => -distance::dot_product(q, c),
+        VectorMetric::L1 => distance::l1_distance(q, c),
+        VectorMetric::Hamming => distance::hamming_distance(q, c),
+        VectorMetric::Jaccard => distance::jaccard_distance(q, c),
+    }
+}
+
+/// Whether the Adaptive policy may cap how many segments one query fans out to.
+///
+/// Off by default, and it must stay off for any measurement that has to mean
+/// something. The cap is not a free optimization: it silently reduces the number
+/// of IVF lists a query visits, so it changes the operating point rather than the
+/// cost of reaching it. Measured on Cohere-10M (25 segments, 20-point grid,
+/// `ef=128 n_probe=4`): recall@10 fell from 0.7019 to 0.0618 — a ratio of 0.088
+/// against a capped-segment fraction of 2/25 = 0.08. The sweep was reporting the
+/// cap, not the index. Set `BSDB_ROUTING_CAP_SEGMENTS=1` to opt in.
+fn adaptive_segment_cap_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("BSDB_ROUTING_CAP_SEGMENTS")
+                .map(|s| s.trim().to_ascii_lowercase())
+                .as_deref(),
+            Ok("1") | Ok("true") | Ok("yes")
+        )
+    })
+}
+
+/// Cap on how many segments one query may fan out to, applied only when
+/// [`adaptive_segment_cap_enabled`] is set.
+///
+/// `probes` is a per-segment cluster count, so it cannot bound the segment count
+/// directly. Four clusters per segment is the ratio at which additional segments
+/// stop contributing to the top-k in the 10M sweeps; the floor of 2 keeps small
+/// tables from being over-pruned.
+fn capped_segment_count(probes: usize, segment_count: usize) -> usize {
+    (probes / 4).max(2).min(segment_count)
+}
+
+/// Segment fan-out actually applied, honouring the opt-in. Defaults to the whole
+/// table, which is the behaviour every existing recall measurement was taken
+/// against.
+fn routing_max_segments(probes: usize, segment_count: usize) -> usize {
+    if adaptive_segment_cap_enabled() {
+        capped_segment_count(probes, segment_count)
+    } else {
+        segment_count
+    }
+}
+
+/// Group centroid row indices by segment, preserving first-seen segment order.
+fn group_by_segment(targets: &[(String, usize)]) -> Vec<(String, Vec<usize>)> {
+    let mut order: Vec<String> = Vec::new();
+    let mut by_segment: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, (seg, _)) in targets.iter().enumerate() {
+        if !by_segment.contains_key(seg) {
+            order.push(seg.clone());
+        }
+        by_segment.entry(seg.clone()).or_default().push(idx);
+    }
+    order
+        .into_iter()
+        .map(|seg| {
+            let indices = by_segment.remove(&seg).unwrap_or_default();
+            (seg, indices)
+        })
+        .collect()
+}
+
 /// In-memory table-level vector routing index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableVectorRouter {
@@ -96,6 +215,11 @@ pub struct TableVectorRouter {
     pub centroid_matrix: Vec<f32>,
     /// Targets corresponding to each centroid row: (segment_id, local_cluster_id)
     pub targets: Vec<(String, usize)>,
+    /// Centroid row indices grouped by segment, built once at construction so
+    /// per-segment routing iterates a slice instead of rebuilding a HashMap on
+    /// every query.
+    #[serde(default)]
+    pub segment_indices: Vec<(String, Vec<usize>)>,
 }
 
 impl TableVectorRouter {
@@ -111,11 +235,14 @@ impl TableVectorRouter {
             }
         }
 
+        let segment_indices = group_by_segment(&targets);
+
         Self {
             dim,
             metric,
             centroid_matrix,
             targets,
+            segment_indices,
         }
     }
 
@@ -129,6 +256,15 @@ impl TableVectorRouter {
         self.targets.is_empty()
     }
 
+    /// Get the centroid vector at the given index.
+    pub fn get_centroid(&self, index: usize) -> Option<&[f32]> {
+        if index < self.len() && (index + 1) * self.dim <= self.centroid_matrix.len() {
+            Some(&self.centroid_matrix[index * self.dim..(index + 1) * self.dim])
+        } else {
+            None
+        }
+    }
+
     /// Route a query vector using the default routing policy (or `BSDB_ROUTING_MODE`).
     pub fn route(&self, query_f32: &[f32], total_probes: usize) -> VectorRoutingPlan {
         self.route_with_policy(query_f32, total_probes, RoutingPolicy::default())
@@ -136,8 +272,9 @@ impl TableVectorRouter {
 
     /// Route a query vector to candidate segments and their local cluster IDs using a specific policy.
     ///
-    /// Computes distances to all global centroids in parallel via Rayon,
-    /// applies the specified routing policy, and returns the candidate segments and cluster targets.
+    /// One pass over the centroid matrix with a bounded top-k heap per segment.
+    /// No per-query `Vec` of all distances, no full sort, and no HashMap rebuild:
+    /// `segment_indices` is precomputed at construction.
     pub fn route_with_policy(
         &self,
         query_f32: &[f32],
@@ -152,106 +289,90 @@ impl TableVectorRouter {
             };
         }
 
-        let n_centroids = self.targets.len();
         let metric = self.metric;
         let dim = self.dim;
         let matrix = &self.centroid_matrix;
+        let k = probes.max(1);
 
-        // Fast parallel distance computation across all centroids in < 50 µs
-        let dists: Vec<(usize, f32)> = (0..n_centroids)
-            .into_par_iter()
-            .map(|i| {
-                let c = &matrix[i * dim..(i + 1) * dim];
-                let dist = match metric {
-                    VectorMetric::L2 => distance::l2_distance(query_f32, c),
-                    VectorMetric::Cosine => distance::cosine_distance(query_f32, c),
-                    VectorMetric::InnerProduct => -distance::dot_product(query_f32, c),
-                    VectorMetric::L1 => distance::l1_distance(query_f32, c),
-                    VectorMetric::Hamming => distance::hamming_distance(query_f32, c),
-                    VectorMetric::Jaccard => distance::jaccard_distance(query_f32, c),
-                };
-                (i, dist)
-            })
-            .collect();
+        let mut global_min = f32::MAX;
+        let mut candidate_segments = HashSet::new();
+        let mut segment_clusters: HashMap<String, Vec<usize>> = HashMap::new();
 
         match policy {
             RoutingPolicy::GlobalPruning => {
-                let mut sorted_dists = dists;
-                sorted_dists
-                    .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                let k_probes = probes.max(1).min(n_centroids);
-                let min_dist = sorted_dists.first().map(|x| x.1).unwrap_or(f32::MAX);
-
-                let mut candidate_segments = HashSet::new();
-                let mut segment_clusters: HashMap<String, Vec<usize>> = HashMap::new();
-
-                for (idx, _dist) in sorted_dists.into_iter().take(k_probes) {
-                    let (ref seg_id, cluster_id) = self.targets[idx];
-                    candidate_segments.insert(seg_id.clone());
-                    let list = segment_clusters.entry(seg_id.clone()).or_default();
-                    if !list.contains(&cluster_id) {
-                        list.push(cluster_id);
+                let mut heap = BinaryHeap::with_capacity(k + 1);
+                for i in 0..self.targets.len() {
+                    let c = &matrix[i * dim..(i + 1) * dim];
+                    let dist = distance_for(metric, query_f32, c);
+                    if dist < global_min {
+                        global_min = dist;
                     }
+                    push_bounded(&mut heap, k, Candidate { dist, idx: i });
                 }
 
-                VectorRoutingPlan {
-                    candidate_segments,
-                    segment_clusters,
-                    min_centroid_distance: min_dist,
+                // Group by borrowed segment id first, then allocate one String
+                // per unique segment instead of two per candidate. The heap
+                // holds unique centroid indices, so cluster ids cannot repeat
+                // within a segment and the old `contains` guard was dead code.
+                let mut by_segment: HashMap<&str, Vec<usize>> = HashMap::new();
+                for cand in heap.into_sorted_vec() {
+                    let (ref seg_id, cluster_id) = self.targets[cand.idx];
+                    by_segment
+                        .entry(seg_id.as_str())
+                        .or_default()
+                        .push(cluster_id);
+                }
+                for (seg_id, clusters) in by_segment {
+                    candidate_segments.insert(seg_id.to_string());
+                    segment_clusters.insert(seg_id.to_string(), clusters);
                 }
             }
 
             RoutingPolicy::PerSegmentTargeting => {
-                // Group centroid distances by segment and retain best clusters per segment
-                let mut seg_centroids: HashMap<&str, Vec<(usize, f32)>> = HashMap::new();
-                let mut global_min = f32::MAX;
-
-                for &(idx, dist) in &dists {
-                    if dist < global_min {
-                        global_min = dist;
+                for (seg_id, indices) in &self.segment_indices {
+                    let mut heap = BinaryHeap::with_capacity(k + 1);
+                    for &i in indices {
+                        let c = &matrix[i * dim..(i + 1) * dim];
+                        let dist = distance_for(metric, query_f32, c);
+                        if dist < global_min {
+                            global_min = dist;
+                        }
+                        push_bounded(&mut heap, k, Candidate { dist, idx: i });
                     }
-                    let (ref seg_id, cluster_id) = self.targets[idx];
-                    seg_centroids
-                        .entry(seg_id.as_str())
-                        .or_default()
-                        .push((cluster_id, dist));
-                }
-
-                let mut candidate_segments = HashSet::new();
-                let mut segment_clusters = HashMap::new();
-
-                for (seg_id, mut cluster_dists) in seg_centroids {
-                    cluster_dists
-                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    let k = probes.max(1).min(cluster_dists.len());
-                    let targeted: Vec<usize> =
-                        cluster_dists.into_iter().take(k).map(|(c, _)| c).collect();
-                    candidate_segments.insert(seg_id.to_string());
-                    segment_clusters.insert(seg_id.to_string(), targeted);
-                }
-
-                VectorRoutingPlan {
-                    candidate_segments,
-                    segment_clusters,
-                    min_centroid_distance: global_min,
+                    let targeted: Vec<usize> = heap
+                        .into_sorted_vec()
+                        .into_iter()
+                        .map(|c| self.targets[c.idx].1)
+                        .collect();
+                    candidate_segments.insert(seg_id.clone());
+                    segment_clusters.insert(seg_id.clone(), targeted);
                 }
             }
 
             RoutingPolicy::Adaptive { factor } => {
-                // Group centroid distances by segment and identify global minimum
-                let mut seg_centroids: HashMap<&str, Vec<(usize, f32)>> = HashMap::new();
-                let mut global_min = f32::MAX;
-
-                for &(idx, dist) in &dists {
-                    if dist < global_min {
-                        global_min = dist;
+                // Per-segment best distance and top-k clusters in one pass.
+                let mut per_segment: Vec<(&String, f32, Vec<usize>)> =
+                    Vec::with_capacity(self.segment_indices.len());
+                for (seg_id, indices) in &self.segment_indices {
+                    let mut heap = BinaryHeap::with_capacity(k + 1);
+                    let mut seg_best = f32::MAX;
+                    for &i in indices {
+                        let c = &matrix[i * dim..(i + 1) * dim];
+                        let dist = distance_for(metric, query_f32, c);
+                        if dist < seg_best {
+                            seg_best = dist;
+                        }
+                        if dist < global_min {
+                            global_min = dist;
+                        }
+                        push_bounded(&mut heap, k, Candidate { dist, idx: i });
                     }
-                    let (ref seg_id, cluster_id) = self.targets[idx];
-                    seg_centroids
-                        .entry(seg_id.as_str())
-                        .or_default()
-                        .push((cluster_id, dist));
+                    let targeted: Vec<usize> = heap
+                        .into_sorted_vec()
+                        .into_iter()
+                        .map(|c| self.targets[c.idx].1)
+                        .collect();
+                    per_segment.push((seg_id, seg_best, targeted));
                 }
 
                 // Threshold calculation handling zero / negative inner-product metrics
@@ -263,45 +384,45 @@ impl TableVectorRouter {
                     global_min * factor
                 };
 
-                let mut candidate_segments = HashSet::new();
-                let mut segment_clusters = HashMap::new();
+                // Rank once by best distance; both the threshold filter and the
+                // cap below read from it.
+                per_segment.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
-                for (seg_id, mut cluster_dists) in seg_centroids {
-                    cluster_dists
-                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    let seg_best = cluster_dists.first().map(|x| x.1).unwrap_or(f32::MAX);
-
-                    // A segment is admitted only if its closest Voronoi centroid is within the adaptive threshold
-                    if seg_best <= threshold {
-                        let k = probes.max(1).min(cluster_dists.len());
-                        let targeted: Vec<usize> =
-                            cluster_dists.into_iter().take(k).map(|(c, _)| c).collect();
-                        candidate_segments.insert(seg_id.to_string());
-                        segment_clusters.insert(seg_id.to_string(), targeted);
+                // Rank-based cap, opt-in only. On a negative inner-product
+                // metric the threshold above is *less negative* than
+                // `global_min` (`global_min * (2 - factor)` with factor 1.35 is
+                // `global_min * 0.65`), so any segment holding a centroid above
+                // that bar is admitted. For normalized embeddings that is almost
+                // every segment, and routing degenerates into a full fan-out.
+                // The cap prunes in that regime, but at a recall cost that has to
+                // be measured deliberately rather than inherited by accident —
+                // see `adaptive_segment_cap_enabled`.
+                let max_segments = routing_max_segments(k, per_segment.len());
+                for (seg_id, seg_best, targeted) in per_segment.iter() {
+                    if candidate_segments.len() >= max_segments {
+                        break;
+                    }
+                    if *seg_best <= threshold {
+                        candidate_segments.insert((*seg_id).clone());
+                        segment_clusters.insert((*seg_id).clone(), targeted.clone());
                     }
                 }
 
-                // Safety fallback: if threshold was overly aggressive, admit the closest global segments
+                // Safety fallback: if the threshold was overly aggressive, admit
+                // the closest segments by rank.
                 if candidate_segments.is_empty() {
-                    let mut sorted_dists = dists;
-                    sorted_dists
-                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                    for (idx, _dist) in sorted_dists.into_iter().take(probes.max(1)) {
-                        let (ref seg_id, cluster_id) = self.targets[idx];
-                        candidate_segments.insert(seg_id.clone());
-                        let list = segment_clusters.entry(seg_id.clone()).or_default();
-                        if !list.contains(&cluster_id) {
-                            list.push(cluster_id);
-                        }
+                    for (seg_id, _, targeted) in per_segment.iter().take(max_segments) {
+                        candidate_segments.insert((*seg_id).clone());
+                        segment_clusters.insert((*seg_id).clone(), targeted.clone());
                     }
-                }
-
-                VectorRoutingPlan {
-                    candidate_segments,
-                    segment_clusters,
-                    min_centroid_distance: global_min,
                 }
             }
+        }
+
+        VectorRoutingPlan {
+            candidate_segments,
+            segment_clusters,
+            min_centroid_distance: global_min,
         }
     }
 }
@@ -418,5 +539,76 @@ mod tests {
         let plan = router.route(&[1.0, 2.0, 3.0, 4.0], 4);
         assert!(plan.candidate_segments.is_empty());
         assert!(plan.segment_clusters.is_empty());
+    }
+
+    /// The Adaptive policy must admit every segment the distance threshold
+    /// admits. On a negative inner-product metric `global_min * (2 - factor)` is
+    /// *less negative* than `global_min`, so everything aligned with the query
+    /// passes and the policy fans out — by design. Capping it there is a recall
+    /// decision that must be opt-in, so the default must not prune.
+    #[test]
+    fn test_adaptive_defaults_to_full_fanout() {
+        let dim = 4;
+        let mut records = Vec::new();
+        // 25 segments, 4 centroids each, all identical and aligned with the
+        // query, so every segment passes the threshold.
+        for seg in 0..25 {
+            for c in 0..4 {
+                records.push(CentroidRecord {
+                    segment_id: format!("seg_{seg:03}"),
+                    cluster_id: c,
+                    centroid: vec![1.0, 1.0, 1.0, 1.0],
+                });
+            }
+        }
+        let router = TableVectorRouter::new(dim, VectorMetric::InnerProduct, records);
+        let query = vec![1.0, 1.0, 1.0, 1.0];
+
+        if adaptive_segment_cap_enabled() {
+            // The cap is process-wide state; a test binary that opted in cannot
+            // assert the default. Skip rather than assert something false.
+            return;
+        }
+
+        let plan = router.route_with_policy(&query, 16, RoutingPolicy::Adaptive { factor: 1.35 });
+        assert_eq!(
+            plan.candidate_segments.len(),
+            25,
+            "default Adaptive routing must not prune segments"
+        );
+    }
+
+    /// The cap formula itself, independent of the process-wide opt-in.
+    #[test]
+    fn test_capped_segment_count_formula() {
+        // Floor of 2 so a small table is never over-pruned, 4 probes per
+        // segment, bounded by the table's own segment count.
+        assert_eq!(capped_segment_count(1, 100), 2);
+        assert_eq!(capped_segment_count(16, 100), 4);
+        assert_eq!(capped_segment_count(48, 100), 12);
+        assert_eq!(capped_segment_count(1000, 7), 7);
+    }
+
+    /// The bounded heap must return exactly the k nearest centroids, in order.
+    #[test]
+    fn test_bounded_topk_matches_full_sort() {
+        let dim = 8;
+        let mut records = Vec::new();
+        for i in 0..500 {
+            let base = i as f32;
+            records.push(CentroidRecord {
+                segment_id: format!("seg_{:03}", i % 7),
+                cluster_id: i,
+                centroid: vec![base; dim],
+            });
+        }
+        let router = TableVectorRouter::new(dim, VectorMetric::L2, records);
+        let query = vec![250.0; dim];
+
+        for k in [1usize, 4, 16, 64] {
+            let plan = router.route_with_policy(&query, k, RoutingPolicy::GlobalPruning);
+            let total: usize = plan.segment_clusters.values().map(|v| v.len()).sum();
+            assert_eq!(total, k, "expected {k} clusters, got {total}");
+        }
     }
 }

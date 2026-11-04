@@ -1057,30 +1057,29 @@ impl HybridReader {
                 Err(e) => return Err(e.into()),
             };
 
-            let reader = if let Some(m) = m_opt {
-                ParquetObjectReader::new(self.store.clone(), m.location)
+            let location = if let Some(m) = &m_opt {
+                m.location.clone()
             } else {
-                ParquetObjectReader::new(self.store.clone(), pq_path.clone())
+                pq_path.clone()
             };
-
-            let b_res = ParquetRecordBatchStreamBuilder::new(reader).await;
-            let b = match b_res {
-                Ok(b) => b,
+            let mut reader = ParquetObjectReader::new(self.store.clone(), location.clone());
+            let options = ArrowReaderOptions::new().with_page_index(true);
+            let arrow_meta = match ArrowReaderMetadata::load_async(&mut reader, options).await {
+                Ok(m) => m,
                 Err(e) if e.to_string().contains("not found") || e.to_string().contains("404") => {
                     return Ok(vec![]);
                 }
                 Err(e) => return Err(e.into()),
             };
-
-            let options = ArrowReaderOptions::default();
-            let arrow_meta = ArrowReaderMetadata::try_new(b.metadata().clone(), options)?;
+            let meta = Arc::new(arrow_meta);
             crate::core::cache::PARQUET_META_CACHE
                 .insert(
                     format!("{}/{}", self.root_uri, pq_path_str),
-                    (Arc::new(arrow_meta), size),
+                    (meta.clone(), size),
                 )
                 .await;
-            b
+            let reader = ParquetObjectReader::new(self.store.clone(), location);
+            ParquetRecordBatchStreamBuilder::new_with_metadata(reader, (*meta).clone())
         };
 
         builder = builder.with_batch_size(65536);

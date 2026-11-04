@@ -87,8 +87,15 @@ impl QueryConfig {
 
     /// Calculate optimal parallel readers based on available memory and segment size
     ///
-    /// Formula: max_parallel = (available_ram * 0.5) / memory_per_segment
-    /// where memory_per_segment ≈ num_vectors × embedding_dim × 4 bytes × 1.5 (HNSW overhead)
+    /// Auto-detect optimal parallelism for scanning vector segments.
+    ///
+    /// Sizing principles:
+    /// 1. CPU Headroom: Reserves at least 2 cores (or 25% on larger machines) for Tokio reactor,
+    ///    background streaming ingestion, WAL flushes, and client orchestration.
+    /// 2. Memory Headroom: Reserves 50% of cgroup/usable RAM for table and runtime operations,
+    ///    allocating at most 50% to concurrent IVF-HNSW segment caches.
+    /// 3. Realistic Working Set: Per-vector footprint is dimension + 64 bytes adjacency,
+    ///    rather than artificial overhead constants.
     pub fn auto_detect_parallel_readers(
         &self,
         num_vectors_per_segment: usize,
@@ -103,33 +110,37 @@ impl QueryConfig {
             return manual;
         }
 
-        // Get available system memory (fallback to 8GB if unavailable)
-        let available_ram = get_available_memory_bytes().unwrap_or(8 * 1024 * 1024 * 1024);
-
-        // Reserve 50% of RAM for HNSW loading
-        let ram_for_hnsw = available_ram / 2;
-
-        // Memory per segment: vectors × dims × 4 bytes + (vectors × 20,000 bytes HNSW overhead)
-        let bytes_per_vector = embedding_dim * 4;
-        let memory_per_segment = num_vectors_per_segment * (bytes_per_vector + 20_000);
-
-        if memory_per_segment == 0 {
-            return 4; // Fallback
-        }
-
-        // Calculate max parallel, bounded by CPU count and minimum of 2
+        // Available CPUs respecting cgroups/container limits
         let cpus = std::thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(4);
 
-        let max_by_memory = ram_for_hnsw / memory_per_segment;
-        // At least 2, at most 2x CPUs
+        // Reserve at least 2 cores (or 25% on larger machines) for Tokio reactor, disk I/O, and client dispatch
+        let headroom = (cpus / 4).max(2);
+        let cpu_target = cpus.saturating_sub(headroom).max(1);
 
-        max_by_memory.min(cpus * 2).max(2)
+        // Effective memory budget (cgroup-aware: cgroup v2/v1 -> RLIMIT_AS -> host available)
+        let available_ram = crate::core::resources::effective_memory_bytes() as usize;
+
+        // Keep 50% RAM strictly reserved for table storage, WAL, Arrow batches, and relational operators
+        let ram_for_hnsw = available_ram / 2;
+
+        // Realistic memory per segment in IVF-HNSW (quantized codes + M*2*4 bytes graph edges)
+        let bytes_per_vector = embedding_dim + 64;
+        let memory_per_segment = num_vectors_per_segment * bytes_per_vector;
+
+        let ram_ceiling = if memory_per_segment > 0 {
+            (ram_for_hnsw / memory_per_segment).max(1)
+        } else {
+            cpu_target
+        };
+
+        cpu_target.min(ram_ceiling)
     }
 }
 
 /// Get available system memory in bytes
+#[allow(dead_code)]
 fn get_available_memory_bytes() -> Option<usize> {
     // Try to read from /proc/meminfo on Linux
     #[cfg(target_os = "linux")]
@@ -292,6 +303,10 @@ pub struct VectorSearchRequest {
     pub columns: Option<Vec<String>>,
     pub use_mmap: bool,
     pub targeted_clusters: Option<std::sync::Arc<std::collections::HashMap<String, Vec<usize>>>>,
+    pub refine_factor: Option<usize>,
+    /// IVF lists to probe per segment. Threaded explicitly so the search path
+    /// does not read `BSDB_HNSW_N_PROBE` from the environment on every call.
+    pub probes: Option<usize>,
 }
 
 impl VectorSearchRequest {
@@ -313,7 +328,14 @@ impl VectorSearchRequest {
             columns: None,
             use_mmap,
             targeted_clusters: None,
+            refine_factor: None,
+            probes: None,
         }
+    }
+
+    pub fn with_probes(mut self, probes: Option<usize>) -> Self {
+        self.probes = probes;
+        self
     }
 
     pub fn with_targeted_clusters(
@@ -341,6 +363,11 @@ impl VectorSearchRequest {
 
     pub fn with_columns(mut self, columns: Option<Vec<String>>) -> Self {
         self.columns = columns;
+        self
+    }
+
+    pub fn with_refine_factor(mut self, refine_factor: Option<usize>) -> Self {
+        self.refine_factor = refine_factor;
         self
     }
 }
@@ -495,6 +522,41 @@ pub async fn execute_multi_vector_search_with_config(
     Ok(vec![(primary_seg_id, final_batch)])
 }
 
+fn build_segment_reader(
+    entry: &ManifestEntry,
+    base_uri: &str,
+    store: Arc<dyn ObjectStore>,
+    data_store: Option<Arc<dyn ObjectStore>>,
+) -> (String, HybridReader) {
+    let file_path_str = entry.file_path.clone();
+    let name = file_path_str
+        .split('/')
+        .next_back()
+        .unwrap_or(&file_path_str);
+    let name = name.strip_suffix(".puffin").unwrap_or(name);
+    let name = name.strip_suffix(".parquet").unwrap_or(name);
+    let segment_id = name.to_string();
+
+    let path = std::path::Path::new(&file_path_str);
+    let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+    let full_base_uri = if rel_parent.is_empty() {
+        base_uri.to_string()
+    } else {
+        format!("{}/{}", base_uri, rel_parent)
+    };
+
+    let config = SegmentConfig::new(&full_base_uri, &segment_id)
+        .with_parquet_path(entry.file_path.clone())
+        .with_data_store(data_store.unwrap_or(store.clone()))
+        .with_delete_files(entry.delete_files.clone())
+        .with_index_files(entry.index_files.clone())
+        .with_record_count(entry.record_count as u64)
+        .with_file_checksum(entry.file_checksum.clone());
+
+    let reader = HybridReader::new(config, store, base_uri);
+    (segment_id, reader)
+}
+
 pub async fn execute_vector_search_with_config(
     entries: Vec<ManifestEntry>,
     store: Arc<dyn ObjectStore>,
@@ -547,6 +609,197 @@ pub async fn execute_vector_search_with_config(
     // Semaphore to limit concurrent HNSW loads
     let semaphore = Arc::new(Semaphore::new(max_parallel));
 
+    let effective_refine = request
+        .refine_factor
+        .or_else(|| {
+            std::env::var("BSDB_REFINE_FACTOR")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(1);
+
+    if effective_refine > 1 {
+        // TWO-STAGE RETRIEVE-AND-RERANK (Global Cross-Segment Architecture)
+        // Stage 1: In-Memory / mmap Index Search Across All Segments
+        // Each segment queries its HNSW-IVF index for candidate row IDs and approximate distances.
+        // Zero Parquet data files are accessed during this stage, preventing memory amplification.
+        let search_k = request.k.saturating_mul(effective_refine);
+        let targeted_clusters_clone = request.targeted_clusters.clone();
+
+        let search_futures: Vec<_> = entries
+            .iter()
+            .enumerate()
+            .map(|(entry_idx, entry)| {
+                let (segment_id, reader) = build_segment_reader(
+                    entry,
+                    base_uri,
+                    store.clone(),
+                    data_store.clone(),
+                );
+                let column = request.column.clone();
+                let query = request.query.clone();
+                let metric = request.metric;
+                let ef_search_val = request.ef_search;
+                let use_mmap = request.use_mmap;
+                let semaphore = semaphore.clone();
+                let file_path_str = entry.file_path.clone();
+                let target_clusters = targeted_clusters_clone
+                    .as_ref()
+                    .and_then(|m| {
+                        m.get(&segment_id)
+                            .or_else(|| m.get(&file_path_str))
+                            .map(|v| v.clone())
+                    });
+
+                async move {
+                    let _permit = semaphore
+                        .acquire()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
+
+                    let matches = reader
+                        .vector_search_index_raw(
+                            &column,
+                            &query,
+                            search_k,
+                            metric,
+                            ef_search_val,
+                            use_mmap,
+                            target_clusters.as_deref(),
+                            request.probes,
+                        )
+                        .await?;
+
+                    Ok::<_, anyhow::Error>((entry_idx, segment_id, matches))
+                }
+            })
+            .collect();
+
+        let raw_results = join_all(search_futures).await;
+        let mut all_candidates: Vec<(usize, String, usize, f32)> = Vec::new();
+        for res in raw_results {
+            let (entry_idx, segment_id, matches) = res?;
+            for (row_id, dist) in matches {
+                all_candidates.push((entry_idx, segment_id.clone(), row_id, dist));
+            }
+        }
+
+        if all_candidates.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Global sort by approximate distance across all segments
+        all_candidates.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+        // Keep only global top search_k candidates table-wide
+        all_candidates.truncate(search_k);
+
+        // Group candidate row IDs by entry_idx
+        let mut candidates_by_entry: std::collections::HashMap<usize, (String, Vec<(usize, f32)>)> =
+            std::collections::HashMap::new();
+        for (entry_idx, segment_id, row_id, dist) in all_candidates {
+            candidates_by_entry
+                .entry(entry_idx)
+                .or_insert_with(|| (segment_id, Vec::new()))
+                .1
+                .push((row_id, dist));
+        }
+
+        // Stage 2: Rescore exact vectors in parallel across all candidate segments
+        let rescore_futures = candidates_by_entry
+            .into_iter()
+            .map(|(entry_idx, (segment_id, seg_matches))| {
+                let (_, reader) = build_segment_reader(
+                    &entries[entry_idx],
+                    base_uri,
+                    store.clone(),
+                    data_store.clone(),
+                );
+                let col = request.column.clone();
+                let q = request.query.clone();
+                let metric = request.metric;
+                async move {
+                    let rescored = reader
+                        .rescore_candidates(&col, seg_matches, &q, metric)
+                        .await?;
+                    let mut items = Vec::with_capacity(rescored.len());
+                    for (row_id, exact_dist) in rescored {
+                        items.push((entry_idx, segment_id.clone(), row_id, exact_dist));
+                    }
+                    Ok::<_, anyhow::Error>(items)
+                }
+            });
+        let rescore_results = futures::future::try_join_all(rescore_futures).await?;
+        let mut rescored_all: Vec<(usize, String, usize, f32)> =
+            rescore_results.into_iter().flatten().collect();
+
+        // Stage 3: Global Top-K Selection by Exact Distance
+        rescored_all.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+        rescored_all.truncate(request.k);
+
+        // Stage 4: Hydrate Target Schema for Top-K Results in parallel across segments
+        let mut final_by_entry: std::collections::HashMap<usize, (String, Vec<(usize, f32)>)> =
+            std::collections::HashMap::new();
+        for (entry_idx, segment_id, row_id, exact_dist) in rescored_all {
+            final_by_entry
+                .entry(entry_idx)
+                .or_insert_with(|| (segment_id, Vec::new()))
+                .1
+                .push((row_id, exact_dist));
+        }
+
+        let hydrate_futures = final_by_entry
+            .into_iter()
+            .map(|(entry_idx, (segment_id, final_matches))| {
+                let (_, reader) = build_segment_reader(
+                    &entries[entry_idx],
+                    base_uri,
+                    store.clone(),
+                    data_store.clone(),
+                );
+                let cols_opt = request.columns.clone();
+                let filter_opt = request.filter.clone();
+                async move {
+                    let target_schema = if let Some(cols) = &cols_opt {
+                        let full_schema = reader.get_arrow_schema().await.unwrap_or_else(|_| {
+                            Arc::new(arrow::datatypes::Schema::new(
+                                Vec::<arrow::datatypes::Field>::new(),
+                            ))
+                        });
+                        let fields: Vec<arrow::datatypes::Field> = cols
+                            .iter()
+                            .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                            .collect();
+                        Some(Arc::new(arrow::datatypes::Schema::new(fields)))
+                    } else {
+                        None
+                    };
+
+                    let batches_with_dist = reader
+                        .fetch_rows_with_distances(
+                            final_matches,
+                            target_schema,
+                            filter_opt.as_ref(),
+                        )
+                        .await?;
+
+                    let mut items = Vec::new();
+                    for (batch, dists) in batches_with_dist {
+                        items.push((segment_id.clone(), batch, dists));
+                    }
+                    Ok::<_, anyhow::Error>(items)
+                }
+            });
+        let hydrate_results = futures::future::try_join_all(hydrate_futures).await?;
+        let mut all_results_with_distances = Vec::new();
+        for batches in hydrate_results {
+            all_results_with_distances.extend(batches);
+        }
+
+        metrics::histogram!("benostreamdb.query.execution_duration")
+            .record(total_start.elapsed().as_secs_f64());
+        return merge_and_rerank_vector_results(all_results_with_distances, request.k, 0);
+    }
+
     // Spawn bounded parallel search tasks for each segment
     let search_futures: Vec<_> = entries
         .into_iter()
@@ -572,38 +825,18 @@ pub async fn execute_vector_search_with_config(
                     .await
                     .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
 
-                let file_path_str = entry.file_path.clone();
-                let name = file_path_str
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(&file_path_str);
-                let name = name.strip_suffix(".puffin").unwrap_or(name);
-                let name = name.strip_suffix(".parquet").unwrap_or(name);
-                let segment_id = name.to_string();
+                let (segment_id, reader) = build_segment_reader(
+                    &entry,
+                    &base_uri,
+                    store.clone(),
+                    data_store_clone,
+                );
 
                 tracing::info!(
                     "Query execution: Entry {} has index files: {:?}",
                     entry.file_path,
                     entry.index_files
                 );
-                // Resolve partition-aware path for vector search
-                let path = std::path::Path::new(&file_path_str);
-                let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-                let full_base_uri = if rel_parent.is_empty() {
-                    base_uri.clone()
-                } else {
-                    format!("{}/{}", base_uri, rel_parent)
-                };
-
-                let config = SegmentConfig::new(&full_base_uri, &segment_id)
-                    .with_parquet_path(entry.file_path.clone())
-                    .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))
-                    .with_delete_files(entry.delete_files.clone())
-                    .with_index_files(entry.index_files.clone())
-                    .with_record_count(entry.record_count as u64)
-                    .with_file_checksum(entry.file_checksum.clone());
-
-                let reader = HybridReader::new(config, store.clone(), &base_uri);
 
                 let target_schema = if let Some(cols) = &columns_clone {
                     let full_schema = reader.get_arrow_schema().await.unwrap_or_else(|_| {
@@ -626,6 +859,7 @@ pub async fn execute_vector_search_with_config(
                     None
                 };
 
+                let file_path_str = entry.file_path.clone();
                 let target_clusters = targeted_clusters_clone
                     .as_ref()
                     .and_then(|m| {
@@ -645,6 +879,8 @@ pub async fn execute_vector_search_with_config(
                         target_schema,
                         request.use_mmap,
                         target_clusters,
+                        None,
+                        request.probes,
                     )
                     .await?;
                 // Tag each result batch with its segment ID
@@ -785,6 +1021,7 @@ pub async fn execute_vector_search_raw_with_config(
                         ef_search_val,
                         request.use_mmap,
                         target_clusters,
+                        request.probes,
                     )
                     .await?;
                 let tagged: Vec<crate::core::search::ScoredResult> = results
@@ -895,14 +1132,38 @@ mod tests {
         let config = QueryConfig::new();
 
         // Large segments (1M vectors, 1536D - like OpenAI embeddings)
-        let max_parallel = config.auto_detect_parallel_readers(1_000_000, 1536);
+        let num_vectors = 1_000_000;
+        let dim = 1536;
+        let max_parallel = config.auto_detect_parallel_readers(num_vectors, dim);
 
-        // Should limit parallel readers for large segments
+        // The contract is host-relative, not an absolute ceiling: the count must
+        // leave CPU headroom for the Tokio reactor and must keep the aggregate
+        // segment working set inside the RAM budget. Asserting a literal (the old
+        // `<= 16`) makes the test a statement about the machine it runs on, which
+        // fails on a 32-core host where the rule correctly yields 24.
         assert!(max_parallel >= 1, "Should allow at least 1 reader");
+
+        let cpus = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+        let headroom = (cpus / 4).max(2);
+        let cpu_target = cpus.saturating_sub(headroom).max(1);
         assert!(
-            max_parallel <= 16,
-            "Should not exceed reasonable limit for large segments, got {}",
+            max_parallel <= cpu_target,
+            "Should leave {} cores of headroom on {} CPUs, got {}",
+            headroom,
+            cpus,
             max_parallel
+        );
+
+        let available_ram = crate::core::resources::effective_memory_bytes() as usize;
+        let bytes_per_vector = dim + 64;
+        let aggregate = max_parallel.saturating_mul(num_vectors * bytes_per_vector);
+        assert!(
+            aggregate <= available_ram / 2,
+            "Aggregate working set {} B exceeds the 50% HNSW RAM budget {} B",
+            aggregate,
+            available_ram / 2
         );
     }
 

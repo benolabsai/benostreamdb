@@ -33,6 +33,23 @@ use object_store::ObjectStore;
 use parquet::file::reader::FileReader;
 use rayon::prelude::*;
 
+/// Capacity of the per-index cluster LRU.
+///
+/// Each segment holds one HNSW graph per Voronoi cluster, and a miss
+/// re-deserializes that cluster's Arrow IPC payload. The old cap of 64 against
+/// 256 clusters meant a 25% hit rate and continuous IPC decoding under
+/// concurrent queries. 256 pins every cluster of a segment; the memory cost is
+/// `clusters × vectors_per_cluster × dim × bytes_per_coord`, roughly 49 MB per
+/// segment at 128 dims and 294 MB at 768 dims. Override with
+/// `BSDB_CLUSTER_CACHE_CAPACITY` when the cache budget cannot absorb that.
+fn cluster_cache_capacity() -> u64 {
+    std::env::var("BSDB_CLUSTER_CACHE_CAPACITY")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(256)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DistL1;
 impl Distance<f32> for DistL1 {
@@ -1377,7 +1394,9 @@ impl HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
-            cluster_cache: moka::sync::Cache::builder().max_capacity(64).build(),
+            cluster_cache: moka::sync::Cache::builder()
+                .max_capacity(cluster_cache_capacity())
+                .build(),
             lazy_blobs: None,
             mmap_backed: false,
             _n_lists: n_lists,
@@ -1676,7 +1695,9 @@ impl HnswIvfIndex {
             centroids,
             metric,
             cluster_graphs,
-            cluster_cache: moka::sync::Cache::builder().max_capacity(64).build(),
+            cluster_cache: moka::sync::Cache::builder()
+                .max_capacity(cluster_cache_capacity())
+                .build(),
             lazy_blobs: None,
             mmap_backed: false,
             _n_lists: n_lists,
@@ -2802,6 +2823,76 @@ impl HnswIvfIndex {
                     .await
             }
         }
+    }
+
+    /// Read only the centroids blob from a Puffin index container.
+    ///
+    /// [`Self::load_from_puffin`] deserializes the whole index — graph, vectors,
+    /// quantizer — to answer a question that needs none of them. At 100M that is
+    /// 42 GB of index loading to build a <10 MB routing matrix, paid again after
+    /// every rebuild. The centroids are already a named Puffin blob
+    /// (`org.apache.iceberg.vector.centroids`), so read that one and parse it.
+    pub async fn load_centroids_from_puffin(
+        store: Arc<dyn ObjectStore>,
+        puffin_path: &str,
+        use_mmap: bool,
+    ) -> Result<(Vec<Vec<f32>>, VectorMetric)> {
+        use crate::core::cache::DiskCache;
+        use crate::core::puffin::{PuffinIndexReader, PUFFIN_BLOB_HNSW_IVF_CENTROIDS};
+        use std::io::Cursor;
+
+        // One read of the container: mmap it when the store is local (the page
+        // cache then serves only the blob actually touched), else fetch bytes.
+        let container: bytes::Bytes = if use_mmap {
+            match DiskCache::new(store.clone()).get_mmap(puffin_path).await {
+                Ok(mmap) => bytes::Bytes::from_owner(MmapOwner(mmap)),
+                Err(_) => {
+                    store
+                        .get(&object_store::path::Path::from(puffin_path))
+                        .await?
+                        .bytes()
+                        .await?
+                }
+            }
+        } else {
+            store
+                .get(&object_store::path::Path::from(puffin_path))
+                .await?
+                .bytes()
+                .await?
+        };
+
+        let mut reader = PuffinIndexReader::new(Cursor::new(container))?;
+        let blob = reader
+            .read_blob_by_type(PUFFIN_BLOB_HNSW_IVF_CENTROIDS)?
+            .ok_or_else(|| {
+                anyhow::anyhow!("Puffin bundle '{}' has no centroids blob", puffin_path)
+            })?;
+
+        let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+            bytes::Bytes::from(blob),
+        )?;
+
+        let metric = {
+            let mut loaded = VectorMetric::L2;
+            if let Some(kv) = builder.metadata().file_metadata().key_value_metadata() {
+                for entry in kv {
+                    if entry.key == "vector_metric" {
+                        if let Some(val) = &entry.value {
+                            loaded = val.parse::<VectorMetric>().unwrap_or(VectorMetric::L2);
+                        }
+                    }
+                }
+            }
+            loaded
+        };
+
+        let mut centroids = Vec::new();
+        for batch in builder.build()? {
+            centroids.extend(Self::extract_centroids_from_batch(&batch?)?);
+        }
+
+        Ok((centroids, metric))
     }
 
     /// Legacy fallback: materialize the bundle into a temp directory and load

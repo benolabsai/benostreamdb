@@ -13,7 +13,6 @@ use std::sync::Arc;
 use crate::core::index::hnsw_rs::arrow_ipc::ArrowType;
 use crate::core::index::hnsw_rs::dist::Distance;
 use crate::core::index::hnsw_rs::hnsw::Neighbour;
-use ahash::AHashSet;
 
 #[derive(Clone)]
 struct Candidate {
@@ -308,9 +307,15 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
 
         let dist_to_entry = self.distance.eval(query, &self.get_vector(entry_point));
 
-        // visited points
-        let mut visited = AHashSet::with_capacity(ef * 4);
-        visited.insert(entry_point);
+        // Visited tracking: a version array indexed by point id. A hash set
+        // hashes every neighbour id and reallocates as it grows; a flat array is
+        // one bounds-checked load per neighbour. Sized to the cluster, which is
+        // bounded by the IVF list size.
+        let mut visited = vec![0u32; self.neighbors_array.len()];
+        let visit_mark: u32 = 1;
+        if entry_point < visited.len() {
+            visited[entry_point] = visit_mark;
+        }
 
         // Min-heap for candidates (using negative distance)
         let mut candidate_points = std::collections::BinaryHeap::with_capacity(ef);
@@ -333,6 +338,9 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             });
         }
 
+        // Reused across candidates: `get_vector_slice` fills it, so allocating
+        // per pop was pure churn.
+        let mut scratch = Vec::new();
         while !candidate_points.is_empty() {
             let c = candidate_points.pop().unwrap();
 
@@ -342,12 +350,11 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
                 }
             }
 
-            let mut scratch = Vec::new();
             self.with_neighbors(c.idx, layer, |neighbors| {
                 for &e_idx in neighbors {
                     let e_idx = e_idx as usize;
-                    if !visited.contains(&e_idx) {
-                        visited.insert(e_idx);
+                    if e_idx < visited.len() && visited[e_idx] != visit_mark {
+                        visited[e_idx] = visit_mark;
                         let v_slice = self.get_vector_slice(e_idx, &mut scratch);
                         let e_dist = self.distance.eval(query, v_slice);
 

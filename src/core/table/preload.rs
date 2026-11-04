@@ -25,6 +25,7 @@
 //! the last-warmed (most recently committed) segments win the budget.
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
@@ -96,6 +97,19 @@ pub struct PreloadStats {
     /// First warm failure, so a caller can tell an empty index from a broken one
     /// without a tracing subscriber attached (the Python module installs none).
     pub last_error: Option<String>,
+}
+
+/// Result of a table warmup pass.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WarmupStats {
+    /// True if the table has vector or graph indices.
+    pub has_vector_indices: bool,
+    /// Number of synthetic probes executed.
+    pub probes_run: usize,
+    /// Number of unique candidate clusters warmed.
+    pub clusters_warmed: usize,
+    /// Wall-clock time in milliseconds.
+    pub duration_ms: u128,
 }
 
 impl Table {
@@ -292,6 +306,120 @@ impl Table {
         Ok(stats)
     }
 
+    /// Check whether the current table contains any vector or graph index files.
+    /// If false, the table is a generic tabular/relational Iceberg table and all vector
+    /// warming/allocation is bypassed.
+    pub async fn has_vector_or_graph_indices(&self) -> Result<bool> {
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, entries, _version) = manager.load_latest_full().await?;
+        Ok(entries.iter().any(|e| {
+            e.index_files.iter().any(|idx| {
+                idx.index_category == "vector" || idx.index_category == "graph"
+            })
+        }))
+    }
+
+    /// 3-Tier Warmup:
+    /// Check if the table has vector/graph indices. If none exist (generic Iceberg table),
+    /// this is a zero-cost no-op returning immediately.
+    /// If vector indices exist, uses the index's own centroids to execute untimed synthetic
+    /// warmup probes, pre-faulting the most critical Voronoi clusters and entrypoints into RAM.
+    pub async fn warmup_from_centroids_async(
+        &self,
+        n_probes: usize,
+        _max_memory_bytes: Option<u64>,
+    ) -> Result<WarmupStats> {
+        let t0 = Instant::now();
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, entries, _version) = match manager.load_latest_full().await {
+            Ok(v) => v,
+            Err(_) => {
+                return Ok(WarmupStats {
+                    has_vector_indices: false,
+                    probes_run: 0,
+                    clusters_warmed: 0,
+                    duration_ms: t0.elapsed().as_millis(),
+                })
+            }
+        };
+
+        // 1. Conditionality Check: Generic Iceberg table gatekeeper
+        let mut vector_cols_set = std::collections::HashSet::new();
+        for e in &entries {
+            for idx in &e.index_files {
+                if idx.index_category == "vector" || idx.index_category == "graph" {
+                    vector_cols_set.insert(idx.column_name.clone());
+                }
+            }
+        }
+
+        if vector_cols_set.is_empty() {
+            return Ok(WarmupStats {
+                has_vector_indices: false,
+                probes_run: 0,
+                clusters_warmed: 0,
+                duration_ms: t0.elapsed().as_millis(),
+            });
+        }
+
+        let mut total_probes = 0;
+        let mut total_clusters = 0;
+
+        for col in vector_cols_set {
+            // Tier 1: Ensure router is built and resident in memory (< 1 ms)
+            if let Ok(Some(router)) = self.ensure_vector_router(&col).await {
+                let n_centroids = router.len();
+                if n_centroids == 0 {
+                    continue;
+                }
+
+                // Sample up to n_probes centroids evenly across the centroid matrix
+                let probes_to_run = n_probes.min(n_centroids);
+                let stride = if n_centroids > probes_to_run {
+                    n_centroids / probes_to_run
+                } else {
+                    1
+                };
+
+                for step in 0..probes_to_run {
+                    let idx = step * stride;
+                    if let Some(centroid) = router.get_centroid(idx) {
+                        let mut params = crate::core::planner::VectorSearchParams::new(
+                            &col,
+                            crate::core::index::VectorValue::Float32(centroid.to_vec()),
+                            10,
+                        );
+                        params.ef_search = Some(32);
+                        params.use_mmap = true;
+                        if let Ok(res) = self.execute_vector_search_as_scored(params).await {
+                            total_clusters += res.len();
+                        }
+                        total_probes += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(WarmupStats {
+            has_vector_indices: true,
+            probes_run: total_probes,
+            clusters_warmed: total_clusters,
+            duration_ms: t0.elapsed().as_millis(),
+        })
+    }
+
+    /// Explicit Tier 3 Warmup API:
+    /// Pre-warms the index caches using synthetic centroid probes.
+    pub async fn warmup(
+        &self,
+        n_probes: Option<usize>,
+        max_memory_gb: Option<f64>,
+    ) -> Result<WarmupStats> {
+        let probes = n_probes.unwrap_or(100);
+        let max_bytes = max_memory_gb.map(|gb| (gb * 1024.0 * 1024.0 * 1024.0) as u64);
+        self.warmup_from_centroids_async(probes, max_bytes).await
+    }
+
     /// Ensure a table-level vector router exists for the given column, constructing
     /// it from segment index centroids if not already resident.
     pub async fn ensure_vector_router(
@@ -337,42 +465,64 @@ impl Table {
                         continue;
                     }
 
-                    let loaded = if idx.blob_offset.is_some() {
-                        let cache_key = crate::core::index::hnsw_ivf::HnswIvfIndex::puffin_vector_cache_key(
-                            &self.uri,
-                            &full_path,
-                            &idx.column_name,
-                            &idx.algorithm,
-                        );
-                        crate::core::index::hnsw_ivf::HnswIvfIndex::load_from_puffin(
+                    if idx.blob_offset.is_some() {
+                        // Read only the centroids blob. Loading the full index
+                        // here deserializes the graph, vectors and quantizer to
+                        // answer a question that needs none of them — 42 GB of
+                        // index at 100M, paid again after every rebuild.
+                        match crate::core::index::hnsw_ivf::HnswIvfIndex::load_centroids_from_puffin(
                             self.store.clone(),
                             &full_path,
-                            &cache_key,
                             true,
-                            &idx.column_name,
                         )
                         .await
+                        {
+                            Ok((centroids, loaded_metric)) => {
+                                if let Some(first) = centroids.first() {
+                                    dim = first.len();
+                                }
+                                metric = loaded_metric;
+                                for (c_id, centroid) in centroids.into_iter().enumerate() {
+                                    records.push(
+                                        crate::core::index::vector_router::CentroidRecord {
+                                            segment_id: seg_id.clone(),
+                                            cluster_id: c_id,
+                                            centroid,
+                                        },
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    puffin = %full_path,
+                                    error = %e,
+                                    "ensure_vector_router: could not read the centroids blob"
+                                );
+                            }
+                        }
                     } else {
+                        // Legacy non-Puffin index: fall back to the full loader.
                         let cache_key = format!("{}/{}", self.uri, full_path);
-                        crate::core::index::hnsw_ivf::HnswIvfIndex::load_async_with_cache_key(
-                            self.store.clone(),
-                            &full_path,
-                            &cache_key,
-                            true,
-                        )
-                        .await
-                    };
-
-                    if let Ok(index) = loaded {
-                        dim = index.dim();
-                        metric = index.metric();
-
-                        for (c_id, centroid) in index.centroids().iter().enumerate() {
-                            records.push(crate::core::index::vector_router::CentroidRecord {
-                                segment_id: seg_id.clone(),
-                                cluster_id: c_id,
-                                centroid: centroid.clone(),
-                            });
+                        if let Ok(index) =
+                            crate::core::index::hnsw_ivf::HnswIvfIndex::load_async_with_cache_key(
+                                self.store.clone(),
+                                &full_path,
+                                &cache_key,
+                                true,
+                            )
+                            .await
+                        {
+                            dim = index.dim();
+                            metric = index.metric();
+                            for (c_id, centroid) in index.centroids().iter().enumerate() {
+                                records.push(
+                                    crate::core::index::vector_router::CentroidRecord {
+                                        segment_id: seg_id.clone(),
+                                        cluster_id: c_id,
+                                        centroid: centroid.clone(),
+                                    },
+                                );
+                            }
                         }
                     }
                     break;

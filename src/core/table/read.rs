@@ -481,12 +481,18 @@ impl Table {
             for vp in vps.iter_mut() {
                 if vp.candidate_segments.is_none() {
                     if let Ok(Some(router)) = self.ensure_vector_router(&vp.column).await {
+                        // Read per query, deliberately not cached. The benchmark
+                        // sweep sets `BSDB_HNSW_N_PROBE` per operating point, so
+                        // a `OnceLock` would freeze the first value and silently
+                        // run every later point at the wrong probe count. The
+                        // real fix is to plumb `probes` through
+                        // `VectorSearchParams` and stop reading the environment
+                        // here at all.
                         let probes = vp.probes.unwrap_or_else(|| {
-                            if let Ok(val) = std::env::var("BSDB_HNSW_N_PROBE") {
-                                val.parse::<usize>().unwrap_or(16)
-                            } else {
-                                16
-                            }
+                            std::env::var("BSDB_HNSW_N_PROBE")
+                                .ok()
+                                .and_then(|v| v.parse::<usize>().ok())
+                                .unwrap_or(16)
                         });
                         let plan = match &vp.query {
                             crate::core::index::VectorValue::Float32(q_f32) => {
@@ -628,7 +634,9 @@ impl Table {
                     .with_config(config.clone())
                     .with_ef_search(vs_params.ef_search)
                     .with_targeted_clusters(vs_params.targeted_clusters.clone())
-                    .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect())),
+                    .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect()))
+                    .with_refine_factor(vs_params.refine_factor)
+                    .with_probes(vs_params.probes),
                 );
             }
 

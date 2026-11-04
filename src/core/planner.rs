@@ -111,6 +111,8 @@ pub struct VectorSearchParams {
     pub candidate_segments: Option<std::sync::Arc<std::collections::HashSet<String>>>,
     /// Optional targeted clusters to probe per segment: segment_id -> Vec<cluster_id>
     pub targeted_clusters: Option<std::sync::Arc<std::collections::HashMap<String, Vec<usize>>>>,
+    /// Optional refinement/oversampling factor for two-stage exact rescoring
+    pub refine_factor: Option<usize>,
 }
 
 impl VectorSearchParams {
@@ -128,6 +130,7 @@ impl VectorSearchParams {
             radius: None,
             candidate_segments: None,
             targeted_clusters: None,
+            refine_factor: None,
         }
     }
 
@@ -157,6 +160,12 @@ impl VectorSearchParams {
     /// Override the IVF `probes` parameter (higher = more partitions searched, slower).
     pub fn with_probes(mut self, probes: usize) -> Self {
         self.probes = Some(probes);
+        self
+    }
+
+    /// Set the two-stage refinement / oversampling factor (fetches k * refine_factor candidates, rescores with F32).
+    pub fn with_refine_factor(mut self, refine_factor: usize) -> Self {
+        self.refine_factor = Some(refine_factor);
         self
     }
 }

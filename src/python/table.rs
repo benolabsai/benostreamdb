@@ -67,10 +67,14 @@ impl PyTable {
         uri: &str,
         device: Option<Py<PyDevice>>,
         streaming_flush_interval_secs: Option<u64>,
+        auto_warmup: Option<bool>,
     ) -> Result<Self, anyhow::Error> {
         let mut builder = Table::builder(uri.to_string()).with_runtime(TOKIO_RUNTIME.clone());
         if let Some(secs) = streaming_flush_interval_secs {
             builder = builder.with_streaming_flush_interval(std::time::Duration::from_secs(secs));
+        }
+        if let Some(warmup) = auto_warmup {
+            builder = builder.with_auto_warmup(warmup);
         }
         let mut table = TOKIO_RUNTIME.block_on(builder.build_async())?;
         table.rt = Some(TOKIO_RUNTIME.clone());
@@ -115,13 +119,14 @@ impl PyTable {
 #[allow(deprecated)]
 impl PyTable {
     #[new]
-    #[pyo3(signature = (uri, device=None, streaming_flush_interval_secs=None))]
+    #[pyo3(signature = (uri, device=None, streaming_flush_interval_secs=None, auto_warmup=None))]
     fn new(
         uri: &str,
         device: Option<Py<PyDevice>>,
         streaming_flush_interval_secs: Option<u64>,
+        auto_warmup: Option<bool>,
     ) -> PyResult<Self> {
-        Self::new_internal(uri, device, streaming_flush_interval_secs)
+        Self::new_internal(uri, device, streaming_flush_interval_secs, auto_warmup)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 
@@ -454,12 +459,20 @@ impl PyTable {
         quality: usize,
     ) -> PyResult<()> {
         let algo = match type_.to_lowercase().as_str() {
-            "bq8" | "hnsw_bq8" | "tq8" | "hnsw_tq8" => IndexAlgorithm::HnswTq8 {
+            "tq8" | "hnsw_tq8" | "bq8" | "hnsw_bq8" => IndexAlgorithm::HnswTq8 {
                 metric: metric.to_string(),
                 complexity,
                 quality,
             },
-            "bq4" | "hnsw_bq4" | "tq4" | "hnsw_tq4" => IndexAlgorithm::HnswTq4 {
+            "sq8" | "hnsw_sq8" => {
+                std::env::set_var("BSDB_USE_SQ", "1");
+                IndexAlgorithm::HnswTq8 {
+                    metric: metric.to_string(),
+                    complexity,
+                    quality,
+                }
+            }
+            "tq4" | "hnsw_tq4" | "bq4" | "hnsw_bq4" => IndexAlgorithm::HnswTq4 {
                 metric: metric.to_string(),
                 complexity,
                 quality,
@@ -472,7 +485,7 @@ impl PyTable {
             },
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "Unsupported quantization type: {}. Use BQ8, TQ8, TQ4, or PQ.",
+                    "Unsupported quantization type: {}. Use 'tq8', 'sq8', 'tq4', or 'pq'.",
                     type_
                 )))
             }
@@ -739,6 +752,17 @@ impl PyTable {
             if let Ok(Some(mmap_obj)) = vf.get_item("use_mmap") {
                 if let Ok(use_mmap) = mmap_obj.extract::<bool>() {
                     params.use_mmap = use_mmap;
+                }
+            }
+
+            // Parse optional refine_factor / oversample parameter for two-stage exact rescoring
+            if let Ok(Some(refine_obj)) = vf.get_item("refine_factor") {
+                if let Ok(refine_factor) = refine_obj.extract::<usize>() {
+                    params = params.with_refine_factor(refine_factor);
+                }
+            } else if let Ok(Some(oversample_obj)) = vf.get_item("oversample") {
+                if let Ok(oversample) = oversample_obj.extract::<usize>() {
+                    params = params.with_refine_factor(oversample);
                 }
             }
 
@@ -2939,6 +2963,32 @@ impl PyTable {
         Ok(dict.into())
     }
 
+    /// 3-Tier Warmup API:
+    /// Pre-warm vector index caches using synthetic Voronoi centroid probes.
+    /// If the table contains no vector or graph indices, this returns immediately as a zero-cost no-op.
+    /// Returns a dict with `has_vector_indices`, `probes_run`, `clusters_warmed`, and `duration_ms`.
+    #[pyo3(signature = (n_probes=None, max_memory_gb=None))]
+    fn warmup(
+        &self,
+        py: Python<'_>,
+        n_probes: Option<usize>,
+        max_memory_gb: Option<f64>,
+    ) -> PyResult<pyo3::PyObject> {
+        let rt = self.table.runtime();
+        let stats = py
+            .allow_threads(move || {
+                rt.block_on(async { self.table.warmup(n_probes, max_memory_gb).await })
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("has_vector_indices", stats.has_vector_indices)?;
+        dict.set_item("probes_run", stats.probes_run)?;
+        dict.set_item("clusters_warmed", stats.clusters_warmed)?;
+        dict.set_item("duration_ms", stats.duration_ms)?;
+        Ok(dict.into())
+    }
+
     /// Native bulk ingest of parquet files: plan → bounded parallel execute →
     /// OCC commit. Returns a report dict with `units_total`, `units_skipped`,
     /// `units_committed`, `rows_ingested`, `segments`.
@@ -3234,6 +3284,17 @@ impl PyTable {
             if let Ok(Some(mmap_obj)) = vf.get_item("use_mmap") {
                 if let Ok(use_mmap) = mmap_obj.extract::<bool>() {
                     params.use_mmap = use_mmap;
+                }
+            }
+
+            // Parse optional refine_factor / oversample parameter for two-stage exact rescoring
+            if let Ok(Some(refine_obj)) = vf.get_item("refine_factor") {
+                if let Ok(refine_factor) = refine_obj.extract::<usize>() {
+                    params = params.with_refine_factor(refine_factor);
+                }
+            } else if let Ok(Some(oversample_obj)) = vf.get_item("oversample") {
+                if let Ok(oversample) = oversample_obj.extract::<usize>() {
+                    params = params.with_refine_factor(oversample);
                 }
             }
 

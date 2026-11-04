@@ -193,6 +193,7 @@ pub struct TableBuilder {
     durability: crate::core::table::WalDurability,
     streaming_flush_interval: Option<std::time::Duration>,
     max_ingest_ram_gb: Option<f64>,
+    pub auto_warmup: bool,
 }
 
 impl TableBuilder {
@@ -233,6 +234,9 @@ impl TableBuilder {
                     .filter(|gb| *gb > 0.0)
                     .unwrap_or_else(crate::core::resources::default_max_ingest_ram_gb),
             ),
+            auto_warmup: std::env::var("BSDB_AUTO_WARMUP")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         }
     }
 
@@ -243,6 +247,11 @@ impl TableBuilder {
 
     pub fn with_durability(mut self, durability: crate::core::table::WalDurability) -> Self {
         self.durability = durability;
+        self
+    }
+
+    pub fn with_auto_warmup(mut self, auto_warmup: bool) -> Self {
+        self.auto_warmup = auto_warmup;
         self
     }
 
@@ -519,6 +528,13 @@ impl TableBuilder {
 
         if let Some(interval) = self.streaming_flush_interval {
             table.start_streaming_flush_task(interval);
+        }
+
+        if self.auto_warmup {
+            let bg_table = table.clone();
+            tokio::spawn(async move {
+                let _ = bg_table.warmup_from_centroids_async(100, None).await;
+            });
         }
 
         Ok(table)
