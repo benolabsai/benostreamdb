@@ -21,6 +21,7 @@ Intra-engine ablation:
 """
 
 import argparse
+import gc
 import json
 import os
 import shutil
@@ -283,37 +284,73 @@ def ingest_stage(bsdb, args, base_path: str, dim: int = DEFAULT_DIM, dtype: np.d
         shutil.rmtree(db_path)
 
     n = args.n
-    # One row per vector; `--limit` sub-slices larger files.
-    base_mmap = np.memmap(base_path, dtype=dtype, mode="r", offset=8, shape=(n, dim))
+    bytes_per_vector = dim * np.dtype(dtype).itemsize
+
+    # Auto-scale flush_every for high-dimensional vectors (e.g. 768-dim float32 is 3,072 B/vec)
+    # to guarantee write buffer stays under ~1 GB memory regardless of dimension.
+    batch_size = args.batch_size
+    flush_every = args.flush_every
+    if flush_every == 5_000_000 and dim >= 256:
+        flush_every = max(250_000, 1_000_000_000 // max(bytes_per_vector, 1))
+
+    # Use standard sequential binary streaming with fadvise DONTNEED instead of
+    # a static 30+ GB memory map, preventing kernel page-cache saturation and
+    # thrashing under 16 GiB cgroups.
+    raw_file = open(base_path, "rb")
+    raw_fd = raw_file.fileno()
+    try:
+        os.posix_fadvise(raw_fd, 0, 0, os.POSIX_FADV_SEQUENTIAL)
+    except Exception:
+        pass
+    raw_file.seek(8)  # skip 8-byte header (n_vectors: int32, dim: int32)
 
     process = psutil.Process(os.getpid())
 
     t0 = time.time()
-    table = bsdb.Table(db_path)
+    if getattr(args, "auto_warmup", False):
+        inner = bsdb._RustTable(db_path, auto_warmup=True)
+        table = bsdb.Table(db_path, inner_table=inner)
+    else:
+        table = bsdb.Table(db_path)
 
-    # Deliberately no `add_index` here: the index is built per mode in the query
-    # stage from the stored data, so the ingest pays for nothing but the write.
-    batch_size = args.batch_size
-    flush_every = args.flush_every
     since_flush = 0
     t_ingest = time.time()
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
-        batch_floats = base_mmap[start:end].astype(np.float32, copy=False)
+        cur_batch_count = end - start
+
+        batch_raw = np.fromfile(raw_file, dtype=dtype, count=cur_batch_count * dim)
+        if dtype == np.float32:
+            batch_floats = batch_raw
+        else:
+            batch_floats = batch_raw.astype(np.float32, copy=False)
+
         fsl = pa.FixedSizeListArray.from_arrays(pa.array(batch_floats.ravel()), dim)
         ids = pa.array(np.arange(start, end, dtype=np.int64))
         tbl = pa.Table.from_arrays([ids, fsl], names=["id", "embedding"])
         table.write(tbl)
-        since_flush += end - start
+        since_flush += cur_batch_count
 
-        # The write buffer lives in memory until it is flushed. An unflushed
-        # 100M ingest grows RSS by ~0.6 GB per million vectors (measured on
-        # 2026-10-31) and is OOM-killed under the 16 GiB envelope at ~26M.
-        # Flush on a fixed vector interval to bound the buffer; the final commit
-        # still produces a single snapshot.
+        # Evict processed file pages from page cache
+        try:
+            offset_bytes = 8 + start * bytes_per_vector
+            length_bytes = cur_batch_count * bytes_per_vector
+            os.posix_fadvise(raw_fd, offset_bytes, length_bytes, os.POSIX_FADV_DONTNEED)
+        except Exception:
+            pass
+
+        # Release Python & PyArrow temporary objects immediately
+        del tbl, fsl, ids, batch_floats, batch_raw
+
+        # Flush write buffer to Parquet when threshold is reached
         if flush_every and since_flush >= flush_every:
             table.flush()
             since_flush = 0
+            gc.collect()
+            try:
+                pa.default_memory_pool().release_unused()
+            except Exception:
+                pass
             print(
                 f"    -> Flushed write buffer at {end:,} vectors "
                 f"(RSS: {process.memory_info().rss / (1024**3):.2f} GB)",
@@ -329,6 +366,8 @@ def ingest_stage(bsdb, args, base_path: str, dim: int = DEFAULT_DIM, dtype: np.d
                 f"[{rate:,.0f} vec/s] | RSS: {rss:.2f} GB",
                 flush=True,
             )
+
+    raw_file.close()
 
     print("    -> Committing ...", flush=True)
     table.commit()
@@ -422,40 +461,140 @@ def clear_evaluation_caches(table=None, paths=None, label: str = ""):
     gc.collect()
 
 
-def reindex_and_preload(bsdb, args, mode: str):
-    """Rebuild the index for `mode` from stored data and warm it.
+def index_mode_marker(db_path: str) -> str:
+    """Path of the harness-authored record of which quantizer built the index.
 
-    This is the expensive half of a run, and it is paid **once per mode** — the
-    query grid then runs against the same warm index.
+    The engine cannot answer this from the table. `sq8` and `tq8`/`bq8` all map
+    to `IndexAlgorithm::HnswTq8` and all write the same `hnsw-tq8` Puffin blob
+    type; the only difference is the process-global `BSDB_USE_SQ` flag, read at
+    build time. So `--skip-reindex` would otherwise be free to reuse a BQ8 index
+    for an SQ8 run and report it as SQ8 — the quantizer that never ran.
+    """
+    return os.path.join(db_path, ".index_mode.json")
+
+
+def read_index_mode(db_path: str) -> dict:
+    """The recorded build parameters for the index currently on disk, if any."""
+    try:
+        with open(index_mode_marker(db_path)) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def write_index_mode(db_path: str, mode: str, idx_type: str, args) -> None:
+    record = {
+        "mode": mode,
+        "algorithm": idx_type,
+        "complexity": args.m,
+        "quality": args.ef_construction,
+        "metric": getattr(args, "metric", None),
+        "dim": getattr(args, "dim", None),
+        "use_sq": os.environ.get("BSDB_USE_SQ"),
+    }
+    with open(index_mode_marker(db_path), "w") as f:
+        json.dump(record, f, indent=2, sort_keys=True)
+
+
+def reindex_and_preload(bsdb, args, mode: str):
+    """Rebuild or reuse the index for `mode` in the table and warm it.
+
+    This is paid once per mode — the query grid then runs against the same warm
+    index. Switching modes overwrites the previous mode's Puffin sidecars, which
+    is why the mode is recorded in `.index_mode.json`: a later `--skip-reindex`
+    run can then tell whether the index on disk is the quantizer it asked for.
     """
     for key, value in mode_env(mode).items():
         os.environ[key] = value
 
-    db_path = args.db_dir
-    if not os.path.exists(db_path):
+    base_db = getattr(args, "base_db_dir", None) or args.db_dir or os.path.join(args.scratch_dir, "bigann_db")
+
+    # One table, rebuilt in place per mode.
+    #
+    # Per-mode directories CANNOT work for this. An Iceberg table's identity is
+    # the `location` in its metadata JSON, and the manifests store absolute
+    # `file:///.../bigann_db/seg_*.parquet` URIs. Hard-linking a data directory
+    # therefore yields a copy that still points at the original: `rebuild_index`
+    # reads the base manifests, derives each Puffin path from the absolute base
+    # Parquet path, and writes every index back into the base table, leaving the
+    # copy with no index at all — `has_vector_indices: False`, preloaded 0 of 0,
+    # and every "query" silently measuring a full scan. The Puffin filename is
+    # also fixed at `{segment_id}.puffin` and overwritten on each rebuild, so a
+    # copied directory could not hold two modes' blobs at the same time anyway.
+    #
+    # Rebuilding in place costs exactly what a shadow rebuild costs — this loop
+    # already pays one build per mode — and every query then runs against a real
+    # table. Which mode the index belongs to is recorded out of band.
+    if not os.path.exists(base_db):
         raise RuntimeError(
-            f"DB '{db_path}' does not exist; run --stage ingest first "
+            f"DB '{base_db}' does not exist; run --stage ingest first "
             "(or drop --stage query)"
         )
+    db_path = base_db
 
-    table = bsdb.Table(db_path)
+    if getattr(args, "auto_warmup", False):
+        inner = bsdb._RustTable(db_path, auto_warmup=True)
+        table = bsdb.Table(db_path, inner_table=inner)
+    else:
+        table = bsdb.Table(db_path)
 
-    if getattr(args, "skip_reindex", False):
-        print(f"    -> Skipping reindex (--skip-reindex set); reusing existing index on disk ({mode.upper()})", flush=True)
+    # Which algorithm this mode builds. SQ8 is not a distinct index type in the
+    # engine — `sq8`, `bq8` and `tq8` are all `HnswTq8`, and SQ8 is selected by
+    # the process-global BSDB_USE_SQ flag at build time — so the mode is recorded
+    # here rather than inferred from the manifest.
+    if mode == "f32":
+        idx_type = "hnsw"
+    elif mode in ("tq4", "bq4"):
+        idx_type = "tq4"
+    elif mode == "sq8":
+        idx_type = "sq8"
+    elif mode == "pq":
+        idx_type = "pq"
+    else:
+        idx_type = "tq8"
+
+    force = getattr(args, "force_reindex", False)
+    skip = getattr(args, "skip_reindex", False)
+
+    # An index is reusable only if it is the one this mode asked for. Counting
+    # `*.puffin` against `*.parquet` proves something was built; it does not
+    # prove which quantizer built it, and reusing the wrong one reports a
+    # quantizer that never ran.
+    marker = read_index_mode(db_path)
+    has_existing_index = False
+    try:
+        parquets = [f for f in os.listdir(db_path) if f.endswith(".parquet")]
+        puffins = [f for f in os.listdir(db_path) if f.endswith(".puffin")]
+        if len(parquets) > 0 and len(puffins) >= len(parquets):
+            if marker.get("mode") == mode:
+                has_existing_index = True
+            elif marker:
+                print(
+                    f"    [!] on-disk index was built for {marker.get('mode')} "
+                    f"({marker.get('algorithm')}), not {mode}; rebuilding",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"    [!] on-disk index carries no mode record; rebuilding for {mode}",
+                    flush=True,
+                )
+    except Exception:
+        pass
+
+    if skip and not has_existing_index:
+        print(
+            f"    [!] --skip-reindex ignored: the index on disk is not {mode}",
+            flush=True,
+        )
+        skip = False
+
+    if skip or (has_existing_index and not force):
+        print(f"    -> Reusing existing index on disk ({mode.upper()}) at {db_path}", flush=True)
         reindex_s = 0.0
     else:
-        print(f"    -> Reindexing 'embedding' from stored data ({mode.upper()}) ...", flush=True)
+        print(f"    -> Reindexing 'embedding' from stored data ({mode.upper()}) into {db_path} ...", flush=True)
         t_idx = time.time()
-        if mode == "f32":
-            idx_type = "hnsw"
-        elif mode == "bq4":
-            idx_type = "hnsw_bq4"
-        elif mode == "sq8":
-            idx_type = "hnsw_sq8"
-        elif mode == "pq":
-            idx_type = "hnsw_pq"
-        else:
-            idx_type = "hnsw_bq8"
         table.add_index(
             "embedding",
             {
@@ -475,9 +614,10 @@ def reindex_and_preload(bsdb, args, mode: str):
             except Exception as e:
                 print(f"    [!] compaction note: {e}", flush=True)
         reindex_s = time.time() - t_idx
+        write_index_mode(db_path, mode, idx_type, args)
 
     sizes = db_breakdown(db_path)
-    if not getattr(args, "skip_reindex", False):
+    if not (skip or (has_existing_index and not force)):
         print(
             f"    -> Reindexed in {reindex_s:.1f}s "
             f"(index {sizes['index_size_mb'] / 1024:.2f} GB, "
@@ -495,7 +635,7 @@ def reindex_and_preload(bsdb, args, mode: str):
         )
 
     # Invalidate engine internal caches and evict unneeded Parquet build data from OS page cache
-    clear_evaluation_caches(table, [args.db_dir, getattr(args, "scratch_dir", None)], label=f"pre-warm-{mode.upper()}")
+    clear_evaluation_caches(table, [db_path, getattr(args, "scratch_dir", None)], label=f"pre-warm-{mode.upper()}")
 
     print("    -> Preloading index into RAM cache ...", flush=True)
     warm = table.preload_indexes(
@@ -517,13 +657,14 @@ def reindex_and_preload(bsdb, args, mode: str):
         )
 
     return table, {
+        "db_path": db_path,
         "reindex_s": round(reindex_s, 2),
         "preload_ms": warm.get("elapsed_ms", 0),
         **sizes,
     }
 
 
-def search_pass(table, args, queries, gt_indices, ef_search: int, n_probe: int) -> dict:
+def search_pass(table, args, queries, gt_indices, ef_search: int, n_probe: int, mode: str = "") -> dict:
     """One query pass at a given (ef_search, n_probe) operating point."""
     os.environ["BSDB_HNSW_N_PROBE"] = str(n_probe)
     q = len(queries)
@@ -536,7 +677,13 @@ def search_pass(table, args, queries, gt_indices, ef_search: int, n_probe: int) 
             "query": query_vectors[idx],
             "k": args.k,
             "ef_search": ef_search,
+            # Pass n_probe explicitly. The engine still falls back to
+            # BSDB_HNSW_N_PROBE, but that read takes a global lock per segment
+            # and is the wrong place for a per-operating-point parameter.
+            "probes": n_probe,
         }
+        if getattr(args, "refine_factor", None) is not None and mode.lower() != "f32":
+            vf["refine_factor"] = args.refine_factor
         t1 = time.perf_counter()
         res = table.to_arrow(vector_filter=vf, columns=["id"])
         lat = time.perf_counter() - t1
@@ -589,8 +736,10 @@ def render_report(args, records, meta) -> str:
     """Markdown report for the paper: provenance, table, and the quotable points."""
     labels = {
         "f32": "Uncompressed HNSW (f32)",
-        "bq8": "BenoQuant BQ8 ($H \\cdot D$)",
-        "bq4": "BenoQuant BQ4 ($H \\cdot D$ + 2B scale)",
+        "tq8": "TurboQuant TQ8 ($H \\cdot D$)",
+        "bq8": "TurboQuant TQ8 ($H \\cdot D$)",
+        "tq4": "TurboQuant TQ4 ($H \\cdot D$ + 2B scale)",
+        "bq4": "TurboQuant TQ4 ($H \\cdot D$ + 2B scale)",
         "sq8": "Native SQ8 (no rotation)",
         "pq": "Product Quantization (PQ)",
     }
@@ -843,7 +992,7 @@ def main():
                              "Azure Standard_D8lds_v5 (8 vCPU / 16 GiB), local = this host")
     parser.add_argument("--strict-hardware", action="store_true",
                         help="Fail unless the process really is constrained to the envelope")
-    parser.add_argument("--mode", type=str, choices=["f32", "bq8", "bq4", "sq8", "pq"], default="bq8")
+    parser.add_argument("--mode", type=str, choices=["f32", "tq8", "bq8", "tq4", "bq4", "sq8", "pq"], default="tq8")
     parser.add_argument("--modes", type=str, default=None,
                         help="Comma-separated list of modes to run (e.g. 'sq8,pq')")
     parser.add_argument("--all-modes", action="store_true",
@@ -868,10 +1017,16 @@ def main():
                         help="Delete and re-ingest an existing DB at --db-dir")
     parser.add_argument("--skip-reindex", action="store_true",
                         help="Skip table.rebuild_index('embedding') and use the existing index on disk")
+    parser.add_argument("--force-reindex", action="store_true",
+                        help="Force rebuilding index even if index files already exist on disk")
+    parser.add_argument("--auto-warmup", action="store_true",
+                        help="Enable Tier B asynchronous background centroid warmup on Table open")
     parser.add_argument("--warmup-queries", type=int, default=500,
                         help="Number of untimed warmup query probes to fault index shards into RAM (default: 500)")
     parser.add_argument("--cleanup", action="store_true",
                         help="Delete the DB directory when the run finishes")
+    parser.add_argument("--refine-factor", type=int, default=None,
+                        help="Two-stage exact F32 rescore factor (e.g. 4 or 5)")
     parser.add_argument("--dim", type=int, default=None,
                         help="Vector dimension (overrides dataset default)")
     parser.add_argument("--metric", choices=["l2", "ip", "inner_product", "cosine"], default=None,
@@ -1010,22 +1165,28 @@ def main():
             # Untimed warmup pass to prefault active Voronoi index shards into RAM
             nw = min(getattr(args, "warmup_queries", 500), len(test_queries))
             if nw > 0:
-                print(f"    -> Warming index cache with {nw} untimed query probes ...", flush=True)
-                t_warm_start = time.time()
-                warm_subset = [test_queries[i].tolist() for i in range(nw)]
-                os.environ["BSDB_HNSW_N_PROBE"] = "16"
-                with ThreadPoolExecutor(max_workers=args.threads) as executor:
-                    list(executor.map(
-                        lambda q_vec: table.to_arrow(
-                            vector_filter={"column": "embedding", "query": q_vec, "k": args.k, "ef_search": 64},
-                            columns=["id"]
-                        ),
-                        warm_subset
-                    ))
-                print(f"    -> Warmed in {time.time() - t_warm_start:.2f}s", flush=True)
+                if hasattr(table, "warmup"):
+                    print(f"    -> Warming index cache via native Tier C centroid probing ({nw} probes) ...", flush=True)
+                    t_warm_start = time.time()
+                    wstats = table.warmup(n_probes=nw, max_memory_gb=args.preload_gb)
+                    print(f"    -> Warmed in {time.time() - t_warm_start:.2f}s: {wstats}", flush=True)
+                else:
+                    print(f"    -> Warming index cache with {nw} untimed query probes ...", flush=True)
+                    t_warm_start = time.time()
+                    warm_subset = [test_queries[i].tolist() for i in range(nw)]
+                    os.environ["BSDB_HNSW_N_PROBE"] = "16"
+                    with ThreadPoolExecutor(max_workers=args.threads) as executor:
+                        list(executor.map(
+                            lambda q_vec: table.to_arrow(
+                                vector_filter={"column": "embedding", "query": q_vec, "k": args.k, "ef_search": 64},
+                                columns=["id"]
+                            ),
+                            warm_subset
+                        ))
+                    print(f"    -> Warmed in {time.time() - t_warm_start:.2f}s", flush=True)
 
             for ef, npr in grid:
-                rec = search_pass(table, args, test_queries, gt_indices, ef, npr)
+                rec = search_pass(table, args, test_queries, gt_indices, ef, npr, mode=mode)
                 rec.update(
                     {
                         "dataset": f"{args.dataset}-{n}",
@@ -1051,7 +1212,7 @@ def main():
                     f"p50 {rec['p50_ms']:>7.2f} ms  p99 {rec['p99_ms']:>8.2f} ms",
                     flush=True,
                 )
-            clear_evaluation_caches(table, [args.db_dir, getattr(args, "scratch_dir", None)], label=f"post-{mode.upper()}")
+            clear_evaluation_caches(table, [meta.get("db_path", args.db_dir), getattr(args, "scratch_dir", None)], label=f"post-{mode.upper()}")
             del table
             print(f"--- {mode.upper()} done in {time.time() - t0:.1f}s "
                   f"(reindex {meta['reindex_s']}s, index {meta['index_size_mb']/1024:.2f} GB)\n",

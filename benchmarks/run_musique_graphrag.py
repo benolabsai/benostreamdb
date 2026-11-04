@@ -195,22 +195,24 @@ def build_tables(bsdb, scratch_dir: str, records: list):
     print("    -> Writing musique_edges Iceberg edge table...", flush=True)
     edge_table = bsdb.Table.create_edge_table(
         edge_dir,
-        schema=pa.schema([
-            pa.field("src", pa.int64()),
-            pa.field("dst", pa.int64()),
-            pa.field("relation", pa.string()),
-        ]),
-        source_column="src",
-        target_column="dst",
+        node_id_type="uint64",
+        with_relation=True,
+        with_weight=True,
     )
 
     if edges:
-        srcs = [e[0] for e in edges]
-        dsts = [e[1] for e in edges]
-        rels = [e[2] for e in edges]
+        srcs = [int(e[0]) for e in edges]
+        dsts = [int(e[1]) for e in edges]
+        rels = [str(e[2]) for e in edges]
+        weights = [1.0 for _ in edges]
         tbl_edges = pa.Table.from_arrays(
-            [pa.array(srcs, type=pa.int64()), pa.array(dsts, type=pa.int64()), pa.array(rels)],
-            names=["src", "dst", "relation"],
+            [
+                pa.array(srcs, type=pa.uint64()),
+                pa.array(dsts, type=pa.uint64()),
+                pa.array(rels, type=pa.string()),
+                pa.array(weights, type=pa.float64()),
+            ],
+            names=["source", "target", "relation", "weight"],
         )
         edge_table.write(tbl_edges)
         edge_table.wait_for_background_tasks()
@@ -277,11 +279,11 @@ def run_evaluation(corpus_table, edge_table, unique_passages, records: list, top
                     id_list_str = ", ".join(str(i) for i in seed_ids)
                     try:
                         edge_res = edge_table.to_arrow(
-                            filter=f"src IN ({id_list_str})",
-                            columns=["dst"],
+                            filter=f"source IN ({id_list_str})",
+                            columns=["target"],
                         )
-                        if "dst" in edge_res.column_names:
-                            for dst_id in edge_res.column("dst").to_pylist():
+                        if "target" in edge_res.column_names:
+                            for dst_id in edge_res.column("target").to_pylist():
                                 expanded_ids.add(dst_id)
                                 if len(expanded_ids) >= top_k:
                                     break
@@ -299,7 +301,15 @@ def run_evaluation(corpus_table, edge_table, unique_passages, records: list, top
                         hops=2,
                         max_nodes=top_k,
                     )
-                    retrieved_ids = gr.nodes[:top_k] if hasattr(gr, "nodes") else []
+                    if hasattr(gr, "nodes") and hasattr(gr.nodes, "empty") and not gr.nodes.empty:
+                        if "id" in gr.nodes.columns:
+                            retrieved_ids = [int(x) for x in gr.nodes["id"].tolist()[:top_k]]
+                        else:
+                            retrieved_ids = [int(x) for x in gr.nodes.index.tolist()[:top_k]]
+                    elif hasattr(gr, "nodes") and isinstance(gr.nodes, list):
+                        retrieved_ids = [int(x) for x in gr.nodes[:top_k]]
+                    else:
+                        retrieved_ids = []
                 except Exception:
                     # Fallback to vector search if graph is disconnected
                     res = corpus_table.to_arrow(
@@ -426,8 +436,8 @@ def main():
         corpus_table, edge_table, unique_passages = build_tables(bsdb, args.scratch_dir, records)
     else:
         print(f"Reusing existing tables at {args.scratch_dir}...")
-        corpus_table = bsdb.Table.open_table(corpus_dir)
-        edge_table = bsdb.Table.open_table(edge_dir)
+        corpus_table = bsdb.Table(corpus_dir)
+        edge_table = bsdb.Table(edge_dir)
         # Extract unique passage dictionary from records
         unique_passages = {}
         for r in records:

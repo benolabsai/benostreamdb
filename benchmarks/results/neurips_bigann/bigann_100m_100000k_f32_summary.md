@@ -29,3 +29,4 @@ Total Evaluation Duration: **90,791.5s** (25.2 hours across 160,000 queries)
 
 1. **Out-of-Core Memory Safety on F32**: The uncompressed index (76.08 GB) is $9.5\times$ larger than the assigned 8 GiB cache budget and $4.8\times$ larger than total system RAM (16 GiB). Over 25.2 hours and 160,000 queries, traversal ran continuously without crashing, reading through 15+ Terabytes of NVMe I/O.
 2. **IVF Probe Dominance**: Recall is heavily dominated by `n_probe` rather than beam width (`ef_search`), demonstrating that at 100M scale, coarse centroid routing correctly prunes unvisited Voronoi shards.
+
