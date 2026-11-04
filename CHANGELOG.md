@@ -86,8 +86,8 @@ needed to publish the resulting numbers honestly.
 - **Product quantization is out of the primary benchmark suite** — the `hnsw_pq`
   engine label is gone from `docker_bench.sh` (CPU and GPU engine lists),
   `run_bench.sh`, and the primary ANN self-characterization report to focus
-  standard publications on `f32` vs `bq8`/`sq8`. Both Product Quantization
-  (`hnsw_pq`) and 4-bit quantization (`hnsw_tq4` / `hnsw_bq4`) are retained in the
+  standard publications on `f32` vs `tq8`/`sq8`. Both Product Quantization
+  (`hnsw_pq`) and 4-bit quantization (`hnsw_tq4`) are retained in the
   core engine: PQ is preserved for legacy Iceberg index sidecars and baseline
   comparisons, while 4-bit quantization is retained and upgraded with the 2-byte
   float16 length normalization scalar ($\alpha$) fix and centered nibbles. LanceDB's

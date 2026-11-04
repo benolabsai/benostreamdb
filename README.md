@@ -580,23 +580,24 @@ async fn main() -> anyhow::Result<()> {
 - **GPU Acceleration**: Automatic GPU context propagation for vector operations
 - **BenoQuant & Quantization Optimized**: Seamless integration with 8-bit/4-bit isotropic and scalar quantization
 
-### BenoQuant Isotropic Quantization (BQ8 / BQ4) & Native SQ8
+### BenoQuant Isotropic Quantization (TQ8 / TQ4) & Native SQ8
 
 BenoStreamDB provides native vector quantization algorithms designed for out-of-core memory efficiency and high-dimensional variance equalization:
 
-- **BQ8 (8-bit BenoQuant)**: Rotated INT8 quantization using a randomized Fast Walsh-Hadamard Transform ($H \cdot D$). Equalizes dimensional variance across anisotropic vector spaces (such as dense LLM embeddings), eliminating centroid skew and delivering +11.3% higher throughput (163.6 QPS at 94.55% Recall@10 on 10M BigANN) with reduced median and tail latencies.
-- **BQ4 (4-bit BenoQuant)**: Ultra-compact 4-bit nibble packing (64 bytes per 128 dims) with an IEEE 754-2008 binary16 length normalization scalar ($\alpha = \frac{\langle y, \hat{y} \rangle}{\|\hat{y}\|^2}$), packing 128-dim vectors into 66 bytes total. Nibble arithmetic centered at 7.5 prevents norm bias and quantization collapse.
-- **SQ8 (8-bit Scalar Quantization)**: Native axis-aligned INT8 scalar quantization without rotation (`hnsw_sq8`), offering 4x compression and fast indexing for isotropic datasets.
+- **TQ8 / HNSW-TQ8 (8-bit TurboQuant)**: Rotated INT8 quantization using a randomized Fast Walsh-Hadamard Transform ($H \cdot D$). Equalizes dimensional variance across anisotropic vector spaces (such as dense LLM embeddings), eliminating centroid skew and delivering +11.3% higher throughput (163.6 QPS at 94.55% Recall@10 on 10M BigANN) with reduced median and tail latencies. **Optimal for power-of-two dimensions ($D \in \{128, 256, 512, 1024, 2048\}$)** where zero padding is required.
+- **TQ4 / HNSW-TQ4 (4-bit TurboQuant)**: Ultra-compact 4-bit nibble packing (64 bytes per 128 dims) with an IEEE 754-2008 binary16 length normalization scalar ($\alpha = \frac{\langle y, \hat{y} \rangle}{\|\hat{y}\|^2}$), packing 128-dim vectors into 66 bytes total. Nibble arithmetic centered at 7.5 prevents norm bias and quantization collapse.
+- **SQ8 / HNSW-SQ8 (8-bit Scalar Quantization)**: Native axis-aligned INT8 scalar quantization without rotation (`hnsw_sq8`), offering 4x compression and fast indexing. **Optimal for non-power-of-two dimensions ($D \in \{384, 768, 1536, 3072\}$)**, eliminating the +33% zero-padding memory bloat of FWHT and building indexes $2.07\times$ faster with independent per-coordinate scale/offset calibration.
+- **Two-Stage Retrieve-and-Rerank (`refine_factor`)**: In production pipelines requiring high recall (>0.95), both TQ8 and SQ8 serve as high-speed candidate filters. Configuring `refine_factor=4` over-fetches candidates from the compressed index and executes exact SIMD Float32 distance rescoring directly against uncompressed Parquet data.
 
 ```python
-# BenoQuant 8-bit isotropic quantization (Recommended for production & LLM embeddings)
-table.add_index("embedding", "hnsw_bq8")
+# TurboQuant 8-bit isotropic quantization (Optimal for D = 128, 512, 1024)
+table.add_index("embedding", "hnsw_tq8")  # or shorthand "tq8"
 
-# BenoQuant 4-bit high-compression mode (66 bytes/vector at 128-dim)
-table.add_index("embedding", "hnsw_bq4")
+# Native 8-bit scalar quantization (Optimal for D = 384, 768, 1536)
+table.add_index("embedding", "hnsw_sq8")  # or shorthand "sq8"
 
-# Native 8-bit scalar quantization (fast index build)
-table.add_index("embedding", "hnsw_sq8")
+# TurboQuant 4-bit high-compression mode (66 bytes/vector at 128-dim)
+table.add_index("embedding", "hnsw_tq4")  # or shorthand "tq4"
 
 # Standard uncompressed Float32 HNSW
 table.add_index("embedding", "hnsw")

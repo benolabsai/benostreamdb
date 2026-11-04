@@ -140,12 +140,12 @@ Themes are ordered by priority.
 > **Status & Resolution.** Initial benchmarks showed 4-bit quantization suffering severe recall collapse under uncalibrated nibble packing. However, the introduction of the **2-byte IEEE 754-2008 float16 length normalization scalar ($\alpha$)** combined with **7.5-centered nibbles** in BenoQuant (`hnsw_bq4`) fully resolved norm bias and recall collapse, enabling 4-bit quantization to pack 128-dim vectors into 66 bytes total. 
 >
 > Rather than removing TQ4 and PQ from the core engine (GH Issue #120 closed as won't do), both algorithms are **retained as supported options in the core engine**:
-> - **BenoQuant BQ4 (`hnsw_bq4` / `hnsw_tq4`)**: Retained and upgraded for ultra-compact out-of-core datasets.
-> - **BenoQuant BQ8 (`hnsw_bq8` / `hnsw_tq8`)**: Production isotropic INT8 quantization with Walsh-Hadamard rotation ($H \cdot D$).
+> - **TurboQuant TQ4 (`hnsw_tq4` / `hnsw_bq4`)**: Retained and upgraded for ultra-compact out-of-core datasets.
+> - **TurboQuant TQ8 (`hnsw_tq8` / `hnsw_bq8`)**: Production isotropic INT8 quantization with Walsh-Hadamard rotation ($H \cdot D$).
 > - **Native SQ8 (`hnsw_sq8`)**: Shipped for axis-aligned INT8 scalar quantization.
 > - **Product Quantization (`hnsw_pq`)**: Retained in the core engine for legacy Iceberg index sidecar compatibility and research baselines.
 > 
-> TQ4 and PQ are omitted from standard public marketing benchmark reports to keep publications focused on `f32` vs `bq8`/`sq8`, but remain fully supported in core Rust and PyO3 APIs.
+> TQ4 and PQ are omitted from standard public marketing benchmark reports to keep publications focused on `f32` vs `tq8`/`sq8`, but remain fully supported in core Rust and PyO3 APIs.
 
 - [x] **2-byte float16 length scalar fix for 4-bit quantization** — 🟢 **Shipped**:
   - Implemented IEEE 754 binary16 length normalization scalar ($\alpha = \frac{\langle y, \hat{y} \rangle}{\|\hat{y}\|^2}$) trailer and 7.5-centered nibble math in `src/core/index/benoquant.rs` and `distance.rs`.
