@@ -475,6 +475,42 @@ impl Table {
             }
         };
 
+        // Table-level cluster index fast path.
+        //
+        // When the manifest carries a cluster-keyed artifact for the queried
+        // column, one index call replaces the whole per-segment fan-out: the
+        // artifact already holds every cluster whole, and its nodes carry
+        // `(segment_id, row_id)`, so `fetch_results_by_id` hydrates the winners
+        // unchanged. Restricted to a single vector filter with no scalar
+        // predicate, because the artifact has no scalar-filter support — a
+        // filtered query must stay on the per-segment path.
+        if expr.is_none() {
+            if let Some(ref vps) = vector_filters {
+                if vps.len() == 1 {
+                    let vp = &vps[0];
+                    if let Ok(Some(index)) = self.ensure_cluster_index(&vp.column).await {
+                        if let crate::core::index::VectorValue::Float32(q) = &vp.query {
+                            let probes = vp.probes.unwrap_or_else(|| {
+                                std::env::var("BSDB_HNSW_N_PROBE")
+                                    .ok()
+                                    .and_then(|v| v.parse::<usize>().ok())
+                                    .unwrap_or(16)
+                            });
+                            let scored = index.search(q, vp.k, probes, vp.ef_search)?;
+                            tracing::info!(
+                                column = %vp.column,
+                                probes = probes,
+                                hits = scored.len(),
+                                "cluster_index: served query from the table-level artifact"
+                            );
+                            let results = self.fetch_results_by_id(scored, columns).await?;
+                            return Ok(futures::stream::iter(results.into_iter().map(Ok)).boxed());
+                        }
+                    }
+                }
+            }
+        }
+
         // If vector filters are present, evaluate table-level vector routing to enable
         // segment pruning and direct targeted cluster search across segments.
         if let Some(ref mut vps) = vector_filters {
@@ -1368,6 +1404,26 @@ impl Table {
         filter: Option<FilterExpr>,
     ) -> Result<Vec<ScoredResult>> {
         let start_time = std::time::Instant::now();
+
+        // Table-level cluster index fast path (see `read_expr_stream_async`).
+        // Only for unfiltered queries: the artifact has no scalar-filter support.
+        if filter.is_none() {
+            if let Ok(Some(index)) = self.ensure_cluster_index(&params.column).await {
+                if let crate::core::index::VectorValue::Float32(q) = &params.query {
+                    let probes = params.probes.unwrap_or_else(|| {
+                        std::env::var("BSDB_HNSW_N_PROBE")
+                            .ok()
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(16)
+                    });
+                    let scored = index.search(q, params.k, probes, params.ef_search)?;
+                    crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
+                        .observe(start_time.elapsed().as_secs_f64());
+                    return Ok(scored);
+                }
+            }
+        }
+
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_, all_entries, _) = manifest_manager.load_latest_full().await?;
 

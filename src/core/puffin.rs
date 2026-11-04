@@ -57,6 +57,28 @@ pub const PUFFIN_BLOB_HNSW_IVF_CENTROIDS: &str = "org.apache.iceberg.vector.cent
 pub const PUFFIN_BLOB_HNSW_CLUSTER_GRAPH: &str = "org.apache.iceberg.vector.cluster-graph";
 pub const PUFFIN_BLOB_HNSW_CLUSTER_MAPPING: &str = "org.apache.iceberg.vector.cluster-mapping";
 
+// ---------------------------------------------------------------------------
+// Table-level (cluster-keyed) index blobs.
+//
+// These live in a Puffin container that is *not* owned by any single data file.
+// The `cluster-hnsw-*` types name the per-cluster graph payload; the companion
+// `cluster-node-meta` blob carries the `(segment_idx, row_id)` pair for each
+// graph node, which is what lets the existing row fetcher resolve a hit even
+// though a cluster's members are spread across many Parquet files.
+// ---------------------------------------------------------------------------
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ8: &str =
+    "org.apache.iceberg.vector.cluster-hnsw-tq8";
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ4: &str =
+    "org.apache.iceberg.vector.cluster-hnsw-tq4";
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_PQ: &str = "org.apache.iceberg.vector.cluster-hnsw-pq";
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_HNSW: &str = "org.apache.iceberg.vector.cluster-hnsw";
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META: &str =
+    "org.apache.iceberg.vector.cluster-node-meta";
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_SEGMENTS: &str =
+    "org.apache.iceberg.vector.cluster-segments";
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_SHARDS: &str =
+    "org.apache.iceberg.vector.cluster-shards";
+
 use crate::core::manifest::IndexFile;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -69,6 +91,11 @@ impl<W: Write + Seek> PuffinWriter<W> {
             blobs: Vec::new(),
             current_offset: 4,
         })
+    }
+
+    /// Current byte offset written to the Puffin file.
+    pub fn current_offset(&self) -> i64 {
+        self.current_offset
     }
 
     pub fn add_blob(

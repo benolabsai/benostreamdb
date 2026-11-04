@@ -1060,6 +1060,15 @@ impl HybridReader {
                     f.index_category == "vector"
                         && f.column_name == column
                         && self.config.is_index_valid(f)
+                        && !matches!(
+                            f.blob_type.as_deref(),
+                            Some(crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS)
+                                | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_MAPPING)
+                                | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_GRAPH)
+                                | Some("centroids")
+                                | Some("mapping")
+                                | Some("cluster_graph")
+                        )
                 })
                 .filter(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())))
                 .cloned()
@@ -1070,10 +1079,16 @@ impl HybridReader {
             // each registered as a separate IndexFile with the same blob_type).
             let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
                 match f.blob_type.as_deref() {
-                    Some("hnsw_tq8") | Some("hnsw_tq4") => 0,
-                    Some("hnsw_pq") => 1,
+                    Some("hnsw_tq8")
+                    | Some("hnsw_tq4")
+                    | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ8)
+                    | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ4) => 0,
+                    Some("hnsw_pq") | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_PQ) => 1,
                     Some("hnsw_ivf") => 2,
-                    _ => 3,
+                    Some("hnsw")
+                    | Some("hnsw_f32")
+                    | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW) => 3,
+                    _ => 4,
                 }
             };
             let best_rank = vector_indices.iter().map(algo_rank).min().unwrap_or(4);
@@ -1196,8 +1211,8 @@ impl HybridReader {
         target_clusters: Option<&[usize]>,
         probes: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
-        // Deduplicate Puffin blob entries (centroids/graph/mapping) down to one
-        // per logical vector index.
+        // Deduplicate Puffin blob entries down to one per logical vector index,
+        // ignoring auxiliary blobs (centroids/mapping/cluster-graph).
         let mut seen = std::collections::HashSet::new();
         let vector_indices: Vec<_> = self
             .config
@@ -1207,6 +1222,15 @@ impl HybridReader {
                 f.index_category == "vector"
                     && f.column_name == column
                     && self.config.is_index_valid(f)
+                    && !matches!(
+                        f.blob_type.as_deref(),
+                        Some(crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS)
+                            | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_MAPPING)
+                            | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_GRAPH)
+                            | Some("centroids")
+                            | Some("mapping")
+                            | Some("cluster_graph")
+                    )
             })
             .filter(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())))
             .cloned()
@@ -1217,10 +1241,15 @@ impl HybridReader {
         // column with both a float and a TQ8 index silently served TQ8.)
         let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
             match f.blob_type.as_deref() {
-                Some("hnsw") | Some("hnsw_f32") => 0,
+                Some("hnsw")
+                | Some("hnsw_f32")
+                | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW) => 0,
                 Some("hnsw_ivf") => 1,
-                Some("hnsw_pq") => 2,
-                Some("hnsw_tq8") | Some("hnsw_tq4") => 3,
+                Some("hnsw_pq") | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_PQ) => 2,
+                Some("hnsw_tq8")
+                | Some("hnsw_tq4")
+                | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ8)
+                | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ4) => 3,
                 _ => 4,
             }
         };

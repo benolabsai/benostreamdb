@@ -616,6 +616,44 @@ def reindex_and_preload(bsdb, args, mode: str):
         reindex_s = time.time() - t_idx
         write_index_mode(db_path, mode, idx_type, args)
 
+    # Index-only compaction: build the table-level, cluster-keyed artifact.
+    #
+    # This is the "global clustering" artifact from
+    # plans/global_clustering_compaction.md: one Puffin file, not owned by any
+    # data file, keyed by global cluster, whose nodes carry (segment_id, row_id).
+    # The Parquet files are read once and never rewritten. The query path
+    # (read_expr_stream_async) prefers this artifact when present, so the sweep
+    # below measures the compacted index instead of the per-segment fan-out.
+    compaction_s = 0.0
+    compaction_stats = None
+    if getattr(args, "index_compaction", False):
+        print(
+            f"    -> Index compaction: building table-level cluster artifact "
+            f"(k={args.compaction_k}, m={args.compaction_m}, "
+            f"ef_c={args.compaction_ef_construction}) ...",
+            flush=True,
+        )
+        t_comp = time.time()
+        table.rebuild_cluster_index(
+            "embedding",
+            k=args.compaction_k,
+            m=args.compaction_m,
+            ef_construction=args.compaction_ef_construction,
+            target_shard_bytes=getattr(args, "compaction_target_shard_bytes", None),
+        )
+        compaction_s = time.time() - t_comp
+        compaction_stats = {
+            "k": args.compaction_k,
+            "m": args.compaction_m,
+            "ef_construction": args.compaction_ef_construction,
+            "build_s": round(compaction_s, 2),
+        }
+        print(
+            f"    -> Index compaction complete in {compaction_s:.1f}s "
+            f"({args.compaction_k} global clusters)",
+            flush=True,
+        )
+
     sizes = db_breakdown(db_path)
     if not (skip or (has_existing_index and not force)):
         print(
@@ -659,6 +697,8 @@ def reindex_and_preload(bsdb, args, mode: str):
     return table, {
         "db_path": db_path,
         "reindex_s": round(reindex_s, 2),
+        "compaction_s": round(compaction_s, 2),
+        "compaction": compaction_stats,
         "preload_ms": warm.get("elapsed_ms", 0),
         **sizes,
     }
@@ -1027,6 +1067,19 @@ def main():
                         help="Delete the DB directory when the run finishes")
     parser.add_argument("--refine-factor", type=int, default=None,
                         help="Two-stage exact F32 rescore factor (e.g. 4 or 5)")
+    parser.add_argument("--index-compaction", action="store_true",
+                        help="After the per-segment index is ready, run index-only "
+                             "compaction: build the table-level, cluster-keyed Puffin "
+                             "artifact (global k-means + per-cluster HNSW). The Parquet "
+                             "data files are read once and never rewritten.")
+    parser.add_argument("--compaction-k", type=int, default=1024,
+                        help="Global cluster count for --index-compaction (default: 1024)")
+    parser.add_argument("--compaction-m", type=int, default=16,
+                        help="HNSW graph degree for --index-compaction (default: 16)")
+    parser.add_argument("--compaction-ef-construction", type=int, default=200,
+                        help="HNSW construction beam for --index-compaction (default: 200)")
+    parser.add_argument("--compaction-target-shard-bytes", type=int, default=None,
+                        help="Target size in bytes per sequential Puffin shard (default: 512 MiB = 536870912)")
     parser.add_argument("--dim", type=int, default=None,
                         help="Vector dimension (overrides dataset default)")
     parser.add_argument("--metric", choices=["l2", "ip", "inner_product", "cosine"], default=None,
@@ -1196,6 +1249,7 @@ def main():
                         "metric": metric,
                         "hardware": args.hardware,
                         "reindex_s": meta["reindex_s"],
+                        "compaction_s": meta.get("compaction_s", 0.0),
                         "preload_ms": meta["preload_ms"],
                         "index_size_mb": meta["index_size_mb"],
                         "data_size_mb": meta["data_size_mb"],
@@ -1249,6 +1303,12 @@ def main():
                 "flush_every": args.flush_every,
                 "k": args.k,
                 "queries": args.queries,
+            },
+            "index_compaction": {
+                "enabled": bool(getattr(args, "index_compaction", False)),
+                "k": args.compaction_k,
+                "m": args.compaction_m,
+                "ef_construction": args.compaction_ef_construction,
             },
             "envelope": {
                 "hardware": args.hardware,

@@ -530,6 +530,9 @@ impl Table {
         let index_all = self.indexing.index_all;
         let primary_key = self.primary_key.read().clone();
         let gate = self.index_build_gate.clone();
+        // Table-level centroids for this pass, if `rebuild_indexes_with_global_centroids`
+        // staged them. Empty for ordinary builds.
+        let global_centroids = self.indexing.global_centroids.read().clone();
 
         let entries_results: Vec<Result<crate::core::manifest::ManifestEntry>> =
             futures::stream::iter(to_build.into_iter().map(|entry| {
@@ -541,6 +544,7 @@ impl Table {
                 let index_configs = index_configs.clone();
                 let primary_key = primary_key.clone();
                 let gate = gate.clone();
+                let global_centroids = global_centroids.clone();
 
                 async move {
                     // Share the write path's build gate (see `Table::index_build_gate`).
@@ -587,6 +591,7 @@ impl Table {
                     let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
                     let mut writer = HybridSegmentWriter::new(config)
                         .with_index_configs(index_configs)
+                        .with_global_centroids(global_centroids)
                         .with_record_count(current_entry.record_count as usize)
                         .with_existing_stats(current_entry.column_stats.clone());
                     writer.primary_key = primary_key;

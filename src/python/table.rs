@@ -512,6 +512,66 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Build a table-level, cluster-keyed vector index for `column`.
+    ///
+    /// Unlike `rebuild_index`, this produces **one** Puffin artifact that is not
+    /// owned by any data file. It is keyed by global cluster and its graph nodes
+    /// carry `(segment_id, row_id)`, so a query becomes one index call plus the
+    /// existing row fetch — no per-segment fan-out. The Parquet files are read
+    /// once and never rewritten.
+    ///
+    /// The artifact is bound to the manifest version and data-file set it was
+    /// built from; any later data commit invalidates it, and queries fall back
+    /// to the per-segment index until it is rebuilt.
+    ///
+    /// Args:
+    ///     column: vector column to index
+    ///     k: number of global clusters (default 1024)
+    ///     m: HNSW graph degree (default 16)
+    ///     ef_construction: HNSW construction beam (default 200)
+    ///     target_shard_bytes: optional target size per sequential Puffin shard (default: 512 MiB)
+    #[pyo3(signature = (column, k=1024, m=16, ef_construction=200, target_shard_bytes=None))]
+    fn rebuild_cluster_index(
+        &mut self,
+        py: Python<'_>,
+        column: String,
+        k: usize,
+        m: usize,
+        ef_construction: usize,
+        target_shard_bytes: Option<usize>,
+    ) -> PyResult<()> {
+        py.allow_threads(|| {
+            TOKIO_RUNTIME.block_on(
+                self.table
+                    .rebuild_cluster_index_with_target(column, k, m, ef_construction, target_shard_bytes),
+            )
+        })
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Phase-1 validation: rebuild per-segment indexes against one global
+    /// centroid set.
+    ///
+    /// Trains `k` centroids over a sample spanning every segment and rebuilds
+    /// each segment's index against them. Expected to show no improvement on its
+    /// own — a global cluster is still split across segments — so it exists to
+    /// isolate the co-location effect before `rebuild_cluster_index` is trusted.
+    #[pyo3(signature = (columns=None, k=1024))]
+    fn rebuild_indexes_with_global_centroids(
+        &mut self,
+        py: Python<'_>,
+        columns: Option<Vec<String>>,
+        k: usize,
+    ) -> PyResult<()> {
+        py.allow_threads(|| {
+            TOKIO_RUNTIME.block_on(
+                self.table
+                    .rebuild_indexes_with_global_centroids(columns, k),
+            )
+        })
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Invalidate resident index and metadata caches without rebuilding indexes.
     ///
     /// If `all` is true, also flushes raw byte, block, parquet, and delete caches.

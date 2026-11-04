@@ -75,6 +75,110 @@ fn default_index_compression() -> String {
     "zstd".to_string()
 }
 
+/// A **table-level** index artifact: one Puffin file that is not owned by any
+/// single data file.
+///
+/// [`IndexFile`] hangs off a [`ManifestEntry`], so it is per-data-file and its
+/// lineage bindings (`source_snapshot_id`, `source_data_checksum`,
+/// `source_record_count`) describe exactly one Parquet file. A cluster-keyed
+/// vector index spans every data file in the table, so it has no single file to
+/// bind to.
+///
+/// The lineage contract for this type is deliberately different, and it is the
+/// answer ADR_001 requires for a table-level index:
+///
+/// * `source_manifest_version` binds the artifact to the manifest version it was
+///   built from.
+/// * `source_segments` records the exact set of data files it covers.
+/// * Any commit that changes the data files drops `Manifest::table_indexes`
+///   (the field is rebuilt from scratch by [`Manifest::new`] and friends), so a
+///   stale artifact can never be served against newer data. Rebuilding is the
+///   only way to re-register one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TableIndexFile {
+    /// Format version of the serialized artifact.
+    #[serde(default = "default_index_format_version")]
+    pub format_version: u32,
+
+    /// Unique identifier for this index instance.
+    pub index_id: String,
+
+    /// High-level index category. Always `"vector"` today.
+    pub index_category: String,
+
+    /// Concrete algorithm implementation, e.g. `"cluster_hnsw_tq8"`.
+    pub algorithm: String,
+
+    /// Target column name within the Parquet schema.
+    pub column_name: String,
+
+    // -----------------------------------------------------------------------
+    // Table-level lineage bindings
+    // -----------------------------------------------------------------------
+    /// Manifest version this artifact was built from.
+    pub source_manifest_version: u64,
+
+    /// Data files (segment ids) covered by this artifact. A query whose manifest
+    /// contains a data file outside this set must not use the artifact.
+    #[serde(default)]
+    pub source_segments: Vec<String>,
+
+    /// Total number of indexed rows across all segments.
+    #[serde(default)]
+    pub source_record_count: i64,
+
+    /// Cryptographic SHA-256 hash of the artifact itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_checksum: Option<String>,
+
+    // -----------------------------------------------------------------------
+    // Physical storage location
+    // -----------------------------------------------------------------------
+    /// Physical URI or relative storage path of the Puffin container.
+    pub file_path: String,
+
+    /// Individual sequential shard files when the table index is partitioned.
+    #[serde(default)]
+    pub shard_files: Vec<String>,
+
+    /// Puffin blob type of the container's primary payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_type: Option<String>,
+
+    /// Number of global clusters in the artifact.
+    #[serde(default)]
+    pub cluster_count: usize,
+
+    /// Vector dimensionality.
+    #[serde(default)]
+    pub dim: usize,
+
+    /// Distance metric name (`l2`, `cosine`, `ip`, ...).
+    #[serde(default)]
+    pub metric: String,
+
+    /// Compression algorithm applied to the artifact ("zstd", "lz4", "none").
+    #[serde(default = "default_index_compression")]
+    pub compression: String,
+}
+
+impl TableIndexFile {
+    /// Whether this artifact covers exactly the given set of segment ids.
+    ///
+    /// Order-insensitive. Used by the read path to reject an artifact that was
+    /// built before a data file was added or removed.
+    pub fn covers_segments(&self, segments: &[String]) -> bool {
+        if self.source_segments.len() != segments.len() {
+            return false;
+        }
+        let mut a = self.source_segments.clone();
+        let mut b = segments.to_vec();
+        a.sort_unstable();
+        b.sort_unstable();
+        a == b
+    }
+}
+
 impl IndexFile {
     /// Whether this index belongs to the lexical (full-text) family.
     ///
@@ -1461,6 +1565,15 @@ pub struct Manifest {
     pub properties: HashMap<String, String>,
     #[serde(default)]
     pub last_column_id: i32,
+    /// Table-level index artifacts (not owned by any single data file).
+    ///
+    /// `#[serde(default)]` keeps every pre-existing manifest readable: an old
+    /// table loads with an empty list and the read path falls back to the
+    /// per-segment index. The field is intentionally **not** carried forward by
+    /// [`Manifest::new`] and friends, so any data commit invalidates the
+    /// artifact — see [`TableIndexFile`] for the lineage contract.
+    #[serde(default)]
+    pub table_indexes: Vec<TableIndexFile>,
 }
 
 fn default_format_version() -> i32 {
@@ -1486,6 +1599,7 @@ impl Manifest {
             default_sort_order_id: 0,
             properties: HashMap::new(),
             last_column_id: 0,
+            table_indexes: Vec::new(),
         }
     }
 
@@ -1518,6 +1632,7 @@ impl Manifest {
             default_sort_order_id: 0,
             properties: HashMap::new(),
             last_column_id: last_id,
+            table_indexes: Vec::new(),
         }
     }
 
@@ -1552,6 +1667,7 @@ impl Manifest {
             default_sort_order_id: 0,
             properties: HashMap::new(),
             last_column_id: last_id,
+            table_indexes: Vec::new(),
         }
     }
 }

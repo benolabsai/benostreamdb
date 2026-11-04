@@ -12,13 +12,16 @@
 # The abi3 wheel is mounted at /wheels and installed at start-up, so the same
 # image works for every engine build:
 #   maturin build --release --out dist
-FROM python:3.12-slim
+FROM ubuntu:26.04
 
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 DEBIAN_FRONTEND=noninteractive
 
 # Harness dependencies. psutil is used for RSS/peak reporting and for the
 # fallback memory figure when no cgroup limit is present.
-RUN pip install numpy pandas pyarrow psutil
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --break-system-packages numpy pandas pyarrow psutil
 
 WORKDIR /opt/bench
 COPY benchmarks/run_neurips_bigann.py /opt/bench/run_neurips_bigann.py

@@ -137,6 +137,12 @@ pub struct HybridSegmentWriter {
     pub(crate) graph_data: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) file_checksum: parking_lot::Mutex<Option<String>>,
     pub(crate) puffin_index_entries: parking_lot::Mutex<Vec<crate::core::manifest::IndexFile>>,
+    /// Table-level centroids to assign against, keyed by column.
+    ///
+    /// Empty for the default per-segment build. Populated by
+    /// `Table::rebuild_indexes_with_global_centroids` so every segment in one
+    /// rebuild pass shares the same cluster ids.
+    pub(crate) global_centroids: parking_lot::Mutex<HashMap<String, Vec<Vec<f32>>>>,
 }
 
 impl HybridSegmentWriter {
@@ -155,7 +161,17 @@ impl HybridSegmentWriter {
             graph_data: parking_lot::Mutex::new(HashMap::new()),
             file_checksum: parking_lot::Mutex::new(None),
             puffin_index_entries: parking_lot::Mutex::new(Vec::new()),
+            global_centroids: parking_lot::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Assign this writer's vector builds against a table-level centroid set.
+    pub fn with_global_centroids(
+        mut self,
+        centroids: HashMap<String, Vec<Vec<f32>>>,
+    ) -> Self {
+        self.global_centroids = parking_lot::Mutex::new(centroids);
+        self
     }
 
     pub fn with_index_configs(
@@ -807,15 +823,30 @@ impl HybridSegmentWriter {
                 let local_base_path =
                     local_staging_dir.join(format!("{}.{}", self.config.segment_id, suffix));
 
-                // Streaming build and disk serialization: avoids keeping all bucket HNSW graphs in RAM
-                let saved_files = crate::core::index::hnsw_ivf::HnswIvfIndex::build_and_save_from_file(
-                    &tmp_path,
-                    local_base_path.to_str().context("Invalid UTF-8 in path")?,
-                    metric,
-                    None,
-                    None,
-                    algo,
-                )?;
+                // Streaming build and disk serialization: avoids keeping all bucket HNSW graphs in RAM.
+                // When the table supplied global centroids, assign against those
+                // instead of training per-segment k-means.
+                let table_centroids = self.global_centroids.lock().get(&col_name).cloned();
+                let saved_files = match table_centroids {
+                    Some(centroids) if !centroids.is_empty() => {
+                        crate::core::index::hnsw_ivf::HnswIvfIndex::build_and_save_from_file_with_centroids(
+                            &tmp_path,
+                            local_base_path.to_str().context("Invalid UTF-8 in path")?,
+                            metric,
+                            centroids,
+                            None,
+                            algo,
+                        )?
+                    }
+                    _ => crate::core::index::hnsw_ivf::HnswIvfIndex::build_and_save_from_file(
+                        &tmp_path,
+                        local_base_path.to_str().context("Invalid UTF-8 in path")?,
+                        metric,
+                        None,
+                        None,
+                        algo,
+                    )?,
+                };
 
                 {
                     let mut meta = self.index_metadata.lock();

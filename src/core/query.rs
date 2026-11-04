@@ -812,6 +812,7 @@ pub async fn execute_vector_search_with_config(
             let filter_ref = request.filter.clone();
             let ef_search_val = request.ef_search;
             let metric = request.metric;
+            let refine_factor = request.refine_factor;
 
             let columns_clone = request.columns.clone();
 
@@ -879,7 +880,7 @@ pub async fn execute_vector_search_with_config(
                         target_schema,
                         request.use_mmap,
                         target_clusters,
-                        None,
+                        refine_factor,
                         request.probes,
                     )
                     .await?;

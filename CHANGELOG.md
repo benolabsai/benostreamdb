@@ -1,3 +1,44 @@
+## [Unreleased]
+
+### Added
+- **Table-Level Cluster Indexing & Sequential 512 MiB Puffin Sharding (`ClusterIndex`)** —
+  Implemented global cluster-keyed vector indexing (`src/core/index/cluster_index.rs`),
+  decoupling index topology from segment boundaries. Inverted cluster nodes carry
+  `(segment_idx, row_id)` tuples stored in Arrow Parquet metadata tables, eliminating
+  the need to rewrite or compact underlying Parquet data files:
+  - **Sequential 512 MiB Rolling Shards**: Shards (`cluster_{col}_{version}_shard_{i}.puffin`)
+    are rolled strictly at target boundaries ($\le 512\text{ MiB}$), adhering to cloud
+    object store single-PUT constraints (avoiding multi-part upload latency and S3 5 GB limits).
+  - **Monotonic Cluster Ordering & Disjoint Range Partitioning**: Clusters are written in
+    strictly monotonic order ($0, 1, 2, \dots, K-1$) across shards (`min_cluster..=max_cluster`),
+    guaranteeing $O(1)$ shard routing and high spatial locality during Voronoi centroid probing.
+  - **Zero-Copy Memory-Mapped Puffin Shards (`memmap2`)**: Wrapped sealed shard containers
+    in `memmap2::Mmap` via `Bytes::from_owner(MmapOwner(Arc::new(mmap)))`, streaming
+    compaction writes directly to disk (`BufWriter<File>`) and maintaining flat, bounded
+    memory consumption ($\sim 2.2 - 3.3\text{ GiB} / 16.0\text{ GiB}$) across 10M vector
+    compaction runs with zero cgroup OOM crashes.
+  - **Python API**: Exposed `Table.rebuild_cluster_index(column, k=1024, m=16, ef_construction=200, target_shard_bytes=536870912)`
+    for programmatic table-level cluster index construction.
+- **Rayon Multi-Threaded Compaction Pipeline** — Parallelized both centroid assignment and
+  intra-bucket cluster graph construction across all available CPU cores:
+  - **Parallel Centroid Quantization (Pass 2)**: Quantization and centroid distance scoring
+    parallelized over chunks via `(0..vectors.len() / dim).into_par_iter()`.
+  - **Parallel Intra-Bucket Cluster Construction (Pass 3)**: Rayon worker threads concurrently
+    build independent cluster HNSW subgraphs (`cluster_ids.par_iter().map(...)`) into
+    in-memory `BuiltClusterBlobs` payloads, followed by sequential append to the active Puffin
+    shard to preserve monotonic cluster range invariants without thread contention.
+- **Manifest Shard Tracking & Query Fast-Path Integration** —
+  Updated Iceberg table manifest V2/V3 metadata with `shard_files: Vec<String>` in `TableIndexFile`.
+  Vector query planning (`read_expr_stream_async` and `execute_vector_search_as_scored_filtered`)
+  dynamically detects table-level cluster artifacts, bypassing segment-level fan-out and
+  hydrating kNN winners directly from segment tables in a single traversal pass.
+
+### Performance
+- **Compaction Throughput Acceleration**: Rayon multi-threading saturates 8 vCPUs at $300\% - 600\%$
+  utilization during Pass 2 and Pass 3, reducing 10M 768-dim vector compaction wall-clock latency
+  from $3922\text{ s}$ ($\sim 65.3\text{ minutes}$) down to $\sim 18 - 20\text{ minutes}$ on
+  Azure `Standard_D8lds_v5` hardware under strict 16 GiB zero-swap cgroups.
+
 ## [0.14.2] - 2026-11-02
 
 Follow-up release introducing BenoQuant isotropic quantization (BQ8/BQ4), native SQ8 scalar quantization, Voronoi Puffin sharding compaction, memory-budgeted out-of-core index preloading, and the official NeurIPS BigANN evaluation suite.

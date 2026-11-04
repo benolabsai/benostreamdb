@@ -605,16 +605,26 @@ table.add_index("embedding", "hnsw")
 
 ### Voronoi Puffin Sharding & Out-of-Core Memory Management
 
-When operating on multi-million or 100M+ vector tables, BenoStreamDB maintains out-of-core memory safety through physical Voronoi shard compaction and advisory memory budgeting:
+When operating on multi-million or 100M+ vector tables, BenoStreamDB maintains out-of-core memory safety through physical Voronoi shard compaction, table-level cluster indexing, and advisory memory budgeting:
 
 ```python
-# 1. Compact segment index sidecars into clustered Voronoi Puffin shards (512 MB target)
+# 1. Build table-level cluster index across rolling 512 MiB Puffin shards (Rayon parallelized)
+# Decouples index topology from data files: zero Parquet rewrites, O(1) shard routing, zero-copy mmap
+table.rebuild_cluster_index(
+    "embedding",
+    k=1024,                       # 1,024 global Voronoi clusters
+    m=16,                         # HNSW graph connectivity
+    ef_construction=200,          # HNSW build quality
+    target_shard_bytes=536870912  # Strict 512 MiB rolling shard limit for S3 single-PUT compliance
+)
+
+# 2. Compact segment index sidecars into clustered Voronoi Puffin shards (512 MB target)
 table.compact_indexes("embedding", target_shard_bytes=536870912)
 
-# 2. Preload Voronoi centroids and top-layer graphs up to an advisory RAM budget (e.g. 8 GiB)
+# 3. Preload Voronoi centroids and top-layer graphs up to an advisory RAM budget (e.g. 8 GiB)
 table.preload_indexes(max_memory_bytes=8 * 1024**3, spill_to_disk=False)
 
-# 3. Invalidate global engine caches (HNSW, IVF, Voronoi, CSR, and block caches)
+# 4. Invalidate global engine caches (HNSW, IVF, Voronoi, CSR, and block caches)
 import benostreamdb as bsdb
 bsdb.clear_cache(all=True)
 ```

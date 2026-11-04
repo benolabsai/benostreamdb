@@ -855,6 +855,219 @@ impl Table {
             duration_ms,
         })
     }
+
+    /// Build and register a table-level, cluster-keyed vector index.
+    ///
+    /// This is the Phase-2 artifact: one Puffin file, not owned by any data
+    /// file, keyed by global cluster, whose nodes carry `(segment_id, row_id)`.
+    /// The Parquet files are read once and never rewritten.
+    ///
+    /// The artifact is bound to the manifest version it was built from and to
+    /// the exact set of data files it covers. Any later data commit drops
+    /// `Manifest::table_indexes`, so a stale artifact is never served.
+    pub async fn rebuild_cluster_index(
+        &self,
+        column: String,
+        k: usize,
+        m: usize,
+        ef_construction: usize,
+    ) -> Result<()> {
+        self.rebuild_cluster_index_with_target(column, k, m, ef_construction, None)
+            .await
+    }
+
+    /// Rebuild the table-level cluster index with an optional target shard size override.
+    pub async fn rebuild_cluster_index_with_target(
+        &self,
+        column: String,
+        k: usize,
+        m: usize,
+        ef_construction: usize,
+        target_shard_bytes: Option<usize>,
+    ) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
+        let _ = self.wait_for_background_tasks_async().await;
+
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (manifest, entries, version) = manager.load_latest_full().await?;
+        if entries.is_empty() {
+            anyhow::bail!("rebuild_cluster_index: table has no data files");
+        }
+
+        let algo = self.vector_algorithm_for(&column);
+        tracing::info!(
+            column = %column,
+            clusters = k,
+            m = m,
+            ef_construction = ef_construction,
+            segments = entries.len(),
+            "rebuild_cluster_index: building table-level cluster artifact"
+        );
+
+        let index = crate::core::index::ClusterIndex::build_from_table_with_target(
+            self.store.clone(),
+            &entries,
+            &column,
+            &algo,
+            k,
+            m,
+            ef_construction,
+            target_shard_bytes,
+        )
+        .await?;
+
+        let new_version = version + 1;
+        let safe_column: String = column
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let path = format!("indexes/cluster_{}_{}.puffin", safe_column, new_version);
+        let saved_paths = index.save(self.store.clone(), &path).await?;
+        let primary_path = saved_paths.first().cloned().unwrap_or(path.clone());
+
+        let mut new_manifest = manifest.clone();
+        new_manifest.version = new_version;
+        new_manifest.prev_version = Some(version);
+        new_manifest.timestamp_ms = chrono::Utc::now().timestamp_millis();
+        new_manifest
+            .table_indexes
+            .retain(|idx| idx.column_name != column);
+        new_manifest.table_indexes.push(index.to_table_index_file_with_shards(
+            &primary_path,
+            saved_paths,
+            new_version,
+            algo.name(),
+        ));
+
+        manager.commit_manifest(new_manifest.clone()).await?;
+        self.publish_snapshot_async(&new_manifest, "replace").await?;
+
+        // A rebuild replaces the artifact bytes; drop every cache that could
+        // still serve the previous one.
+        self.indexing.cluster_indexes.write().clear();
+        self.indexing.vector_routers.write().clear();
+        crate::core::cache::HNSW_IVF_CACHE.invalidate_all();
+        crate::core::cache::MANIFEST_CACHE.invalidate_all();
+        crate::core::cache::MANIFEST_LIST_CACHE.invalidate_all();
+        crate::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+
+        tracing::info!(
+            column = %column,
+            path = %path,
+            clusters = index.cluster_count(),
+            segments = index.segment_count(),
+            "rebuild_cluster_index: artifact committed"
+        );
+        Ok(())
+    }
+
+    /// Phase-1 validation: rebuild per-segment indexes against one global
+    /// centroid set.
+    ///
+    /// Trains `k` centroids over a sample spanning every segment, stages them
+    /// for the backfill path, and forces a rebuild. Every segment then assigns
+    /// against the same centroids, so a cluster id means the same thing
+    /// everywhere.
+    ///
+    /// This is expected to show **no improvement** — a global cluster is still
+    /// split across segments, so a probe still touches many files. It exists to
+    /// isolate the co-location effect before the table-level artifact is
+    /// trusted.
+    pub async fn rebuild_indexes_with_global_centroids(
+        &self,
+        columns: Option<Vec<String>>,
+        k: usize,
+    ) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
+        let _ = self.wait_for_background_tasks_async().await;
+
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, entries, _) = manager.load_latest_full().await?;
+        if entries.is_empty() {
+            anyhow::bail!("rebuild_indexes_with_global_centroids: table has no data files");
+        }
+
+        let target_columns = columns.unwrap_or_else(|| self.vector_columns());
+        if target_columns.is_empty() {
+            anyhow::bail!("rebuild_indexes_with_global_centroids: no vector columns found");
+        }
+
+        let mut staged: std::collections::HashMap<String, Vec<Vec<f32>>> =
+            std::collections::HashMap::new();
+        for column in &target_columns {
+            let sample = crate::core::index::cluster_index::sample_table_vectors(
+                self.store.clone(),
+                &entries,
+                column,
+                crate::core::index::cluster_index::DEFAULT_SAMPLE_BUDGET,
+            )
+            .await?;
+            if sample.is_empty() {
+                tracing::warn!(column = %column, "no vectors sampled; skipping global centroids");
+                continue;
+            }
+            let centroids = crate::core::index::global_centroids::train_global(&sample, k, None)?;
+            tracing::info!(
+                column = %column,
+                centroids = centroids.len(),
+                samples = sample.len(),
+                "trained global centroids"
+            );
+            staged.insert(column.clone(), centroids);
+        }
+
+        if staged.is_empty() {
+            anyhow::bail!("rebuild_indexes_with_global_centroids: no centroids trained");
+        }
+
+        *self.indexing.global_centroids.write() = staged.clone();
+        let staged_columns: Vec<String> = staged.keys().cloned().collect();
+        let result = self.backfill_indexes_forced(staged_columns).await;
+        // Always clear the staged centroids: leaving them in place would make
+        // every later build silently reuse a stale centroid set.
+        self.indexing.global_centroids.write().clear();
+        result?;
+        self.wait_for_background_tasks_async().await?;
+        self.indexing.vector_routers.write().clear();
+        Ok(())
+    }
+
+    /// Vector columns known to the table, from index configs and manifest entries.
+    fn vector_columns(&self) -> Vec<String> {
+        let mut columns: Vec<String> = Vec::new();
+        for (name, config) in self.indexing.index_configs.read().iter() {
+            if config.algorithms.iter().any(is_vector_algorithm) && !columns.contains(name) {
+                columns.push(name.clone());
+            }
+        }
+        for column in self.indexing.index_columns.read().iter() {
+            if !columns.contains(column) {
+                columns.push(column.clone());
+            }
+        }
+        columns
+    }
+
+    /// The vector algorithm configured for `column`, or the default TQ8 index.
+    fn vector_algorithm_for(&self, column: &str) -> crate::core::manifest::IndexAlgorithm {
+        self.indexing
+            .index_configs
+            .read()
+            .get(column)
+            .and_then(|c| c.algorithms.iter().find(|a| is_vector_algorithm(a)).cloned())
+            .unwrap_or_else(crate::core::manifest::IndexAlgorithm::hnsw_tq8)
+    }
+}
+
+/// Whether an algorithm builds a dense-vector index.
+fn is_vector_algorithm(algo: &crate::core::manifest::IndexAlgorithm) -> bool {
+    matches!(
+        algo,
+        crate::core::manifest::IndexAlgorithm::Hnsw { .. }
+            | crate::core::manifest::IndexAlgorithm::HnswTq8 { .. }
+            | crate::core::manifest::IndexAlgorithm::HnswTq4 { .. }
+            | crate::core::manifest::IndexAlgorithm::HnswPq { .. }
+    )
 }
 
 /// Statistics returned by manual index compaction (`compact_indexes`).

@@ -542,6 +542,78 @@ impl Table {
         }
     }
 
+    /// Ensure the table-level, cluster-keyed index for `column` is resident.
+    ///
+    /// Mirrors [`Self::ensure_vector_router`]: returns the cached artifact when
+    /// present, otherwise loads it from the manifest's `table_indexes` list.
+    ///
+    /// The artifact is rejected when the manifest's current data files are not
+    /// exactly the set it was built from. That is the table-level lineage
+    /// contract: a data commit drops `table_indexes`, but a reader holding a
+    /// stale in-process cache must also refuse to serve it.
+    pub async fn ensure_cluster_index(
+        &self,
+        column: &str,
+    ) -> Result<Option<Arc<crate::core::index::ClusterIndex>>> {
+        if let Some(index) = self.indexing.cluster_indexes.read().get(column).cloned() {
+            return Ok(Some(index));
+        }
+
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (manifest, entries, version) = manager.load_latest_full().await?;
+
+        let Some(entry) = manifest
+            .table_indexes
+            .iter()
+            .find(|idx| idx.column_name == column && idx.index_category == "vector")
+        else {
+            return Ok(None);
+        };
+
+        // Reject an artifact that does not cover exactly the current data files.
+        let current_segments: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                let name = e.file_path.rsplit('/').next().unwrap_or(&e.file_path);
+                let name = name.strip_suffix(".puffin").unwrap_or(name);
+                name.strip_suffix(".parquet").unwrap_or(name).to_string()
+            })
+            .collect();
+        if !entry.covers_segments(&current_segments) {
+            tracing::warn!(
+                column = %column,
+                artifact_segments = entry.source_segments.len(),
+                current_segments = current_segments.len(),
+                "ensure_cluster_index: artifact does not cover the current data files; ignoring"
+            );
+            return Ok(None);
+        }
+
+        let index = if !entry.shard_files.is_empty() {
+            crate::core::index::ClusterIndex::load_sharded(
+                self.store.clone(),
+                &entry.shard_files,
+                column,
+                version,
+            )
+            .await?
+        } else {
+            crate::core::index::ClusterIndex::load(
+                self.store.clone(),
+                &entry.file_path,
+                column,
+                version,
+            )
+            .await?
+        };
+        let index = Arc::new(index);
+        self.indexing
+            .cluster_indexes
+            .write()
+            .insert(column.to_string(), index.clone());
+        Ok(Some(index))
+    }
+
     /// Best-effort size of an index file (or its multi-file family).
     async fn index_size_bytes(&self, full_path: &str, idx: &IndexFile) -> u64 {
         // Puffin blob: the manifest records the exact length.

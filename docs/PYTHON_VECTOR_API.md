@@ -664,7 +664,22 @@ table.add_index(
     {"type": "composite_bitmap", "columns": ["tenant_id", "status"]},
 )
 
-# Maintenance
+# Maintenance & Index Compaction
+
+# 1. Rebuild table-level cluster index across sequential 512 MiB Puffin shards
+# Decouples index topology from data files: zero Parquet rewrites, O(1) shard routing, zero-copy mmap.
+table.rebuild_cluster_index(
+    column="text_embedding",
+    k=1024,                       # Number of global Voronoi clusters
+    m=16,                         # HNSW graph connectivity
+    ef_construction=200,          # HNSW build quality
+    target_shard_bytes=536870912  # 512 MiB rolling shard target for S3 single-PUT compliance
+)
+
+# 2. Segment-level Voronoi index compaction
+table.compact_indexes("text_embedding", target_shard_bytes=536870912)
+
+# 3. Data compaction and manifest vacuum
 table.compact()
 table.vacuum(retention_versions=10)
 ```

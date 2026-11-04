@@ -490,8 +490,51 @@ fn cpu_assignments(
     metric: VectorMetric,
 ) -> Vec<u32> {
     (0..vectors.len() / dim)
+        .into_par_iter()
         .map(|i| find_closest_centroid(&vectors[i * dim..(i + 1) * dim], centroids, metric) as u32)
         .collect()
+}
+
+/// Assign each vector to its nearest centroid, returning one label per vector.
+///
+/// Used by [`HnswIvfIndex::build_with_centroids`] when the caller supplies a
+/// table-level centroid set instead of letting each segment train its own
+/// k-means. Prefers the GPU batched kernel for L2 and falls back to the CPU
+/// path, which honours every metric.
+pub(crate) fn assign_to_centroids(
+    vectors: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    metric: VectorMetric,
+) -> Result<Vec<usize>> {
+    if vectors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dim = vectors[0].len();
+    if let Some(bad) = centroids.iter().find(|c| c.len() != dim) {
+        anyhow::bail!(
+            "centroid dimension mismatch: vectors are {}-d but a centroid is {}-d",
+            dim,
+            bad.len()
+        );
+    }
+
+    let flat: Vec<f32> = vectors.iter().flat_map(|v| v.iter().copied()).collect();
+
+    // The GPU kernel implements L2 only; other metrics must go through the CPU
+    // path or they would silently rank by the wrong distance.
+    if metric == VectorMetric::L2 {
+        let centroids_flat: Vec<f32> = centroids.iter().flat_map(|c| c.iter().copied()).collect();
+        if let Ok(labels) =
+            crate::core::index::gpu::compute_kmeans_assignment(&flat, &centroids_flat, dim)
+        {
+            return Ok(labels.into_iter().map(|l| l as usize).collect());
+        }
+    }
+
+    Ok(cpu_assignments(&flat, centroids, dim, metric)
+        .into_iter()
+        .map(|l| l as usize)
+        .collect())
 }
 
 fn find_closest_centroid(vec: &[f32], centroids: &[Vec<f32>], metric: VectorMetric) -> usize {
@@ -750,6 +793,59 @@ impl HnswIvfIndex {
         algo: &IndexAlgorithm,
         seed: Option<u64>,
     ) -> Result<Vec<String>> {
+        Self::build_and_save_from_file_inner(
+            tmp_path,
+            output_base_path,
+            metric,
+            n_lists,
+            hnsw_m,
+            algo,
+            seed,
+            None,
+        )
+    }
+
+    /// Build a segment's index against a caller-supplied (table-level) centroid
+    /// set instead of training per-segment k-means.
+    ///
+    /// This is the Phase-1 validation path: every segment assigns against the
+    /// same centroids, so a global cluster id means the same thing everywhere.
+    /// The cluster count is `centroids.len()`.
+    pub fn build_and_save_from_file_with_centroids(
+        tmp_path: &str,
+        output_base_path: &str,
+        metric: VectorMetric,
+        centroids: Vec<Vec<f32>>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+    ) -> Result<Vec<String>> {
+        if centroids.is_empty() {
+            anyhow::bail!("build_and_save_from_file_with_centroids requires centroids");
+        }
+        let n_lists = Some(centroids.len());
+        Self::build_and_save_from_file_inner(
+            tmp_path,
+            output_base_path,
+            metric,
+            n_lists,
+            hnsw_m,
+            algo,
+            None,
+            Some(centroids),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_and_save_from_file_inner(
+        tmp_path: &str,
+        output_base_path: &str,
+        metric: VectorMetric,
+        n_lists: Option<usize>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+        seed: Option<u64>,
+        precomputed_centroids: Option<Vec<Vec<f32>>>,
+    ) -> Result<Vec<String>> {
         let start = std::time::Instant::now();
         tracing::info!(
             "Building & streaming HNSW-IVF out-of-core from file {} to {}",
@@ -869,7 +965,18 @@ impl HnswIvfIndex {
             })
             .unwrap_or(16);
 
-        let (centroids, _) = simple_kmeans_with_seed(&vectors_sampled, n_lists, 10, seed)?;
+        // Caller-supplied centroids bypass per-segment k-means entirely; the
+        // cluster count is then fixed by the centroid set, not by `n_lists`.
+        let (centroids, n_lists) = match precomputed_centroids {
+            Some(centroids) => {
+                let n = centroids.len();
+                (centroids, n)
+            }
+            None => {
+                let (centroids, _) = simple_kmeans_with_seed(&vectors_sampled, n_lists, 10, seed)?;
+                (centroids, n_lists)
+            }
+        };
 
         let quantizer = match algo {
             IndexAlgorithm::HnswTq8 { .. } => {
@@ -1428,6 +1535,55 @@ impl HnswIvfIndex {
         offset: usize,
         seed: Option<u64>,
     ) -> Result<Self> {
+        Self::build_inner(vectors, metric, n_lists, hnsw_m, algo, offset, seed, None)
+    }
+
+    /// Build HNSW-IVF index using caller-supplied centroids instead of running
+    /// per-segment k-means.
+    ///
+    /// This is the entry point for table-level (global) clustering: every segment
+    /// is assigned against the same centroid set, so a global cluster id means the
+    /// same thing in every segment. Without it, each segment trains its own
+    /// k-means and a query must probe every segment to cover its true neighbours.
+    ///
+    /// The cluster count is `centroids.len()`; `n_lists` is not a parameter here
+    /// for that reason.
+    pub fn build_with_centroids(
+        vectors: Vec<Vec<f32>>,
+        metric: VectorMetric,
+        centroids: Vec<Vec<f32>>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+        offset: usize,
+        seed: Option<u64>,
+    ) -> Result<Self> {
+        if centroids.is_empty() {
+            anyhow::bail!("build_with_centroids requires at least one centroid");
+        }
+        let n_lists = Some(centroids.len());
+        Self::build_inner(
+            vectors,
+            metric,
+            n_lists,
+            hnsw_m,
+            algo,
+            offset,
+            seed,
+            Some(centroids),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_inner(
+        vectors: Vec<Vec<f32>>,
+        metric: VectorMetric,
+        n_lists: Option<usize>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+        offset: usize,
+        seed: Option<u64>,
+        precomputed_centroids: Option<Vec<Vec<f32>>>,
+    ) -> Result<Self> {
         let start = std::time::Instant::now();
         if vectors.is_empty() {
             anyhow::bail!("Cannot build HNSW-IVF index from empty vector set");
@@ -1474,10 +1630,17 @@ impl HnswIvfIndex {
             algo
         );
 
-        // Step 1: Cluster vectors using k-means
+        // Step 1: Cluster vectors. With caller-supplied centroids we only assign;
+        // otherwise train per-segment k-means as before.
         let t0 = std::time::Instant::now();
         let max_iters = 10;
-        let (centroids, labels) = simple_kmeans_with_seed(&vectors, n_lists, max_iters, seed)?;
+        let (centroids, labels) = match precomputed_centroids {
+            Some(centroids) => {
+                let labels = assign_to_centroids(&vectors, &centroids, metric)?;
+                (centroids, labels)
+            }
+            None => simple_kmeans_with_seed(&vectors, n_lists, max_iters, seed)?,
+        };
 
         // Step 2: Train Quantizer if requested
         let quantizer = match algo {

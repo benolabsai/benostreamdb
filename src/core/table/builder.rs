@@ -487,6 +487,12 @@ impl TableBuilder {
                 default_device: Arc::new(parking_lot::RwLock::new(self.default_device)),
                 memory_index: Arc::new(parking_lot::RwLock::new(initial_mem_index)),
                 vector_routers: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+                cluster_indexes: Arc::new(parking_lot::RwLock::new(
+                    std::collections::HashMap::new(),
+                )),
+                global_centroids: Arc::new(parking_lot::RwLock::new(
+                    std::collections::HashMap::new(),
+                )),
             },
 
             catalog_state: crate::core::table::TableCatalogState {

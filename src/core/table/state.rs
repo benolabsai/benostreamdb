@@ -53,6 +53,18 @@ pub(crate) struct TableIndexState {
     pub default_device: Arc<parking_lot::RwLock<Option<String>>>,
     pub memory_index: Arc<parking_lot::RwLock<Option<InMemoryVectorIndex>>>,
     pub vector_routers: Arc<parking_lot::RwLock<HashMap<String, Arc<crate::core::index::TableVectorRouter>>>>,
+    /// Table-level, cluster-keyed vector indexes, keyed by column.
+    ///
+    /// Populated lazily by `ensure_cluster_index`; cleared whenever a rebuild or
+    /// a data commit invalidates the artifact.
+    pub cluster_indexes:
+        Arc<parking_lot::RwLock<HashMap<String, Arc<crate::core::index::ClusterIndex>>>>,
+    /// Table-level centroids for the next per-segment rebuild, keyed by column.
+    ///
+    /// Set by `rebuild_indexes_with_global_centroids` and consumed by the
+    /// backfill path so every segment in one pass assigns against the same
+    /// centroid set. Empty for ordinary builds.
+    pub global_centroids: Arc<parking_lot::RwLock<HashMap<String, Vec<Vec<f32>>>>>,
 }
 
 /// Catalog identity and synchronization state for a Table
