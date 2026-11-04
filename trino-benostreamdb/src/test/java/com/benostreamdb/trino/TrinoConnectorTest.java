@@ -269,6 +269,20 @@ public class TrinoConnectorTest {
     }
 
     @Test
+    public void testConnectorFactoryProcedures() {
+        BenoStreamDBConnectorFactory factory = new BenoStreamDBConnectorFactory();
+        var connector = factory.create("test", Map.of(), null);
+        var procedures = connector.getProcedures();
+        assertNotNull("Procedures should not be null", procedures);
+
+        var names = procedures.stream().map(io.trino.spi.procedure.Procedure::getName).toList();
+        assertTrue("Should include rebuild_cluster_index", names.contains("rebuild_cluster_index"));
+        assertTrue("Should include warmup", names.contains("warmup"));
+        assertTrue("Should include add_index", names.contains("add_index"));
+        assertTrue("Should include compact", names.contains("compact"));
+    }
+
+    @Test
     public void testBeginInsertReturnsHandle() {
         BenoStreamDBMetadata metadata = new BenoStreamDBMetadata();
         BenoStreamDBTableHandle table = new BenoStreamDBTableHandle("default", "test_table");

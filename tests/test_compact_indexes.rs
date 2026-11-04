@@ -657,3 +657,44 @@ async fn test_sequential_sharded_cluster_index_traversal() -> anyhow::Result<()>
     Ok(())
 }
 
+#[tokio::test]
+async fn test_sql_execute_cluster_index_and_warmup() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let uri = dir.path().to_str().unwrap().to_string();
+    let dim = 8;
+    let s = schema(dim);
+
+    let table = Table::create_async(uri.clone(), s.clone()).await?;
+
+    let b1 = cluster_batch(s.clone(), 0, 50, 1.0, dim)?;
+    let b2 = cluster_batch(s.clone(), 50, 50, 50.0, dim)?;
+    table.write_async(vec![b1]).await?;
+    table.commit_async().await?;
+    table.write_async(vec![b2]).await?;
+    table.commit_async().await?;
+    table.wait_for_background_tasks_async().await?;
+
+    let session = benostreamdb::core::sql::session::BenoStreamSession::new(None);
+    session.register_table("events", Arc::new(table.clone()))?;
+
+    // 1. Run rebuild_cluster_index via standard SQL DDL
+    let sql_rebuild = "ALTER TABLE events EXECUTE rebuild_cluster_index(column => 'embedding', k => 2, m => 16, ef_c => 100, target_shard_mb => 512)";
+    let (res, _) = session.sql(sql_rebuild).await?;
+    assert!(res.is_empty() || res[0].num_rows() == 0);
+
+    // Verify manifest has table-level cluster index
+    let store = create_object_store(&uri)?;
+    let manager = ManifestManager::new(store.clone(), "", &uri);
+    let (manifest, _, _) = manager.load_latest_full().await?;
+    assert_eq!(manifest.table_indexes.len(), 1);
+    assert_eq!(manifest.table_indexes[0].column_name, "embedding");
+    assert_eq!(manifest.table_indexes[0].cluster_count, 2);
+
+    // 2. Run warmup via standard SQL DDL
+    let sql_warmup = "ALTER TABLE events EXECUTE warmup(n_probes => 2, max_memory_gb => 1.0)";
+    let (res_warm, _) = session.sql(sql_warmup).await?;
+    assert!(res_warm.is_empty() || res_warm[0].num_rows() == 0);
+
+    Ok(())
+}
+

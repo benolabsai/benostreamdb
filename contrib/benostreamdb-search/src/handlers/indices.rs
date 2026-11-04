@@ -315,6 +315,101 @@ pub async fn delete_single_alias(
     es_response(Ok(serde_json::json!({ "acknowledged": true })))
 }
 
+/// `POST /{index}/_rebuild_cluster` — rebuild Voronoi cluster index into rolling <= 512 MiB Puffin shards.
+pub async fn rebuild_cluster(
+    State(state): State<Arc<AppState>>,
+    Path(index): Path<String>,
+    body: Option<Json<Value>>,
+) -> Response {
+    es_response(rebuild_cluster_core(&state, &index, body.as_ref().map(|b| &b.0)).await)
+}
+
+pub(crate) async fn rebuild_cluster_core(
+    state: &AppState,
+    index: &str,
+    body: Option<&Value>,
+) -> Result<Value, BenoStreamError> {
+    AppState::validate_index_name(index)?;
+    state.ensure_index_writable(index)?;
+
+    let table = state.open_or_create(index, &None).await?;
+    let col = body
+        .and_then(|b| b.get("column"))
+        .and_then(Value::as_str)
+        .unwrap_or("embedding");
+    let k = body
+        .and_then(|b| b.get("k"))
+        .and_then(Value::as_u64)
+        .unwrap_or(1024) as usize;
+    let m = body
+        .and_then(|b| b.get("m"))
+        .and_then(Value::as_u64)
+        .unwrap_or(16) as usize;
+    let ef_c = body
+        .and_then(|b| b.get("ef_construction"))
+        .and_then(Value::as_u64)
+        .unwrap_or(200) as usize;
+    let shard_bytes = body
+        .and_then(|b| b.get("target_shard_mb"))
+        .and_then(Value::as_u64)
+        .map(|mb| (mb * 1024 * 1024) as usize)
+        .or(Some(536_870_912));
+
+    table
+        .rebuild_cluster_index_with_target(col.to_string(), k, m, ef_c, shard_bytes)
+        .await
+        .map_err(|e| BenoStreamError::internal(format!("rebuild_cluster failed for '{index}': {e}")))?;
+
+    Ok(serde_json::json!({
+        "acknowledged": true,
+        "index": index,
+        "column": col,
+        "k": k,
+        "m": m,
+        "ef_construction": ef_c
+    }))
+}
+
+/// `POST /{index}/_warmup` — pre-warm Voronoi centroid router and index shards into RAM.
+pub async fn warmup(
+    State(state): State<Arc<AppState>>,
+    Path(index): Path<String>,
+    body: Option<Json<Value>>,
+) -> Response {
+    es_response(warmup_core(&state, &index, body.as_ref().map(|b| &b.0)).await)
+}
+
+pub(crate) async fn warmup_core(
+    state: &AppState,
+    index: &str,
+    body: Option<&Value>,
+) -> Result<Value, BenoStreamError> {
+    AppState::validate_index_name(index)?;
+
+    let table = state.open_or_create(index, &None).await?;
+    let n_probes = body
+        .and_then(|b| b.get("n_probes"))
+        .and_then(Value::as_u64)
+        .unwrap_or(100) as usize;
+    let max_mem = body
+        .and_then(|b| b.get("max_memory_gb"))
+        .and_then(Value::as_f64)
+        .unwrap_or(8.0);
+
+    let stats = table
+        .warmup(Some(n_probes), Some(max_mem))
+        .await
+        .map_err(|e| BenoStreamError::internal(format!("warmup failed for '{index}': {e}")))?;
+
+    Ok(serde_json::json!({
+        "acknowledged": true,
+        "index": index,
+        "probes_run": stats.probes_run,
+        "clusters_warmed": stats.clusters_warmed,
+        "duration_ms": stats.duration_ms
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

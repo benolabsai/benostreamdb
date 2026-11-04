@@ -130,6 +130,8 @@ Spark 4.x: configure `spark.sql.catalog.benostream=com.benostreamdb.spark.BenoSt
 CALL benostream.system.add_index('my_table', 'embedding', 'vector');
 CALL benostream.system.build_index('my_table');
 CALL benostream.system.rebuild_index('my_table', 'embedding');
+CALL benostream.system.rebuild_cluster_index('my_table', 'embedding', 1024, 16, 200, 512);
+CALL benostream.system.warmup('my_table', 500, 8.0);
 CALL benostream.system.drop_index('my_table', 'embedding', 'vector');
 CALL benostream.system.show_indexes('my_table');
 

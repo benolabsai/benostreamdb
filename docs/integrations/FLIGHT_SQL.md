@@ -116,3 +116,28 @@ Use the standard Apache Arrow Flight SQL JDBC driver. Configure the connection U
 ```
 jdbc:arrow-flight-sql://127.0.0.1:50051?useEncryption=false
 ```
+
+---
+
+## Maintenance & Cluster Indexing
+
+Any Flight SQL client can execute table-level index compaction and cache warming via standard SQL DDL statement updates or custom Flight Actions:
+
+```sql
+-- Rebuild global Voronoi cluster index into rolling <= 512 MiB Puffin shards
+ALTER TABLE documents EXECUTE rebuild_cluster_index(
+    column => 'embedding',
+    k => 1024,
+    m => 16,
+    ef_construction => 200,
+    target_shard_mb => 512
+);
+
+-- Pre-warm Voronoi centroid router and active shards into RAM
+ALTER TABLE documents EXECUTE warmup(
+    n_probes => 500,
+    max_memory_gb => 8.0
+);
+```
+
+Clients calling `client.do_action("rebuild_cluster_index", body)` or `client.do_action("warmup", body)` can pass JSON payloads to achieve the same maintenance operations over Flight RPC.

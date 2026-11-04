@@ -99,6 +99,12 @@ class Api:
     def cat_indices(self):
         return self.session.get(self.base + "/_cat/indices")
 
+    def rebuild_cluster(self, index: str, body: dict | None = None):
+        return self.session.post(self.base + f"/{index}/_rebuild_cluster", json=body or {})
+
+    def warmup(self, index: str, body: dict | None = None):
+        return self.session.post(self.base + f"/{index}/_warmup", json=body or {})
+
     def cluster_stats(self):
         return self.session.get(self.base + "/_cluster/stats")
 
@@ -782,3 +788,43 @@ def test_search_get_q_param(api):
     # No q -> match_all.
     r = api.search_get(idx, {})
     assert r.json()["hits"]["total"]["value"] == 3
+
+
+def test_rebuild_cluster_and_warmup(api):
+    idx = api.index("clust")
+    api.create_index(
+        idx,
+        {
+            "mappings": {
+                "properties": {
+                    "title": {"type": "text"},
+                    "vector": {"type": "dense_vector", "dims": 4},
+                }
+            }
+        },
+    )
+    # Ingest docs with vectors
+    for i in range(10):
+        api.index_doc(
+            idx,
+            {
+                "title": f"item {i}",
+                "vector": [0.1 * (i + 1), 0.2, 0.3, 0.4],
+            },
+            doc_id=f"d{i}",
+        )
+    assert api.refresh(idx).status_code == 200
+
+    # Rebuild cluster index
+    r = api.rebuild_cluster(idx, {"column": "vector", "k": 2, "m": 16, "ef_construction": 100})
+    assert r.status_code == 200
+    res = r.json()
+    assert res["acknowledged"] is True
+    assert res["column"] == "vector"
+
+    # Pre-warm index
+    r_warm = api.warmup(idx, {"n_probes": 2, "max_memory_gb": 1.0})
+    assert r_warm.status_code == 200
+    res_warm = r_warm.json()
+    assert res_warm["acknowledged"] is True
+    assert "clusters_warmed" in res_warm

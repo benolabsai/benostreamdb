@@ -252,6 +252,12 @@ CALL benostream.system.build_index('spark_catalog.default.users');
 -- Rebuild a specific index column (drops and re-creates it)
 CALL benostream.system.rebuild_index('spark_catalog.default.users', 'embedding');
 
+-- Rebuild table-level Voronoi cluster index into rolling <= 512 MiB Puffin shards
+CALL benostream.system.rebuild_cluster_index('spark_catalog.default.users', 'embedding', 1024, 16, 200, 512);
+
+-- Pre-warm Voronoi centroid routes and active shards into RAM cache
+CALL benostream.system.warmup('spark_catalog.default.users', 500, 8.0);
+
 -- List all configured and built indexes: one row per index with
 -- (column_name, index_category, algorithm, index_id, format_version)
 CALL benostream.system.show_indexes('spark_catalog.default.users');

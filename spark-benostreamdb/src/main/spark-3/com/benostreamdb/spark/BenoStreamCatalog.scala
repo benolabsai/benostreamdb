@@ -10,10 +10,12 @@ import com.benostreamdb.spark.procedures.{
   CompactTableProcedure,
   DropIndexProcedure,
   DropPrimaryKeyProcedure,
+  RebuildClusterIndexProcedure,
   RebuildIndexProcedure,
   SetPrimaryKeyProcedure,
   ShowIndexesProcedure,
-  RegionalDriftProcedure
+  RegionalDriftProcedure,
+  WarmupProcedure
 }
 
 /**
@@ -40,6 +42,8 @@ class BenoStreamProcedureCatalog extends ProcedureCatalog with CatalogPlugin {
         case "drop_index" => new DropIndexProcedure()
         case "build_index" => new BuildIndexProcedure()
         case "rebuild_index" => new RebuildIndexProcedure()
+        case "rebuild_cluster_index" => new RebuildClusterIndexProcedure()
+        case "warmup" => new WarmupProcedure()
         case "compact" | "optimize" => new CompactTableProcedure()
         case "show_indexes" | "list_indexes" => new ShowIndexesProcedure()
         case "set_primary_key" => new SetPrimaryKeyProcedure()

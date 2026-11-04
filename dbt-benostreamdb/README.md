@@ -66,3 +66,17 @@ Notes:
   `l2`, `dot`, `l1`, `hamming`, `jaccard`).
 - Keep the embedded adapter for local development and for features that need the
   Python API directly (index building, graph traversal from Python).
+
+## Cluster Indexing & Cache Warming Macros
+
+Use post-hooks in your model files to automatically rebuild table-level Voronoi cluster indexes and prime memory caches following data ingestion:
+
+```sql+jinja
+{{ config(
+    materialized='table',
+    post_hook=[
+        rebuild_cluster_index(this, 'embedding', k=1024, m=16, ef_construction=200, target_shard_mb=512),
+        warmup(this, n_probes=500, max_memory_gb=8.0)
+    ]
+) }}
+```

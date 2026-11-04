@@ -47,6 +47,20 @@ public class BenoStreamDBJNIBridge {
 
     public static native boolean dropIndex(String tableUri, String column, String indexCategory);
 
+    // Global cluster index & warmup
+    public static native boolean rebuildClusterIndex(
+            String tableUri,
+            String column,
+            int k,
+            int m,
+            int efConstruction,
+            long targetShardBytes);
+
+    public static native boolean warmupTable(
+            String tableUri,
+            int nProbes,
+            double maxMemoryGb);
+
     // Index introspection: JSON array of index-file records.
     public static native String listIndexes(String tableUri);
 

@@ -108,7 +108,24 @@ public class BenoStreamDBConnectorFactory implements ConnectorFactory {
                             "setPrimaryKey", String.class, String.class),
                     procedure("drop_primary_key",
                             List.of(arg("TABLE"), arg("COLUMNS")),
-                            "dropPrimaryKey", String.class, String.class)));
+                            "dropPrimaryKey", String.class, String.class),
+                    procedure("rebuild_cluster_index",
+                            List.of(
+                                    arg("TABLE"),
+                                    optionalArg("COLUMN", "embedding"),
+                                    optionalArg("K", "1024"),
+                                    optionalArg("M", "16"),
+                                    optionalArg("EF_CONSTRUCTION", "200"),
+                                    optionalArg("TARGET_SHARD_MB", "512")),
+                            "rebuildClusterIndex",
+                            String.class, String.class, String.class, String.class, String.class, String.class),
+                    procedure("warmup",
+                            List.of(
+                                    arg("TABLE"),
+                                    optionalArg("N_PROBES", "100"),
+                                    optionalArg("MAX_MEMORY_GB", "8.0")),
+                            "warmup",
+                            String.class, String.class, String.class)));
         }
 
         /**

@@ -107,6 +107,8 @@ are engine-side operations, not Trino DDL.
 | `add_index` | `TABLE`, `COLUMN`, `ALGORITHM` (default `vector`) | Add a secondary index |
 | `build_index` | `TABLE`, `SEGMENT_ID` (default `all`) | Build a pending index |
 | `rebuild_index` | `TABLE`, `COLUMN` | Rebuild an index segment |
+| `rebuild_cluster_index` | `TABLE`, `COLUMN` (`embedding`), `K` (`1024`), `M` (`16`), `EF_CONSTRUCTION` (`200`), `TARGET_SHARD_MB` (`512`) | Build table-level Voronoi cluster index sealed into Puffin shards |
+| `warmup` | `TABLE`, `N_PROBES` (`100`), `MAX_MEMORY_GB` (`8.0`) | Pre-warm Voronoi cluster index shards into OS page cache |
 | `drop_index` | `TABLE`, `COLUMN` | Drop a secondary index |
 | `compact` | `TABLE` | Rewrite data files |
 | `optimize` | `TABLE` | Alias of `compact` |
@@ -116,6 +118,8 @@ are engine-side operations, not Trino DDL.
 ```sql
 CALL benostreamdb.system.add_index('default.docs', 'embedding', 'hnsw');
 CALL benostreamdb.system.build_index('default.docs');
+CALL benostreamdb.system.rebuild_cluster_index('default.docs', 'embedding', '1024', '16', '200', '512');
+CALL benostreamdb.system.warmup('default.docs', '500', '8.0');
 CALL benostreamdb.system.set_primary_key('default.docs', 'id');
 CALL benostreamdb.system.compact('default.docs');
 ```

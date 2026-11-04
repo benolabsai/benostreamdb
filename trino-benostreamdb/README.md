@@ -134,6 +134,7 @@ Exercised end-to-end through Trino 468 against a BenoStreamDB Iceberg table
 | Plan | `EXPLAIN` |
 | Write | `CREATE TABLE AS SELECT`, `INSERT … VALUES`, `INSERT … SELECT`, `DELETE` |
 | DDL | `CREATE SCHEMA`, `DROP TABLE` |
+| Procedures | `CALL system.rebuild_cluster_index(...)`, `CALL system.warmup(...)`, `compact`, `build_index` |
 | Row-level | `MERGE` — `UPDATE`, `DELETE`, `INSERT`, multi-clause and conditional forms |
 
 ### MERGE support
@@ -178,3 +179,26 @@ WHERE severity = 'ERROR' AND timestamp > NOW() - INTERVAL '1' DAY;
 
 ### Predicate & Vector Pushdown
 The connector translates Trino domain constraints directly into BenoStreamDB index queries (inverted scalar indexes and vector indexes), pruning data before decoding Arrow batches.
+
+### Stored Procedures (`system.*`)
+The connector exposes stored procedures for table maintenance, table-level cluster indexing, and page-cache priming:
+
+```sql
+-- Rebuild global Voronoi cluster index into rolling <= 512 MiB Puffin shards
+CALL benostreamdb.system.rebuild_cluster_index(
+    table => 'events',
+    column => 'embedding',
+    k => '1024',
+    m => '16',
+    ef_construction => '200',
+    target_shard_mb => '512');
+
+-- Pre-warm Voronoi centroid routes and active shards into RAM cache
+CALL benostreamdb.system.warmup(
+    table => 'events',
+    n_probes => '500',
+    max_memory_gb => '8.0');
+
+-- Rewrite data files into target Parquet files
+CALL benostreamdb.system.compact('events');
+```

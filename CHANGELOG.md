@@ -62,6 +62,19 @@ Major release consolidating vector search, out-of-core indexing, and performance
   local Docker configuration (`benchmarks/Dockerfile.neurips.local`), and standardized
   multi-mode evaluation harness across 1M, 10M, and 100M datasets under the Azure
   `Standard_D8lds_v5` profile (8 vCPU, 16 GiB RAM).
+- **Connector Surface Parity: Cluster Indexing & Cache Warming** —
+  Exposed `rebuild_cluster_index` and `warmup` across the entire connector ecosystem:
+  - **Trino Connector (`trino-benostreamdb`)**: Added `CALL system.rebuild_cluster_index(...)`
+    and `CALL system.warmup(...)` procedures with JNI bridging (`BenoStreamDBJNIBridge`),
+    enabling administrative index management and cold-start page-cache priming from SQL.
+  - **dbt Adapter (`dbt-benostreamdb`)**: Added `{{ rebuild_cluster_index(...) }}` and
+    `{{ warmup(...) }}` macros in `macros/ddl.sql` for automated post-hook execution in ELT models.
+  - **Spark Connector (`spark-benostreamdb`)**: Added `RebuildClusterIndexProcedure` and
+    `WarmupProcedure` under `system.*` across Spark 3.5 and Spark 4.x DSv2 catalogs.
+  - **Flight SQL Gateway (`benostreamdb-flight`)**: Enabled `ALTER TABLE ... EXECUTE rebuild_cluster_index(...)`
+    and `warmup(...)` statement updates, plus custom `rebuild_cluster_index` and `warmup` Flight actions.
+  - **REST Search Gateway (`benostreamdb-search`)**: Added `POST /{index}/_rebuild_cluster`
+    and `POST /{index}/_warmup` endpoints for index compaction and RAM cache pre-warming.
 
 ### Performance
 - **Compaction Throughput Acceleration**: Rayon multi-threading saturates 8 vCPUs at $300\% - 600\%$

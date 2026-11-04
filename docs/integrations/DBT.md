@@ -197,6 +197,32 @@ FROM graph_neighbors('{{ ref("stg_edges") }}', '101', 2, 'auto')
 
 ---
 
+## Table-Level Cluster Indexing & Warmup Macros
+
+For high-scale vector models (multi-million rows), you can register post-hooks in your model configuration to trigger global Voronoi cluster index builds and cache warming immediately following table materializations:
+
+```sql+jinja
+{{ config(
+    materialized='table',
+    post_hook=[
+        rebuild_cluster_index(this, column='embedding', k=1024, m=16, ef_construction=200, target_shard_mb=512),
+        warmup(this, n_probes=500, max_memory_gb=8.0)
+    ]
+) }}
+
+SELECT
+    id,
+    title,
+    embedding
+FROM {{ ref('raw_embeddings') }}
+```
+
+Macros available in `macros/ddl.sql`:
+* `{{ rebuild_cluster_index(relation, column='embedding', k=1024, m=16, ef_construction=200, target_shard_mb=512) }}`: Emits `ALTER TABLE <relation> EXECUTE rebuild_cluster_index(...)`, consolidating multi-segment vectors into rolling $\le 512\text{ MiB}$ Puffin index shards sealed into the Iceberg manifest.
+* `{{ warmup(relation, n_probes=100, max_memory_gb=8.0) }}`: Emits `ALTER TABLE <relation> EXECUTE warmup(...)`, probing the Voronoi centroid router to prefault index shards into the OS page cache before live queries arrive.
+
+---
+
 ## Testing & Verification
 
 Run standard dbt commands to validate and execute models:

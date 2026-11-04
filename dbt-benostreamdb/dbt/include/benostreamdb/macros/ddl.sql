@@ -61,3 +61,29 @@
 {% macro benostreamdb__drop_primary_key(relation) -%}
   alter table {{ relation }} drop primary key
 {%- endmacro %}
+
+
+{% macro rebuild_cluster_index(relation, column='embedding', k=1024, m=16, ef_construction=200, target_shard_mb=512) -%}
+  {{ return(adapter.dispatch('rebuild_cluster_index', 'dbt')(relation, column, k, m, ef_construction, target_shard_mb)) }}
+{%- endmacro %}
+
+{% macro default__rebuild_cluster_index(relation, column='embedding', k=1024, m=16, ef_construction=200, target_shard_mb=512) -%}
+  {{ exceptions.raise_compiler_error("rebuild_cluster_index is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__rebuild_cluster_index(relation, column='embedding', k=1024, m=16, ef_construction=200, target_shard_mb=512) -%}
+  alter table {{ relation }} execute rebuild_cluster_index(column => '{{ column }}', k => {{ k }}, m => {{ m }}, ef_construction => {{ ef_construction }}, target_shard_mb => {{ target_shard_mb }})
+{%- endmacro %}
+
+
+{% macro warmup(relation, n_probes=100, max_memory_gb=8.0) -%}
+  {{ return(adapter.dispatch('warmup', 'dbt')(relation, n_probes, max_memory_gb)) }}
+{%- endmacro %}
+
+{% macro default__warmup(relation, n_probes=100, max_memory_gb=8.0) -%}
+  {{ exceptions.raise_compiler_error("warmup is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__warmup(relation, n_probes=100, max_memory_gb=8.0) -%}
+  alter table {{ relation }} execute warmup(n_probes => {{ n_probes }}, max_memory_gb => {{ max_memory_gb }})
+{%- endmacro %}

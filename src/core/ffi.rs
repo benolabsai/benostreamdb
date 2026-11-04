@@ -771,6 +771,33 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_listI
     list_indexes_impl(env, table_uri)
 }
 
+/// Spark: rebuild global cluster index for the table.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_rebuildClusterIndex(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    column: JString,
+    k: jint,
+    m: jint,
+    ef_construction: jint,
+    target_shard_bytes: jlong,
+) -> jboolean {
+    rebuild_cluster_index_impl(env, table_uri, column, k, m, ef_construction, target_shard_bytes)
+}
+
+/// Spark: pre-warm cluster index caches for the table.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_warmupTable(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    n_probes: jint,
+    max_memory_gb: jdouble,
+) -> jboolean {
+    warmup_table_impl(env, table_uri, n_probes, max_memory_gb)
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setGpuContext(
     mut env: JNIEnv,
@@ -2072,6 +2099,122 @@ fn list_indexes_impl(mut env: JNIEnv, table_uri: JString) -> jstring {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+fn rebuild_cluster_index_impl(
+    mut env: JNIEnv,
+    table_uri: JString,
+    column: JString,
+    k: jint,
+    m: jint,
+    ef_construction: jint,
+    target_shard_bytes: jlong,
+) -> jboolean {
+    let uri = jstring_or_empty(&mut env, &table_uri);
+    let col = jstring_or_empty(&mut env, &column);
+    if uri.is_empty() {
+        tracing::error!("FFI: rebuildClusterIndex requires a table");
+        return 0;
+    }
+    let column = if col.is_empty() {
+        "embedding".to_string()
+    } else {
+        col
+    };
+    let k_val = if k <= 0 { 1024 } else { k as usize };
+    let m_val = if m <= 0 { 16 } else { m as usize };
+    let ef_c = if ef_construction <= 0 {
+        200
+    } else {
+        ef_construction as usize
+    };
+    let shard_bytes = if target_shard_bytes <= 0 {
+        None
+    } else {
+        Some(target_shard_bytes as usize)
+    };
+
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table
+            .rebuild_cluster_index_with_target(column, k_val, m_val, ef_c, shard_bytes)
+            .await
+    });
+    match res {
+        Ok(_) => 1,
+        Err(e) => {
+            tracing::error!("FFI: rebuildClusterIndex failed: {}", e);
+            0
+        }
+    }
+}
+
+fn warmup_table_impl(
+    mut env: JNIEnv,
+    table_uri: JString,
+    n_probes: jint,
+    max_memory_gb: jdouble,
+) -> jboolean {
+    let uri = jstring_or_empty(&mut env, &table_uri);
+    if uri.is_empty() {
+        tracing::error!("FFI: warmupTable requires a table");
+        return 0;
+    }
+    let probes = if n_probes <= 0 {
+        Some(100)
+    } else {
+        Some(n_probes as usize)
+    };
+    let mem = if max_memory_gb <= 0.0 {
+        Some(8.0)
+    } else {
+        Some(max_memory_gb)
+    };
+
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.warmup(probes, mem).await
+    });
+    match res {
+        Ok(stats) => {
+            tracing::info!(
+                "FFI: warmed {} clusters in {}ms (probes: {})",
+                stats.clusters_warmed,
+                stats.duration_ms,
+                stats.probes_run
+            );
+            1
+        }
+        Err(e) => {
+            tracing::error!("FFI: warmupTable failed: {}", e);
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_rebuildClusterIndex(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    column: JString,
+    k: jint,
+    m: jint,
+    ef_construction: jint,
+    target_shard_bytes: jlong,
+) -> jboolean {
+    rebuild_cluster_index_impl(env, table_uri, column, k, m, ef_construction, target_shard_bytes)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_warmupTable(
+    env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    n_probes: jint,
+    max_memory_gb: jdouble,
+) -> jboolean {
+    warmup_table_impl(env, table_uri, n_probes, max_memory_gb)
 }
 
 #[no_mangle]

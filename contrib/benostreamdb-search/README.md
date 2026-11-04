@@ -168,3 +168,28 @@ the catalog's current snapshot.
 > and `BSDB_SEARCH_CATALOG_CREDENTIAL=<client_id>:<client_secret>`. Every bulk
 > ingest via `/_bulk` or `_doc` automatically executes an Iceberg atomic swap
 > against Snowflake Polaris.
+
+## Table-Level Cluster Indexing & Cache Warming
+
+For vector tables, the gateway provides endpoints to compact multi-segment indexes into global Voronoi clusters and prime server RAM:
+
+* **`POST /{index}/_rebuild_cluster`**: Rebuilds global Voronoi cluster index into rolling $\le 512\text{ MiB}$ Puffin shards sealed into the Iceberg manifest.
+  ```json
+  POST /articles/_rebuild_cluster
+  {
+    "column": "vector",
+    "k": 1024,
+    "m": 16,
+    "ef_construction": 200,
+    "target_shard_mb": 512
+  }
+  ```
+
+* **`POST /{index}/_warmup`**: Probes the Voronoi centroid router to prefault index shard pages into the OS page cache before servicing client queries.
+  ```json
+  POST /articles/_warmup
+  {
+    "n_probes": 500,
+    "max_memory_gb": 8.0
+  }
+  ```

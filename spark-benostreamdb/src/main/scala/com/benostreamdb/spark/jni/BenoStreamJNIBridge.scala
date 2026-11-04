@@ -12,6 +12,8 @@ class BenoStreamJNIBridge private () {
   @native def dropIndex(table: String, column: String, indexType: String): Boolean
   @native def compactTable(table: String): Boolean
   @native def listIndexes(table: String): String
+  @native def rebuildClusterIndex(table: String, column: String, k: Int, m: Int, efConstruction: Int, targetShardBytes: Long): Boolean
+  @native def warmupTable(table: String, nProbes: Int, maxMemoryGb: Double): Boolean
   @native def vectorSearch(table: String, segmentId: String, column: String, k: Int, queryVectorPtr: Long, queryVectorLen: Int, outArrayPtr: Long, outSchemaPtr: Long): Int
   @native def regionalDriftSearch(table: String, query: String, seedsJson: String, topK: Int, hops: Int, nDepth: Int, kFollowups: Int, mode: String, outArrayPtr: Long, outSchemaPtr: Long): Int
   @native def gatherMetrics(): String

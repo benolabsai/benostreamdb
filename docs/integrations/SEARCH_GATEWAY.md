@@ -77,6 +77,21 @@ curl -X POST http://localhost:9200/articles/_search -H "Content-Type: applicatio
     "match": { "title": "Lakehouse" }
   }
 }'
+
+# Rebuild table-level cluster index into <= 512 MiB Puffin shards
+curl -X POST http://localhost:9200/articles/_rebuild_cluster -H "Content-Type: application/json" -d '{
+  "column": "vector",
+  "k": 1024,
+  "m": 16,
+  "ef_construction": 200,
+  "target_shard_mb": 512
+}'
+
+# Pre-warm Voronoi centroid routes and active shards into RAM
+curl -X POST http://localhost:9200/articles/_warmup -H "Content-Type: application/json" -d '{
+  "n_probes": 500,
+  "max_memory_gb": 8.0
+}'
 ```
 
 ### 2. Qdrant REST API (Port 6333)

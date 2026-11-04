@@ -116,6 +116,8 @@ pub fn table_action_names() -> Vec<String> {
         "rewrite_data_files",
         "compact",
         "expire_snapshots",
+        "rebuild_cluster_index",
+        "warmup",
     ]
     .into_iter()
     .map(String::from)
@@ -454,6 +456,27 @@ async fn execute_action(
             let retention = parse_named_i64(args, "retention").unwrap_or(1).max(1) as usize;
             table.vacuum_async(retention).await?;
         }
+        "rebuild_cluster_index" => {
+            let column = parse_named_str(args, "column")
+                .unwrap_or_else(|| "embedding".to_string());
+            let k = parse_named_i64(args, "k").unwrap_or(1024) as usize;
+            let m = parse_named_i64(args, "m").unwrap_or(16) as usize;
+            let ef_construction = parse_named_i64(args, "ef_construction")
+                .or_else(|| parse_named_i64(args, "ef_c"))
+                .unwrap_or(200) as usize;
+            let target_shard_bytes = parse_named_i64(args, "target_shard_mb")
+                .map(|mb| (mb * 1024 * 1024) as usize)
+                .or_else(|| parse_named_i64(args, "target_shard_bytes").map(|b| b as usize))
+                .or(Some(536_870_912));
+            table
+                .rebuild_cluster_index_with_target(column, k, m, ef_construction, target_shard_bytes)
+                .await?;
+        }
+        "warmup" => {
+            let n_probes = parse_named_i64(args, "n_probes").unwrap_or(100) as usize;
+            let max_memory_gb = parse_named_f64(args, "max_memory_gb").unwrap_or(8.0);
+            table.warmup(Some(n_probes), Some(max_memory_gb)).await?;
+        }
         other => bail!("unsupported EXECUTE action: {}", other),
     }
     Ok(empty_batch())
@@ -475,6 +498,54 @@ fn parse_named_i64(args: &str, key: &str) -> Option<i64> {
         .take_while(|c| c.is_ascii_digit() || *c == '-')
         .collect();
     value.parse::<i64>().ok()
+}
+
+/// Parse `key => value` or `key = value` string from an action argument list.
+fn parse_named_str(args: &str, key: &str) -> Option<String> {
+    let lower = args.to_ascii_lowercase();
+    let key_lower = key.to_ascii_lowercase();
+    let idx = lower.find(&key_lower)?;
+    let after = &args[idx + key.len()..];
+    let after = after
+        .trim_start()
+        .trim_start_matches("=>")
+        .trim_start_matches('=');
+    let trimmed = after.trim();
+    if trimmed.starts_with('\'') {
+        let end = trimmed[1..].find('\'')?;
+        Some(trimmed[1..=end].to_string())
+    } else if trimmed.starts_with('"') {
+        let end = trimmed[1..].find('"')?;
+        Some(trimmed[1..=end].to_string())
+    } else {
+        let val: String = trimmed
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if val.is_empty() {
+            None
+        } else {
+            Some(val)
+        }
+    }
+}
+
+/// Parse `key => value` or `key = value` float from an action argument list.
+fn parse_named_f64(args: &str, key: &str) -> Option<f64> {
+    let lower = args.to_ascii_lowercase();
+    let key_lower = key.to_ascii_lowercase();
+    let idx = lower.find(&key_lower)?;
+    let after = &args[idx + key.len()..];
+    let after = after
+        .trim_start()
+        .trim_start_matches("=>")
+        .trim_start_matches('=');
+    let value: String = after
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+        .collect();
+    value.parse::<f64>().ok()
 }
 
 // ---------------------------------------------------------------------------

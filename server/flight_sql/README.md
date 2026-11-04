@@ -267,7 +267,33 @@ ALTER TABLE mydb.myschema.t EXECUTE remove_orphan_files(older_than_ms => 0);
 ALTER TABLE mydb.myschema.t EXECUTE expire_snapshots(retention => 2);
 ALTER TABLE mydb.myschema.t EXECUTE rollback(snapshot_id => 3);
 ALTER TABLE mydb.myschema.t EXECUTE preload_indexes;
+ALTER TABLE mydb.myschema.t EXECUTE rebuild_cluster_index(column => 'embedding', k => 1024, m => 16, ef_c => 200, target_shard_mb => 512);
+ALTER TABLE mydb.myschema.t EXECUTE warmup(n_probes => 500, max_memory_gb => 8.0);
 ```
+
+### Custom Flight Actions (`do_action`)
+
+Network clients can also invoke maintenance actions directly over Flight RPC:
+
+* **`rebuild_cluster_index`**:
+  ```json
+  {
+    "table": "mydb.myschema.t",
+    "column": "embedding",
+    "k": 1024,
+    "m": 16,
+    "ef_construction": 200,
+    "target_shard_mb": 512
+  }
+  ```
+* **`warmup`**:
+  ```json
+  {
+    "table": "mydb.myschema.t",
+    "n_probes": 500,
+    "max_memory_gb": 8.0
+  }
+  ```
 
 | Action | Effect |
 |---|---|
