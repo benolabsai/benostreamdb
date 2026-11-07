@@ -12,12 +12,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 86.8891,
-        "measured_at": "2026-11-07T16:08:57Z",
-        "random_gather_ns_per_access": 6.994,
-        "triad_gbs": 13.4032
+        "matmul_gflops": 103.6227,
+        "measured_at": "2026-11-07T20:26:29Z",
+        "random_gather_ns_per_access": 6.627,
+        "triad_gbs": 14.2562
       },
-      "captured_at": "2026-11-07T16:08:57Z",
+      "captured_at": "2026-11-07T20:26:29Z",
       "note": null,
       "session": "90e73110d464"
     },
@@ -28,12 +28,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 89.5112,
-        "measured_at": "2026-11-07T16:08:59Z",
-        "random_gather_ns_per_access": 8.0599,
-        "triad_gbs": 13.3289
+        "matmul_gflops": 185.1902,
+        "measured_at": "2026-11-07T20:26:31Z",
+        "random_gather_ns_per_access": 6.7214,
+        "triad_gbs": 14.9048
       },
-      "captured_at": "2026-11-07T16:08:59Z",
+      "captured_at": "2026-11-07T20:26:31Z",
       "note": null,
       "session": "90e73110d464"
     },
@@ -43,12 +43,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 227.9743,
-        "measured_at": "2026-11-07T15:27:38Z",
-        "random_gather_ns_per_access": 6.4732,
-        "triad_gbs": 14.7743
+        "matmul_gflops": 179.4445,
+        "measured_at": "2026-11-07T19:49:32Z",
+        "random_gather_ns_per_access": 7.0243,
+        "triad_gbs": 14.0743
       },
-      "captured_at": "2026-11-07T15:27:38Z",
+      "captured_at": "2026-11-07T19:49:32Z",
       "note": null,
       "session": "90e73110d464"
     },
@@ -63,12 +63,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 74.0657,
-        "measured_at": "2026-11-07T16:08:18Z",
-        "random_gather_ns_per_access": 7.5967,
-        "triad_gbs": 12.7995
+        "matmul_gflops": 104.6178,
+        "measured_at": "2026-11-07T20:25:55Z",
+        "random_gather_ns_per_access": 6.6016,
+        "triad_gbs": 14.2241
       },
-      "captured_at": "2026-11-07T16:08:18Z",
+      "captured_at": "2026-11-07T20:25:55Z",
       "note": null,
       "session": "90e73110d464"
     },
@@ -82,12 +82,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 161.4944,
-        "measured_at": "2026-11-07T16:09:22Z",
-        "random_gather_ns_per_access": 7.559,
-        "triad_gbs": 11.9822
+        "matmul_gflops": 290.4354,
+        "measured_at": "2026-11-07T20:26:53Z",
+        "random_gather_ns_per_access": 6.4347,
+        "triad_gbs": 15.3153
       },
-      "captured_at": "2026-11-07T16:09:22Z",
+      "captured_at": "2026-11-07T20:26:53Z",
       "note": null,
       "session": "90e73110d464"
     },
@@ -97,12 +97,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 91.0005,
-        "measured_at": "2026-11-07T16:08:21Z",
-        "random_gather_ns_per_access": 7.4561,
-        "triad_gbs": 11.5199
+        "matmul_gflops": 147.2778,
+        "measured_at": "2026-11-07T20:25:57Z",
+        "random_gather_ns_per_access": 6.0323,
+        "triad_gbs": 15.4086
       },
-      "captured_at": "2026-11-07T16:08:21Z",
+      "captured_at": "2026-11-07T20:25:57Z",
       "note": null,
       "session": "90e73110d464"
     },
@@ -143,12 +143,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 161.4215,
-        "measured_at": "2026-11-07T15:29:50Z",
-        "random_gather_ns_per_access": 6.4325,
-        "triad_gbs": 14.6899
+        "matmul_gflops": 199.5604,
+        "measured_at": "2026-11-07T19:51:43Z",
+        "random_gather_ns_per_access": 6.8306,
+        "triad_gbs": 14.2731
       },
-      "captured_at": "2026-11-07T15:29:50Z",
+      "captured_at": "2026-11-07T19:51:43Z",
       "note": null,
       "session": "90e73110d464"
     },
@@ -293,12 +293,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 79.5457,
-        "measured_at": "2026-11-07T15:59:06Z",
-        "random_gather_ns_per_access": 7.5177,
-        "triad_gbs": 13.2066
+        "matmul_gflops": 235.9175,
+        "measured_at": "2026-11-07T20:17:11Z",
+        "random_gather_ns_per_access": 6.4305,
+        "triad_gbs": 14.8677
       },
-      "captured_at": "2026-11-07T15:59:06Z",
+      "captured_at": "2026-11-07T20:17:11Z",
       "note": null,
       "session": "90e73110d464"
     }
@@ -473,6 +473,62 @@
           "measured_at": "2026-11-07T16:09:22Z",
           "random_gather_ns_per_access": 7.559,
           "triad_gbs": 11.9822
+        },
+        {
+          "available": true,
+          "matmul_gflops": 179.4445,
+          "measured_at": "2026-11-07T19:49:32Z",
+          "random_gather_ns_per_access": 7.0243,
+          "triad_gbs": 14.0743
+        },
+        {
+          "available": true,
+          "matmul_gflops": 199.5604,
+          "measured_at": "2026-11-07T19:51:43Z",
+          "random_gather_ns_per_access": 6.8306,
+          "triad_gbs": 14.2731
+        },
+        {
+          "available": true,
+          "matmul_gflops": 235.9175,
+          "measured_at": "2026-11-07T20:17:11Z",
+          "random_gather_ns_per_access": 6.4305,
+          "triad_gbs": 14.8677
+        },
+        {
+          "available": true,
+          "matmul_gflops": 104.6178,
+          "measured_at": "2026-11-07T20:25:55Z",
+          "random_gather_ns_per_access": 6.6016,
+          "triad_gbs": 14.2241
+        },
+        {
+          "available": true,
+          "matmul_gflops": 147.2778,
+          "measured_at": "2026-11-07T20:25:57Z",
+          "random_gather_ns_per_access": 6.0323,
+          "triad_gbs": 15.4086
+        },
+        {
+          "available": true,
+          "matmul_gflops": 103.6227,
+          "measured_at": "2026-11-07T20:26:29Z",
+          "random_gather_ns_per_access": 6.627,
+          "triad_gbs": 14.2562
+        },
+        {
+          "available": true,
+          "matmul_gflops": 185.1902,
+          "measured_at": "2026-11-07T20:26:31Z",
+          "random_gather_ns_per_access": 6.7214,
+          "triad_gbs": 14.9048
+        },
+        {
+          "available": true,
+          "matmul_gflops": 290.4354,
+          "measured_at": "2026-11-07T20:26:53Z",
+          "random_gather_ns_per_access": 6.4347,
+          "triad_gbs": 15.3153
         }
       ],
       "fingerprint": {
@@ -497,7 +553,7 @@
         "python": "3.14.4"
       },
       "first_seen": "2026-11-06T22:29:14Z",
-      "last_seen": "2026-11-07T16:09:22Z",
+      "last_seen": "2026-11-07T20:26:53Z",
       "sections": [
         "gpu_cdist",
         "vector_ann",
