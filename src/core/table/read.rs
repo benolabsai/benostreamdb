@@ -22,6 +22,22 @@ use super::Table;
 use crate::core::search::{HybridSearchCoordinator, KeywordSearchParams, ScoredResult};
 use futures::stream::BoxStream;
 
+/// Default IVF probe count for a table-level vector index.
+///
+/// Scales with the cluster count so small indexes probe most clusters (recall
+/// parity with a flat HNSW graph) while large indexes stay bounded:
+/// `sqrt(n_lists) * 5`, clamped to `[16, n_lists]`. The old fixed default of
+/// 16 probed only ~36% of a 44-cluster index and capped `lastfm-64-dot` recall
+/// at 0.90; probing 33 recovers 0.987.
+fn default_probes(n_lists: usize) -> usize {
+    if n_lists == 0 {
+        return 16;
+    }
+    (((n_lists as f64).sqrt() as usize) * 5)
+        .max(16)
+        .min(n_lists)
+}
+
 impl Table {
     pub fn read(
         &self,
@@ -491,7 +507,9 @@ impl Table {
                     let vp = &vps[0];
                     if let Ok(Some(index)) = self.ensure_cluster_index(&vp.column).await {
                         if let crate::core::index::VectorValue::Float32(q) = &vp.query {
-                            let probes = vp.probes.unwrap_or(16);
+                            let probes = vp
+                                .probes
+                                .unwrap_or_else(|| default_probes(index.centroids.len()));
                             let scored = index.search(q, vp.k, probes, vp.ef_search)?;
                             tracing::info!(
                                 column = %vp.column,
@@ -513,7 +531,7 @@ impl Table {
             for vp in vps.iter_mut() {
                 if vp.candidate_segments.is_none() {
                     if let Ok(Some(router)) = self.ensure_vector_router(&vp.column).await {
-                        let probes = vp.probes.unwrap_or(16);
+                        let probes = vp.probes.unwrap_or_else(|| default_probes(router.len()));
                         let plan = match &vp.query {
                             crate::core::index::VectorValue::Float32(q_f32) => {
                                 Some(router.route(q_f32, probes))
@@ -1389,7 +1407,9 @@ impl Table {
         if filter.is_none() {
             if let Ok(Some(index)) = self.ensure_cluster_index(&params.column).await {
                 if let crate::core::index::VectorValue::Float32(q) = &params.query {
-                    let probes = params.probes.unwrap_or(16);
+                    let probes = params
+                        .probes
+                        .unwrap_or_else(|| default_probes(index.centroids.len()));
                     let scored = index.search(q, params.k, probes, params.ef_search)?;
                     crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
                         .observe(start_time.elapsed().as_secs_f64());

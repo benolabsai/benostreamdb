@@ -80,17 +80,30 @@ impl Distance<f32> for DistCosine {
 ///   non-negative-distance invariant (it asserts, and the greedy descent
 ///   degenerates). Use it only for *exact* scoring of candidate lists: brute
 ///   force, rescoring, or top-k refinement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DistDot {
     /// `true` → `1 - cos` (safe for HNSW); `false` → raw `-dot` (exact only).
     pub normalized: bool,
+    /// When `> 0`, use the asymmetric MIPS augmentation
+    /// `||va||² + m² - 2·va·vb`, which orders by `-va·vb` for a fixed `va`
+    /// and is non-negative whenever `m >= max||vb||`. `0.0` disables it.
+    ///
+    /// This is mathematically the L2 distance between the augmented vectors
+    /// `va' = [va, 0]` and `vb' = [vb, sqrt(m² - ||vb||²)]`, but computed
+    /// without storing the extra dimension. The first argument is always the
+    /// "query" side (the point being compared), which is exactly how the HNSW
+    /// core calls `eval`.
+    pub augment_m: f32,
 }
 
 impl Default for DistDot {
     /// Defaults to the **safe** normalized mode, so an accidental
     /// `DistDot::default()` cannot be used to build a broken graph.
     fn default() -> Self {
-        Self { normalized: true }
+        Self {
+            normalized: true,
+            augment_m: 0.0,
+        }
     }
 }
 
@@ -98,18 +111,42 @@ impl DistDot {
     /// `1 - cos`: the HNSW graph distance (and the [`Default`]).
     #[inline]
     pub const fn norm() -> Self {
-        Self { normalized: true }
+        Self {
+            normalized: true,
+            augment_m: 0.0,
+        }
     }
 
     /// Raw `-dot`: exact scoring only, never a graph metric.
     #[inline]
     pub const fn raw() -> Self {
-        Self { normalized: false }
+        Self {
+            normalized: false,
+            augment_m: 0.0,
+        }
+    }
+
+    /// Asymmetric MIPS augmentation with `m = max||stored||` (or larger).
+    ///
+    /// Orders by `-dot` while keeping distances non-negative, so it is safe as
+    /// an HNSW graph metric. Prefer this over [`Self::raw`] for MIPS graphs.
+    #[inline]
+    pub const fn augmented(m: f32) -> Self {
+        Self {
+            normalized: false,
+            augment_m: m,
+        }
     }
 }
 
 impl Distance<f32> for DistDot {
     fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
+        if self.augment_m > 0.0 {
+            let na2 = va.iter().map(|x| x * x).sum::<f32>();
+            let d = na2 + self.augment_m * self.augment_m
+                - 2.0 * distance::dot_product(va, vb);
+            return d.max(0.0);
+        }
         if !self.normalized {
             return -distance::dot_product(va, vb);
         }
@@ -357,6 +394,46 @@ mod tests {
         // Opposite: dot = -25 -> +25.
         let e = [-3.0f32, -4.0];
         assert!((d.eval(&a, &e) - 25.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn dist_dot_augmented_orders_by_inner_product_and_is_non_negative() {
+        let stored = [
+            [0.5f32, 0.0],
+            [1.0f32, 0.0],
+            [0.0f32, 1.0],
+            [0.3f32, 0.4],
+        ];
+        let m = stored
+            .iter()
+            .map(|v| v.iter().map(|x| x * x).sum::<f32>().sqrt())
+            .fold(0.0f32, f32::max);
+        let d = DistDot::augmented(m);
+        let q = [1.0f32, 0.0];
+
+        // Non-negative for every stored vector (HNSW graph invariant).
+        for v in &stored {
+            assert!(d.eval(&q, v) >= 0.0);
+        }
+
+        // Ordering matches raw `-dot`: ascending augmented distance ==
+        // descending inner product.
+        let mut by_aug: Vec<(usize, f32)> = stored
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, d.eval(&q, v)))
+            .collect();
+        by_aug.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        let mut by_dot: Vec<(usize, f32)> = stored
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, -distance::dot_product(&q, v)))
+            .collect();
+        by_dot.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        assert_eq!(
+            by_aug.iter().map(|x| x.0).collect::<Vec<_>>(),
+            by_dot.iter().map(|x| x.0).collect::<Vec<_>>()
+        );
     }
 
     #[test]

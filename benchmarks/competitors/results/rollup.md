@@ -1,22 +1,22 @@
-# Benchmark rollup (2026-11-07T10:59:05-05:00)
+# Benchmark rollup (2026-11-07T14:36:38-05:00)
 
 Hardware profile: cpus=8 mem=16g — see hardware_profile.txt
 
 | Engine | Device | Dataset | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|
-| benostreamdb | cpu | gist-960-euclidean | 0.9766 | 805.2 | 1.224 | 1.558 | 3.224 | 237.26 |
-| benostreamdb_sq | cpu | gist-960-euclidean | 0.727 | 2046.7 | 0.482 | 0.607 | 2.866 | 179.68 |
-| benostreamdb_tq8 | cpu | gist-960-euclidean | 0.9526 | 2013.8 | 0.491 | 0.606 | 2.83 | 180.94 |
-| faiss | cpu | gist-960-euclidean | 0.9916 | 2986.7 | 0.348 | 0.458 | 1.124 | 79.68 |
-| faiss_sq | cpu | gist-960-euclidean | 0.9812 | 3825.5 | 0.267 | 0.389 | 0.86 | 22.09 |
-| hnswlib | cpu | gist-960-euclidean | 0.991 | 2036.0 | 0.505 | 0.787 | 2.825 | 79.77 |
-| lancedb | cpu | gist-960-euclidean | 0.9988 | 285.6 | 3.208 | 4.19 | 4.318 | 156.75 |
-| lancedb_sq | cpu | gist-960-euclidean | 0.9652 | 378.8 | 2.537 | 3.232 | 2.536 | 99.15 |
-| milvus | cpu | gist-960-euclidean | 0.8864 | 507.3 | 1.736 | 2.366 | 4.353 | 76.8 |
-| milvus_sq | cpu | gist-960-euclidean | 0.8864 | 550.9 | 1.641 | 2.22 | 4.318 | 76.8 |
-| opensearch | cpu | gist-960-euclidean | 0.9928 | 232.2 | 4.195 | 5.783 | 18.414 | 582.14 |
-| pgvector | cpu | gist-960-euclidean | 0.999 | 391.6 | 2.581 | 3.36 | 23.046 | 247.28 |
-| qdrant | cpu | gist-960-euclidean | 0.9978 | 566.5 | 1.736 | 2.31 | 4.042 | 76.8 |
-| qdrant_sq | cpu | gist-960-euclidean | 0.9564 | 753.5 | 1.275 | 2.153 | 3.968 | 19.2 |
-| weaviate | cpu | gist-960-euclidean | 0.9754 | 987.6 | 1.003 | 1.54 | 6.069 | 76.8 |
-| weaviate_sq | cpu | gist-960-euclidean | 0.9766 | 997.3 | 0.992 | 1.612 | 6.103 | 19.2 |
+| benostreamdb | cpu | lastfm-64-dot | 0.8998 | 2231.8 | 0.444 | 0.587 | 4.628 | 22.07 |
+| benostreamdb_sq | cpu | lastfm-64-dot | 0.895 | 2283.2 | 0.431 | 0.663 | 4.181 | 18.18 |
+| benostreamdb_tq8 | cpu | lastfm-64-dot | 0.8886 | 1807.0 | 0.545 | 0.763 | 2.731 | 19.43 |
+| faiss | cpu | lastfm-64-dot | 0.9964 | 4528.0 | 0.071 | 0.175 | 0.214 | 8.08 |
+| faiss_sq | cpu | lastfm-64-dot | 0.9826 | 8844.1 | 0.107 | 0.168 | 0.459 | 4.18 |
+| hnswlib | cpu | lastfm-64-dot | 0.9914 | 4753.5 | 0.058 | 0.112 | 0.276 | 8.17 |
+| lancedb | cpu | lastfm-64-dot | 0.9982 | 385.1 | 2.34 | 2.954 | 0.582 | 13.6 |
+| lancedb_sq | cpu | lastfm-64-dot | 0.9208 | 368.0 | 2.402 | 3.941 | 0.575 | 7.9 |
+| milvus | cpu | lastfm-64-dot | 0.976 | 643.5 | 1.273 | 2.046 | 2.924 | 5.2 |
+| milvus_sq | cpu | lastfm-64-dot | 0.976 | 614.5 | 1.292 | 1.844 | 3.191 | 5.2 |
+| opensearch | cpu | lastfm-64-dot | 0.9704 | 799.4 | 1.24 | 1.592 | 3.645 | 32.26 |
+| pgvector | cpu | lastfm-64-dot | 0.996 | 1041.4 | 0.799 | 1.065 | 6.238 | 18.51 |
+| qdrant | cpu | lastfm-64-dot | 1.0 | 894.5 | 0.93 | 1.366 | 0.65 | 5.2 |
+| qdrant_sq | cpu | lastfm-64-dot | 1.0 | 893.2 | 0.94 | 1.361 | 0.628 | 1.3 |
+| weaviate | cpu | lastfm-64-dot | 0.9844 | 1424.6 | 0.679 | 1.238 | 4.217 | 5.2 |
+| weaviate_sq | cpu | lastfm-64-dot | 0.9812 | 1372.2 | 0.701 | 1.078 | 3.879 | 1.3 |

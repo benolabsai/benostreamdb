@@ -168,8 +168,24 @@ Major release consolidating vector search, out-of-core indexing, and performance
   store rows in layer-indexed order, so the rescore fetches the stored vector by the Arrow row
   index (`p_id.1`), not the original row id (`d_id`); using `d_id` paired the correct score
   with the wrong row and dropped `lastfm-64-dot` f32 recall from 0.90 to 0.32. Measured after
-  the fix: `lastfm-64-dot` f32 recall@10 **0.9000** (1138 QPS) and `hnsw_tq8` **0.8834**
-  (1039 QPS), versus 0.61 for tq8 before the rescore.
+  the fix (`lastfm-64-dot`, 20k train / 500 queries, 8 vCPU): f32 **0.8998**, `hnsw_sq8`
+  **0.8950**, `hnsw_tq8` **0.8886** — the quantized tiers recover from 0.42/0.61 to ~0.89.
+- **Default IVF Probe Count Was the Real Recall Ceiling**: The table-level vector fast path
+  defaulted `probes` to a fixed **16** regardless of cluster count. A 20k-vector index has ~44
+  clusters, so it probed only ~36% of them and capped `lastfm-64-dot` f32 recall at 0.90 while
+  hnswlib/faiss (flat HNSW, no IVF) reached 0.99. The default now scales with the cluster count
+  (`sqrt(n_lists) * 5`, clamped to `[16, n_lists]`), so small indexes probe most clusters and
+  large indexes stay bounded. Measured: `lastfm-64-dot` f32 recall@10 **0.9706** (was 0.8986),
+  with QPS 962. This is the single largest recall win; the rescore below is what fixes the
+  quantized tiers, and the augmentation is order-equivalent to `1 - cos` on this dataset.
+- **Asymmetric MIPS Augmentation (`DistDot::augmented`)**: Added a third `DistDot` mode that
+  computes `||va||² + m² - 2·va·vb` on the fly, which orders by `-dot` while staying
+  non-negative whenever `m >= max||stored||`. The global `m` is computed at build time (sample
+  max with a 5% margin) and persisted in the centroids Parquet metadata (`augment_m`), so every
+  load path reconstructs the same distance. This is the safe MIPS graph metric: it avoids the
+  negative-distance panic of raw `-dot` without storing an extra dimension. On `lastfm-64-dot`
+  it is order-equivalent to `1 - cos` (all train vectors share one norm), so it does **not**
+  change recall there; it is retained for MIPS datasets whose vector norms vary.
 
 ### Performance
 - **Compaction Throughput Acceleration**: Rayon multi-threading saturates 8 vCPUs at $300\% - 600\%$

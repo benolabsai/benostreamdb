@@ -469,6 +469,7 @@ pub struct LazyPuffinBlobs {
     cluster_slices: HashMap<usize, ((usize, usize), (usize, usize))>,
     quantizer: Option<QuantizerImpl>,
     metric: VectorMetric,
+    augment_m: f32,
 }
 
 impl LazyPuffinBlobs {
@@ -491,6 +492,7 @@ impl LazyPuffinBlobs {
             mapping_bytes,
             self.quantizer.as_ref(),
             self.metric,
+            self.augment_m,
         )
     }
 
@@ -531,6 +533,11 @@ pub struct HnswIvfIndex {
     /// `4` matches the pre-existing `k * 4` candidate budget, so behaviour is
     /// unchanged unless the factor is raised.
     rescore_oversample: usize,
+    /// Global max-norm `m` for the asymmetric MIPS augmentation
+    /// ([`DistDot::augmented`](crate::core::index::hnsw_rs::dist::DistDot::augmented)).
+    /// `0.0` disables it. Persisted in the centroids Parquet metadata so every
+    /// load path reconstructs the same distance.
+    augment_m: f32,
     /// Hardware acceleration context (Open Source)
     _compute_context: crate::core::index::gpu::ComputeContext,
 }
@@ -670,6 +677,7 @@ fn build_bucket_graph(
     ef_construction: usize,
     metric: VectorMetric,
     quantizer: Option<&QuantizerImpl>,
+    augment_m: f32,
 ) -> Result<Option<(usize, (HnswGraph, Vec<usize>))>> {
     use std::io::Read;
     let mut f = std::fs::File::open(c_path)?;
@@ -755,7 +763,11 @@ fn build_bucket_graph(
                 c_vectors.len(),
                 max_layers,
                 ef_construction,
-                DistDot::norm(),
+                if augment_m > 0.0 {
+                    DistDot::augmented(augment_m)
+                } else {
+                    DistDot::norm()
+                },
             )),
             VectorMetric::L1 => HnswGraph::L1(Hnsw::new(
                 hnsw_m,
@@ -1080,10 +1092,31 @@ impl HnswIvfIndex {
             _ => None,
         };
 
+        // Asymmetric MIPS augmentation: `m` must bound every stored vector's
+        // norm. Use the sample max with a small margin (the distance clamps at
+        // 0, so an underestimate cannot panic). Only the f32 IP tier uses it;
+        // the quantized tiers keep the L2-on-codes path.
+        let augment_m = if metric == VectorMetric::InnerProduct && quantizer.is_none() {
+            let m = vectors_sampled
+                .iter()
+                .map(|v| v.iter().map(|x| x * x).sum::<f32>())
+                .fold(0.0f32, f32::max)
+                .sqrt();
+            m * 1.05
+        } else {
+            0.0
+        };
+
         // 1. Immediately save centroids to disk
         let mut saved_files = Vec::new();
         let centroids_path = format!("{}.centroids.parquet", output_base_path);
-        Self::save_centroids_parquet(&centroids, metric, quantizer.as_ref(), &centroids_path)?;
+        Self::save_centroids_parquet(
+            &centroids,
+            metric,
+            quantizer.as_ref(),
+            augment_m,
+            &centroids_path,
+        )?;
         saved_files.push(centroids_path);
 
         // Pass 2: Out-of-core bucketing
@@ -1192,6 +1225,7 @@ impl HnswIvfIndex {
                     ef_construction,
                     metric,
                     quantizer_ref,
+                    augment_m,
                 )?;
                 if let Some((cluster_id, (hnsw, row_id_mapping))) = built {
                     let mut per_bucket = Vec::with_capacity(2);
@@ -1502,6 +1536,17 @@ impl HnswIvfIndex {
         };
         let max_layers = 16;
 
+        let augment_m = if metric == VectorMetric::InnerProduct && quantizer.is_none() {
+            let m = vectors_sampled
+                .iter()
+                .map(|v| v.iter().map(|x| x * x).sum::<f32>())
+                .fold(0.0f32, f32::max)
+                .sqrt();
+            m * 1.05
+        } else {
+            0.0
+        };
+
         let cluster_list: Vec<(usize, String)> = cluster_files
             .into_iter()
             .map(|(c, (p, _f))| (c, p))
@@ -1520,6 +1565,7 @@ impl HnswIvfIndex {
                     ef_construction,
                     metric,
                     quantizer_ref,
+                    augment_m,
                 )
             })
             .collect::<Result<Vec<_>>>()?
@@ -1550,6 +1596,7 @@ impl HnswIvfIndex {
             dim,
             quantizer,
             rescore_oversample: 4,
+            augment_m,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
@@ -1702,6 +1749,19 @@ impl HnswIvfIndex {
             _ => None,
         };
 
+        // Asymmetric MIPS augmentation bound (f32 InnerProduct only). Computed
+        // before `vectors` is consumed by the clustering step below.
+        let augment_m = if metric == VectorMetric::InnerProduct && quantizer.is_none() {
+            let m = vectors
+                .iter()
+                .map(|v| v.iter().map(|x| x * x).sum::<f32>())
+                .fold(0.0f32, f32::max)
+                .sqrt();
+            m * 1.05
+        } else {
+            0.0
+        };
+
         tracing::debug!(
             "  - K-Means took: {:.2?} ({} iterations, {} clusters)",
             t0.elapsed(),
@@ -1815,7 +1875,11 @@ impl HnswIvfIndex {
                             vecs.len(),
                             max_layers,
                             ef_construction,
-                            DistDot::norm(),
+                            if augment_m > 0.0 {
+                                DistDot::augmented(augment_m)
+                            } else {
+                                DistDot::norm()
+                            },
                         )),
                         VectorMetric::L1 => HnswGraph::L1(Hnsw::new(
                             hnsw_m,
@@ -1892,6 +1956,7 @@ impl HnswIvfIndex {
             dim,
             quantizer,
             rescore_oversample: 4,
+            augment_m,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
@@ -1940,6 +2005,7 @@ impl HnswIvfIndex {
         mapping_bytes: bytes::Bytes,
         quantizer: Option<&QuantizerImpl>,
         metric: VectorMetric,
+        augment_m: f32,
     ) -> Result<(HnswGraph, Vec<usize>)> {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -2005,7 +2071,11 @@ impl HnswIvfIndex {
                 VectorMetric::InnerProduct => HnswGraph::DotArrow(
                     crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
                         graph_bytes,
-                        DistDot::norm(),
+                        if augment_m > 0.0 {
+                            DistDot::augmented(augment_m)
+                        } else {
+                            DistDot::norm()
+                        },
                     )
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                 ),
@@ -2130,6 +2200,7 @@ impl HnswIvfIndex {
         let file_metadata = parquet_reader.metadata().file_metadata();
         let mut metric = VectorMetric::L2;
         let mut quantizer = None;
+        let mut augment_m = 0.0f32;
         if let Some(kv_list) = file_metadata.key_value_metadata() {
             for kv in kv_list {
                 if kv.key == "vector_metric" {
@@ -2144,6 +2215,10 @@ impl HnswIvfIndex {
                             }
                             quantizer = Some(q);
                         }
+                    }
+                } else if kv.key == "augment_m" {
+                    if let Some(ref val) = kv.value {
+                        augment_m = val.parse::<f32>().unwrap_or(0.0);
                     }
                 }
             }
@@ -2191,6 +2266,7 @@ impl HnswIvfIndex {
             cluster_slices,
             quantizer: quantizer.clone(),
             metric,
+            augment_m,
         });
 
         let cluster_cache = moka::sync::Cache::builder()
@@ -2208,6 +2284,7 @@ impl HnswIvfIndex {
             dim,
             quantizer,
             rescore_oversample: 4,
+            augment_m,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
@@ -2522,6 +2599,7 @@ impl HnswIvfIndex {
         centroids: &[Vec<f32>],
         metric: VectorMetric,
         quantizer: Option<&QuantizerImpl>,
+        augment_m: f32,
         target_path: &str,
     ) -> Result<String> {
         use arrow::array::{Float32Builder, ListBuilder};
@@ -2567,6 +2645,10 @@ impl HnswIvfIndex {
                 parquet::file::metadata::KeyValue {
                     key: "quantizer_config".to_string(),
                     value: quantizer.map(|q| serde_json::to_string(q).unwrap_or_default()),
+                },
+                parquet::file::metadata::KeyValue {
+                    key: "augment_m".to_string(),
+                    value: Some(format!("{augment_m}")),
                 },
             ]))
             .build();
@@ -2620,6 +2702,7 @@ impl HnswIvfIndex {
             &self.centroids,
             self.metric,
             self.quantizer.as_ref(),
+            self.augment_m,
             &centroids_path,
         )?;
         saved_files.push(centroids_path);
@@ -2803,8 +2886,8 @@ impl HnswIvfIndex {
         let n_lists = centroids.len();
         let dim = centroids[0].len();
 
-        // Load metric and quantizer from parquet metadata
-        let (metric, quantizer) = {
+        // Load metric, quantizer, and MIPS augmentation bound from parquet metadata
+        let (metric, quantizer, augment_m) = {
             let centroids_bytes_for_meta = disk_cache
                 .get_bytes_with_key(&centroids_path, &centroids_cache_key)
                 .await?;
@@ -2813,6 +2896,7 @@ impl HnswIvfIndex {
             let file_metadata = parquet_reader.metadata().file_metadata();
             let mut loaded_metric = VectorMetric::L2;
             let mut loaded_quantizer = None;
+            let mut loaded_augment_m = 0.0f32;
 
             if let Some(kv_list) = file_metadata.key_value_metadata() {
                 for kv in kv_list {
@@ -2829,10 +2913,14 @@ impl HnswIvfIndex {
                                 loaded_quantizer = Some(q);
                             }
                         }
+                    } else if kv.key == "augment_m" {
+                        if let Some(ref val) = kv.value {
+                            loaded_augment_m = val.parse::<f32>().unwrap_or(0.0);
+                        }
                     }
                 }
             }
-            (loaded_metric, loaded_quantizer)
+            (loaded_metric, loaded_quantizer, loaded_augment_m)
         };
 
         let list_stream = store.list(None);
@@ -2930,6 +3018,7 @@ impl HnswIvfIndex {
                         cb.mapping,
                         quantizer_for_deser.as_ref(),
                         metric,
+                        augment_m,
                     )?;
                     Ok((cluster_id, (hnsw, row_id_mapping)))
                 })
@@ -2960,6 +3049,7 @@ impl HnswIvfIndex {
             dim,
             quantizer,
             rescore_oversample: 4,
+            augment_m,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         };
 
@@ -3205,23 +3295,27 @@ impl HnswIvfIndex {
         let n_lists = centroids.len();
         let dim = centroids[0].len();
 
-        // Load metric from parquet metadata
-        let metric = {
+        // Load metric and MIPS augmentation bound from parquet metadata
+        let (metric, augment_m) = {
             let file = File::open(&centroids_path)?;
             let parquet_reader = parquet::file::reader::SerializedFileReader::new(file)?;
             let file_metadata = parquet_reader.metadata().file_metadata();
             let mut loaded_metric = VectorMetric::L2;
+            let mut loaded_augment_m = 0.0f32;
             if let Some(kv_list) = file_metadata.key_value_metadata() {
                 for kv in kv_list {
                     if kv.key == "vector_metric" {
                         if let Some(ref val) = kv.value {
                             loaded_metric = val.parse::<VectorMetric>().unwrap_or(VectorMetric::L2);
                         }
-                        break;
+                    } else if kv.key == "augment_m" {
+                        if let Some(ref val) = kv.value {
+                            loaded_augment_m = val.parse::<f32>().unwrap_or(0.0);
+                        }
                     }
                 }
             }
-            loaded_metric
+            (loaded_metric, loaded_augment_m)
         };
 
         tracing::debug!("Loaded {} centroids of dimension {}", n_lists, dim);
@@ -3301,7 +3395,11 @@ impl HnswIvfIndex {
                     VectorMetric::InnerProduct => HnswGraph::DotArrow(
                         crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
                             &graph_bytes,
-                            DistDot::norm(),
+                            if augment_m > 0.0 {
+                                DistDot::augmented(augment_m)
+                            } else {
+                                DistDot::norm()
+                            },
                         )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),
@@ -3362,6 +3460,7 @@ impl HnswIvfIndex {
             dim,
             quantizer,
             rescore_oversample: 4,
+            augment_m,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
