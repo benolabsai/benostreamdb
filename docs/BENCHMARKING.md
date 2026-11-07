@@ -282,6 +282,43 @@ Two caveats when reading the ablation:
   quantizers only separate above ~0.90 recall, so quote that region, not the
   coarse-filter end of the curve.
 
+### 5.2 MuSiQue GraphRAG (multi-hop retrieval)
+
+A standalone multi-hop GraphRAG benchmark, separate from the 8-section sweep.
+It uses the exact corpus, OpenIE graph, and 1,000-question manifest that
+Zilliz/HippoRAG publish, so the comparison is like-for-like.
+
+```bash
+# headline: engine-native two-stage retrieval, no hosted LLM
+python3 benchmarks/run_musique_parity.py --mode f32 --reranker bge --rebuild \
+  --corpus-json benchmarks/musique_corpus.json \
+  --triplets-json benchmarks/hippo_openie.json \
+  --sample-manifest benchmarks/zilliz_manifest.json
+
+# architecture demo: Passages/Entities/Relations/Mentions tables
+python3 benchmarks/run_musique_entity_rag.py --mode f32 --reranker bge --rebuild \
+  --corpus-json benchmarks/musique_corpus.json \
+  --triplets-json benchmarks/hippo_openie.json \
+  --sample-manifest benchmarks/zilliz_manifest.json
+```
+
+Headline (1,000 questions, `bge-large-en-v1.5`, f32, BGE cross-encoder):
+
+| Strategy | Micro Recall@5 |
+|---|---:|
+| Hop-1 vector search | 0.5600 |
+| Native Personalized PageRank | 0.5520 |
+| **Two-stage + BGE cross-encoder** | **0.5943** |
+
+Zilliz's published Naive RAG baseline is 0.5803; the two-stage row clears it
+with the whole loop in-engine (vector search + DataFusion graph traversal +
+local cross-encoder), no hosted LLM and no per-token cost.
+
+The three inputs are git-ignored and reproducible; download locations, the
+entity-level results, and the full reproduce steps are in
+[`benchmarks/MUSIQUE_PARITY.md`](../benchmarks/MUSIQUE_PARITY.md) and
+[`benchmarks/MUSIQUE_RESULTS.md`](../benchmarks/MUSIQUE_RESULTS.md).
+
 ---
 
 ## 6. Output schema
