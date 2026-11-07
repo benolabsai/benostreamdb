@@ -102,10 +102,11 @@ def worker_run(dataset: str, mode: str, limit: int, queries: int, k: int, m: int
 
     t0 = time.time()
     table = bsdb.Table(db_path)
+    index_type = "hnsw_sq8" if mode == "sq8" else "hnsw_tq8"
     table.add_index(
         "embedding",
         {
-            "type": "hnsw_tq8",
+            "type": index_type,
             "complexity": m,
             "quality": ef_c,
             "metric": metric,
@@ -201,19 +202,6 @@ def worker_run(dataset: str, mode: str, limit: int, queries: int, k: int, m: int
 
 
 def run_configuration(dataset: str, mode: str, limit: int, queries: int, k: int, m: int, ef_c: int, ef_s: int, threads: int = 32):
-    env = os.environ.copy()
-    if mode == "sq8":
-        env["BSDB_USE_SQ"] = "1"
-        env["BSDB_USE_RADEMACHER"] = "0"
-    elif mode == "tq8":
-        env["BSDB_USE_SQ"] = "0"
-        env["BSDB_USE_RADEMACHER"] = "0"
-    elif mode == "bq8":
-        env["BSDB_USE_SQ"] = "0"
-        env["BSDB_USE_RADEMACHER"] = "1"
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-
     python_bin = sys.executable
     cmd = [
         python_bin,
@@ -230,7 +218,7 @@ def run_configuration(dataset: str, mode: str, limit: int, queries: int, k: int,
         "--threads", str(threads),
     ]
 
-    res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         print(f"Error running {mode} on {dataset}:", file=sys.stderr)
         print(res.stderr, file=sys.stderr)
@@ -310,9 +298,9 @@ def main():
     ]
     for r in all_results:
         mode_label = {
-            "sq8": "Native SQ8 (No Rotation)",
-            "tq8": "Vanilla TQ8 (Google FWHT)",
-            "bq8": "**BenoQuant BQ8 (Rademacher FWHT)**",
+            "sq8": "Native SQ8 (hnsw_sq8)",
+            "tq8": "TurboQuant TQ8 (hnsw_tq8)",
+            "bq8": "TurboQuant TQ8 (hnsw_tq8)",
         }.get(r["mode"], r["mode"])
         md_rows.append(
             f"| `{r['dataset']}` | {mode_label} | **{r['recall_at_k']:.4f}** | {r['pure_qps']:,.1f} | {r['qps']:,.1f} | {r['pure_p50_ms']:.2f} | {r['pure_p99_ms']:.2f} | {r['build_time_s']:.1f}s | {r['index_size_mb']:.1f} MB |"

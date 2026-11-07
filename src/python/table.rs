@@ -464,14 +464,11 @@ impl PyTable {
                 complexity,
                 quality,
             },
-            "sq8" | "hnsw_sq8" => {
-                std::env::set_var("BSDB_USE_SQ", "1");
-                IndexAlgorithm::HnswTq8 {
-                    metric: metric.to_string(),
-                    complexity,
-                    quality,
-                }
-            }
+            "sq8" | "hnsw_sq8" => IndexAlgorithm::HnswSq8 {
+                metric: metric.to_string(),
+                complexity,
+                quality,
+            },
             "tq4" | "hnsw_tq4" | "bq4" | "hnsw_bq4" => IndexAlgorithm::HnswTq4 {
                 metric: metric.to_string(),
                 complexity,
@@ -1692,7 +1689,7 @@ impl PyTable {
         Ok(super::subscribe::PySubscription::new(sub, rt))
     }
 
-    #[pyo3(signature = (seeds, damping=0.85, iterations=30, directed=false, seed_weights=None))]
+    #[pyo3(signature = (seeds, damping=0.85, iterations=30, directed=false, seed_weights=None, nodes=None))]
     fn personalized_pagerank(
         &self,
         py: Python<'_>,
@@ -1701,6 +1698,7 @@ impl PyTable {
         iterations: u32,
         directed: bool,
         seed_weights: Option<Vec<f64>>,
+        nodes: Option<Vec<u64>>,
     ) -> PyResult<Py<PyAny>> {
         let seed_sql = if seeds.is_empty() {
             "make_array()".to_string()
@@ -1715,6 +1713,21 @@ impl PyTable {
             )
         };
         let (src, tgt) = edge_endpoint_columns(&self.table);
+        // Restrict the aggregate input to the induced subgraph. Without this the
+        // UDF scans every edge in the table on each call, which dominates PPR
+        // latency on large graphs.
+        let filter = match nodes {
+            Some(nodes) if !nodes.is_empty() => {
+                let list = nodes
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(" WHERE {src} IN ({list}) OR {tgt} IN ({list})")
+            }
+            Some(_) => " WHERE false".to_string(),
+            None => String::new(),
+        };
         let query = if let Some(weights) = seed_weights {
             let weights_sql = if weights.is_empty() {
                 "make_array()".to_string()
@@ -1729,12 +1742,12 @@ impl PyTable {
                 )
             };
             format!(
-                "SELECT unnest(graph_personalized_pagerank(arrow_cast({src}, 'UInt64'), arrow_cast({tgt}, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {}, {})) FROM t",
+                "SELECT unnest(graph_personalized_pagerank(arrow_cast({src}, 'UInt64'), arrow_cast({tgt}, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {}, {})) FROM t{filter}",
                 seed_sql, damping, iterations, directed, weights_sql
             )
         } else {
             format!(
-                "SELECT unnest(graph_personalized_pagerank(arrow_cast({src}, 'UInt64'), arrow_cast({tgt}, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {})) FROM t",
+                "SELECT unnest(graph_personalized_pagerank(arrow_cast({src}, 'UInt64'), arrow_cast({tgt}, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {})) FROM t{filter}",
                 seed_sql, damping, iterations, directed
             )
         };

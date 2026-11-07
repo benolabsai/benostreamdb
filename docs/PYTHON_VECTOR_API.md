@@ -20,6 +20,15 @@ The API supports six distance metrics:
 | **Hamming** | `hamming()` / `hamming_packed()` | Count of differing positions (float arrays) or bits (packed bytes) | Binary vectors, hashing |
 | **Jaccard** | `jaccard()` / `jaccard_packed()` | 1 - \|A∩B\|/\|A∪B\| | Set similarity |
 
+> [!IMPORTANT]
+> **Inner-product index semantics.** The standalone `inner_product()` helper returns raw
+> `-a·b` (a larger dot product is a smaller distance). When `"metric": "inner_product"` is
+> used for an HNSW/IVF index, the graph ranks candidates by the bounded `1 - cos` distance
+> and then re-ranks the oversampled candidate set by exact raw `-dot` in f32. This gives
+> correct maximum-inner-product ordering without feeding negative distances into the HNSW
+> core. The candidate oversampling factor defaults to `4` and is configurable on the Rust
+> side via `HnswIvfIndex::with_rescore_oversample`.
+
 ## GPU Backend Support
 
 ### Supported Hardware
@@ -890,7 +899,7 @@ table.add_index(
 )
 ```
 
-IVF index clustering uses a deterministic default seed (`0x00C0_FFEE_1337`). You can override this via the `BSDB_KMEANS_SEED` environment variable or specify seeds directly in `Device.kmeans(vectors, k, max_iters=10, seed=42)`.
+IVF index clustering uses a deterministic default seed (`0x00C0_FFEE_1337`). You can specify seeds directly in `Device.kmeans(vectors, k, max_iters=10, seed=42)`.
 
 See [Vector Configuration Guide](CONFIGURATION.md) for tuning parameters.
 

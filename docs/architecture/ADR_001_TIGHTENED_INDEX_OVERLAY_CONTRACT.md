@@ -111,7 +111,7 @@ pub struct IndexFile {
     pub file_path: String,
 
     /// Puffin blob type if packed into an Iceberg Puffin container
-    /// e.g., "org.apache.iceberg.vector.hnsw-tq8", "org.apache.iceberg.lexical.bm25"
+    /// e.g., "org.apache.iceberg.vector.hnsw-graph", "org.apache.iceberg.lexical.bm25"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob_type: Option<String>,
 
@@ -174,8 +174,8 @@ A single `.puffin` file is written alongside each Parquet data file (or partitio
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Puffin File Magic: 0x50 0x55 0x46 0x31          │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Blob 0: Vector HNSW Graph & TQ8 Codebook                               │
-│ - Type: "org.apache.iceberg.vector.hnsw-tq8"                           │
+│ Blob 0: Vector HNSW Graph (quantizer in `quantizer_config`)            │
+│ - Type: "org.apache.iceberg.vector.hnsw-graph"                         │
 │ - Offset: 4, Length: 2,411,520 bytes                                   │
 ├────────────────────────────────────────────────────────────────────────┤
 │ Blob 1: BM25 Lexical Postings & Term Frequencies                       │

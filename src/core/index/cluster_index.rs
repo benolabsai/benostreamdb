@@ -66,10 +66,8 @@ use crate::core::index::{global_centroids, Quantizer, QuantizerImpl, VectorMetri
 use crate::core::manifest::{IndexAlgorithm, ManifestEntry, TableIndexFile};
 use crate::core::puffin::{
     PuffinReader, PuffinWriter, PUFFIN_BLOB_HNSW_IVF_CENTROIDS,
-    PUFFIN_BLOB_VECTOR_CLUSTER_HNSW, PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_PQ,
-    PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ4, PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ8,
     PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META, PUFFIN_BLOB_VECTOR_CLUSTER_SEGMENTS,
-    PUFFIN_BLOB_VECTOR_CLUSTER_SHARDS,
+    PUFFIN_BLOB_VECTOR_CLUSTER_SHARDS, PUFFIN_BLOB_VECTOR_HNSW_GRAPH,
 };
 use crate::core::search::ScoredResult;
 
@@ -1180,19 +1178,10 @@ fn train_quantizer(
     use crate::core::index::sq::SqEncoder;
 
     Ok(match algo {
-        IndexAlgorithm::HnswTq8 { .. } => {
-            let use_sq = std::env::var("BSDB_USE_SQ")
-                .ok()
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-            if use_sq {
-                Some(QuantizerImpl::Sq(SqEncoder::train(sample, 8, metric)?))
-            } else {
-                Some(QuantizerImpl::BenoQuant(BenoQuantEncoder::train(
-                    sample, 8, metric,
-                )?))
-            }
-        }
+        IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(BenoQuantEncoder::train(
+            sample, 8, metric,
+        )?)),
+        IndexAlgorithm::HnswSq8 { .. } => Some(QuantizerImpl::Sq(SqEncoder::train(sample, 8, metric)?)),
         IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(BenoQuantEncoder::train(
             sample, 4, metric,
         )?)),
@@ -1212,15 +1201,8 @@ fn train_quantizer(
 }
 
 /// Puffin blob type for the graph payload.
-fn blob_type_for(quantizer: Option<&QuantizerImpl>) -> &'static str {
-    match quantizer {
-        Some(QuantizerImpl::BenoQuant(q)) if q.bits() == 4 => PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ4,
-        Some(QuantizerImpl::BenoQuant(_)) | Some(QuantizerImpl::Sq(_)) => {
-            PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ8
-        }
-        Some(QuantizerImpl::Pq(_)) => PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_PQ,
-        None => PUFFIN_BLOB_VECTOR_CLUSTER_HNSW,
-    }
+fn blob_type_for(_quantizer: Option<&QuantizerImpl>) -> &'static str {
+    PUFFIN_BLOB_VECTOR_HNSW_GRAPH
 }
 
 /// Write the centroids and segment-table blobs.
@@ -1431,7 +1413,7 @@ fn build_graph(
                 vectors.len(),
                 max_layers,
                 ef_construction,
-                DistDot,
+                DistDot::norm(),
             )),
             VectorMetric::L1 => HnswGraph::L1(Hnsw::new(
                 m,
@@ -1523,7 +1505,7 @@ fn deserialize_graph(
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {e}"))?,
             ),
             VectorMetric::InnerProduct => HnswGraph::DotArrow(
-                ArrowHnsw::load_from_bytes_owned(bytes, DistDot)
+                ArrowHnsw::load_from_bytes_owned(bytes, DistDot::norm())
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {e}"))?,
             ),
             VectorMetric::L1 => HnswGraph::L1Arrow(
@@ -1889,7 +1871,7 @@ fn cluster_slices_from_container(container: &Bytes) -> Result<HashMap<usize, Clu
         }
         if blob.r#type == PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META {
             metas.insert(cluster_id, (offset, length));
-        } else if blob.r#type.starts_with("org.apache.iceberg.vector.cluster-hnsw") {
+        } else if blob.r#type == PUFFIN_BLOB_VECTOR_HNSW_GRAPH {
             graphs.insert(cluster_id, (offset, length));
         }
     }

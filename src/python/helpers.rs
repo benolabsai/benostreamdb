@@ -139,22 +139,16 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                 complexity: 16,
                 quality: 200,
             }),
-            "hnsw_sq8" | "sq8" => {
-                std::env::set_var("BSDB_USE_SQ", "1");
-                Ok(IndexAlgorithm::HnswTq8 {
-                    metric: "l2".to_string(),
-                    complexity: 16,
-                    quality: 200,
-                })
-            }
-            "hnsw_bq8" | "bq8" | "hnsw_tq8" | "tq8" => {
-                std::env::set_var("BSDB_USE_SQ", "0");
-                Ok(IndexAlgorithm::HnswTq8 {
-                    metric: "l2".to_string(),
-                    complexity: 16,
-                    quality: 200,
-                })
-            }
+            "hnsw_sq8" | "sq8" => Ok(IndexAlgorithm::HnswSq8 {
+                metric: "l2".to_string(),
+                complexity: 16,
+                quality: 200,
+            }),
+            "hnsw_bq8" | "bq8" | "hnsw_tq8" | "tq8" => Ok(IndexAlgorithm::HnswTq8 {
+                metric: "l2".to_string(),
+                complexity: 16,
+                quality: 200,
+            }),
             "bm25" => Ok(IndexAlgorithm::Bm25 {
                 k1: 1.2,
                 b: 0.75,
@@ -294,7 +288,6 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                 })
             }
             "hnsw_sq8" | "sq8" => {
-                std::env::set_var("BSDB_USE_SQ", "1");
                 let metric = dict
                     .get_item("metric")?
                     .and_then(|v| v.extract::<String>().ok())
@@ -319,14 +312,13 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                             .and_then(|v| v.extract::<usize>().ok())
                     })
                     .unwrap_or(200);
-                Ok(IndexAlgorithm::HnswTq8 {
+                Ok(IndexAlgorithm::HnswSq8 {
                     metric,
                     complexity,
                     quality,
                 })
             }
             "hnsw_bq8" | "bq8" | "hnsw_tq8" | "tq8" => {
-                std::env::set_var("BSDB_USE_SQ", "0");
                 let metric = dict
                     .get_item("metric")?
                     .and_then(|v| v.extract::<String>().ok())

@@ -44,6 +44,30 @@ pub struct GraphNeighborhoodOptions {
     pub relation_column: Option<String>,
 }
 
+/// Process-wide cache of resolved CSR graphs, keyed by
+/// `(table uri, manifest version, sorted column set)`.
+///
+/// Resolving a graph costs a manifest walk plus a read of the offsets/edges/dict
+/// blobs, which dwarfs the traversal itself for point queries. Keying on the
+/// manifest version means a commit invalidates the entry automatically.
+fn graph_index_cache() -> &'static moka::sync::Cache<
+    (String, u64, String),
+    std::sync::Arc<HashMap<String, MultiSegmentCsrGraph>>,
+> {
+    static CACHE: std::sync::OnceLock<
+        moka::sync::Cache<
+            (String, u64, String),
+            std::sync::Arc<HashMap<String, MultiSegmentCsrGraph>>,
+        >,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(8)
+            .time_to_idle(std::time::Duration::from_secs(600))
+            .build()
+    })
+}
+
 impl Table {
     /// Load memory-mapped [`MultiSegmentCsrGraph`] for `graph_column` from the table's
     /// index files (`{file}.graph_v2.csr.{offsets,edges,dict}`).
@@ -55,10 +79,25 @@ impl Table {
         columns: &[&str],
     ) -> Result<HashMap<String, MultiSegmentCsrGraph>> {
         let manifest = self.manifest().await?;
+
+        // Resolving a CSR graph is not free: it walks every manifest index entry
+        // and reads the offsets/edges/dict blobs. Paying that on every point
+        // query made `shortest_path` look ~0.5 s slow on a 5M-edge graph
+        // regardless of path length. The graphs are `Arc`-backed, so caching the
+        // resolved set is cheap and safe; the manifest version is part of the key,
+        // so a commit naturally invalidates it.
+        let mut sorted_cols: Vec<&str> = columns.to_vec();
+        sorted_cols.sort_unstable();
+        let cache_key = (self.uri.clone(), manifest.version, sorted_cols.join(","));
+        if let Some(cached) = graph_index_cache().get(&cache_key) {
+            return Ok((*cached).clone());
+        }
+
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let entries = manifest_manager.load_all_entries(&manifest).await?;
-        self.load_graph_indices_from_entries(&entries, columns)
-            .await
+        let loaded = self.load_graph_indices_from_entries(&entries, columns).await?;
+        graph_index_cache().insert(cache_key, std::sync::Arc::new(loaded.clone()));
+        Ok(loaded)
     }
 
     async fn load_graph_indices_from_entries(
@@ -484,53 +523,175 @@ impl Table {
             return Ok(vec![start_node]);
         }
 
-        const MAX_SHORTEST_PATH_NODES: usize = 100_000;
+        // Runaway guard, not a query budget. 100k was far too low: a 13-hop
+        // query on an 876k-node, 5.1M-edge web graph legitimately touches more
+        // than that, so the search aborted and the caller silently fell back to
+        // a full edge scan. ~48 bytes per visited node keeps 4M under ~200 MB.
+        const MAX_SHORTEST_PATH_NODES: usize = 4_000_000;
         const MAX_BFS_DEGREE: usize = 10_000;
 
         use crate::core::sql::graph_udf::graph_view::GraphView;
 
-        // Fast path: CSR index
-        let col_to_check = graph_column.unwrap_or("source");
+        // Fast path: CSR index.
+        //
+        // Bidirectional BFS. A single-direction BFS has to enumerate the entire
+        // reachable frontier before it can answer — on a multi-million-edge web
+        // graph that is most of the node set (a single `snap-web-google` query
+        // expands ~600k of 876k nodes) — and it used to hit the expansion cap and
+        // return "no path" for pairs that are in fact reachable. Expanding the
+        // smaller of two frontiers and stopping at the first meeting layer costs
+        // roughly the square root of that, and keeps each frontier well under the
+        // cap.
+        // A reverse CSR can be registered either under the `{column}_rev`
+        // convention or, just as commonly, as a graph index on the target
+        // endpoint column (e.g. an index on `target` with src=target,
+        // dst=source). Try both names, otherwise the search silently degrades
+        // to a forward-only sweep.
+        let (ep_src, ep_tgt) = self
+            .resolve_endpoint_columns(source_column, target_column)
+            .await;
+        let col_to_check = graph_column.unwrap_or(ep_src.as_str());
         let rev_col = format!("{col_to_check}_rev");
-        let cols_to_load: Vec<&str> = if !directed {
-            vec![col_to_check, rev_col.as_str()]
-        } else {
-            vec![col_to_check]
-        };
+        let mut cols_to_load: Vec<&str> = vec![col_to_check, rev_col.as_str()];
+        if ep_tgt != col_to_check && ep_tgt != rev_col {
+            cols_to_load.push(ep_tgt.as_str());
+        }
 
         let mut indices = self
             .load_graph_indices(&cols_to_load)
             .await
             .unwrap_or_default();
         if let Some(forward) = indices.remove(col_to_check) {
-            let reverse = if !directed {
-                indices.remove(&rev_col)
-            } else {
-                None
-            };
+            // The reverse CSR is what lets the search walk towards `end_node`
+            // along incoming edges; without it only a forward walk is possible.
+            let reverse = indices
+                .remove(&rev_col)
+                .or_else(|| indices.remove(&ep_tgt));
 
-            if directed || reverse.is_some() {
-                let mut queue = VecDeque::new();
-                let mut visited = HashMap::new();
+            if let Some(reverse) = reverse {
+                let mut pred: HashMap<u64, u64> = HashMap::new();
+                let mut succ: HashMap<u64, u64> = HashMap::new();
+                pred.insert(start_node, start_node);
+                succ.insert(end_node, end_node);
 
-                queue.push_back(start_node);
+                let mut front: Vec<u64> = vec![start_node];
+                let mut back: Vec<u64> = vec![end_node];
+                let mut expanded = 0usize;
+                let mut meet: Option<u64> = None;
+                // Reused across every expansion: `get_neighbors` allocates a Vec
+                // per node, which dominated the traversal on wide graphs.
+                let mut neighbors: Vec<u64> = Vec::new();
+
+                while !front.is_empty() && !back.is_empty() {
+                    if front.len() <= back.len() {
+                        let mut next: Vec<u64> = Vec::new();
+                        for &u in &front {
+                            expanded += 1;
+                            neighbors.clear();
+                            forward.get_neighbors_into(u, &mut neighbors);
+                            for &v in neighbors.iter().take(MAX_BFS_DEGREE) {
+                                if let std::collections::hash_map::Entry::Vacant(e) =
+                                    pred.entry(v)
+                                {
+                                    e.insert(u);
+                                    next.push(v);
+                                }
+                            }
+                        }
+                        // Checking at the layer boundary keeps the path optimal.
+                        if let Some(m) = next.iter().copied().find(|n| succ.contains_key(n)) {
+                            meet = Some(m);
+                        }
+                        front = next;
+                    } else {
+                        let mut next: Vec<u64> = Vec::new();
+                        for &v in &back {
+                            expanded += 1;
+                            neighbors.clear();
+                            reverse.get_neighbors_into(v, &mut neighbors);
+                            for &u in neighbors.iter().take(MAX_BFS_DEGREE) {
+                                if let std::collections::hash_map::Entry::Vacant(e) = succ.entry(u)
+                                {
+                                    e.insert(v);
+                                    next.push(u);
+                                }
+                            }
+                        }
+                        if let Some(m) = next.iter().copied().find(|n| pred.contains_key(n)) {
+                            meet = Some(m);
+                        }
+                        back = next;
+                    }
+
+                    if meet.is_some() {
+                        break;
+                    }
+                    if expanded >= MAX_SHORTEST_PATH_NODES {
+                        // Never report a false "no path": fail loudly so the
+                        // caller can raise the bound instead of trusting an
+                        // empty result.
+                        anyhow::bail!(
+                            "shortest_path aborted after expanding {} nodes; \
+                             raise or remove the limit for graphs this wide",
+                            expanded
+                        );
+                    }
+                }
+
+                return Ok(match meet {
+                    None => Vec::new(),
+                    Some(m) => {
+                        let mut path: Vec<u64> = Vec::new();
+                        let mut cur = m;
+                        loop {
+                            path.push(cur);
+                            let prev = pred[&cur];
+                            if prev == cur {
+                                break;
+                            }
+                            cur = prev;
+                        }
+                        path.reverse();
+                        let mut cur = succ[&m];
+                        while cur != end_node {
+                            path.push(cur);
+                            cur = succ[&cur];
+                        }
+                        if m != end_node {
+                            path.push(end_node);
+                        }
+                        path
+                    }
+                });
+            }
+
+            // No reverse CSR: forward-only walk (directed queries only; an
+            // undirected search needs the reverse index and uses the scan path).
+            if directed {
+                let mut visited: HashMap<u64, u64> = HashMap::new();
+                let mut queue: VecDeque<u64> = VecDeque::new();
                 visited.insert(start_node, start_node);
+                queue.push_back(start_node);
 
-                let mut found = false;
                 while let Some(current) = queue.pop_front() {
                     if current == end_node {
-                        found = true;
-                        break;
+                        let mut path = Vec::new();
+                        let mut curr = end_node;
+                        while curr != start_node {
+                            path.push(curr);
+                            curr = visited[&curr];
+                        }
+                        path.push(start_node);
+                        path.reverse();
+                        return Ok(path);
                     }
-
                     if visited.len() >= MAX_SHORTEST_PATH_NODES {
-                        tracing::warn!(
-                            "shortest_path exceeded maximum node expansion limit ({} nodes); aborting search",
-                            MAX_SHORTEST_PATH_NODES
+                        anyhow::bail!(
+                            "shortest_path aborted after expanding {} nodes; \
+                             raise or remove the limit for graphs this wide",
+                            visited.len()
                         );
-                        break;
                     }
-
                     for neighbor in forward
                         .get_neighbors(current)
                         .into_iter()
@@ -543,33 +704,8 @@ impl Table {
                             queue.push_back(neighbor);
                         }
                     }
-
-                    if let Some(ref rev) = reverse {
-                        for neighbor in rev.get_neighbors(current).into_iter().take(MAX_BFS_DEGREE)
-                        {
-                            if let std::collections::hash_map::Entry::Vacant(entry) =
-                                visited.entry(neighbor)
-                            {
-                                entry.insert(current);
-                                queue.push_back(neighbor);
-                            }
-                        }
-                    }
                 }
-
-                if found {
-                    let mut path = Vec::new();
-                    let mut curr = end_node;
-                    while curr != start_node {
-                        path.push(curr);
-                        curr = visited[&curr];
-                    }
-                    path.push(start_node);
-                    path.reverse();
-                    return Ok(path);
-                } else {
-                    return Ok(Vec::new());
-                }
+                return Ok(Vec::new());
             }
         }
 

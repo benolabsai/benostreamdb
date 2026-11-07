@@ -1051,6 +1051,12 @@ impl ManifestManager {
             for del in &m.delete_files {
                 active_files.insert(del.file_path.clone());
             }
+            for tidx in &m.table_indexes {
+                active_files.insert(tidx.file_path.clone());
+                for s in &tidx.shard_files {
+                    active_files.insert(s.clone());
+                }
+            }
 
             // Keep the manifest file itself and its manifest list (if tiered)
             let m_name = format!("v{}.json", v);
@@ -1094,6 +1100,7 @@ impl ManifestManager {
 
             // check if it's a data file we should care about
             let is_data_file = path_str.ends_with(".parquet")
+                || path_str.ends_with(".puffin")
                 || path_str.ends_with(".hnsw")
                 || path_str.ends_with(".idx")
                 || path_str.ends_with(".tmp");
@@ -1128,6 +1135,12 @@ impl ManifestManager {
         }
         for del in &latest_m.delete_files {
             active_files.insert(del.file_path.clone());
+        }
+        for tidx in &latest_m.table_indexes {
+            active_files.insert(tidx.file_path.clone());
+            for s in &tidx.shard_files {
+                active_files.insert(s.clone());
+            }
         }
         if let Some(ref mlp) = latest_m.manifest_list_path {
             manifest_files_to_keep.insert(mlp.clone());

@@ -247,14 +247,9 @@ pub fn simple_kmeans_with_seed(
     }
     let dim = vectors[0].len();
 
-    // Default to a deterministic seed (0x00C0_FFEE_1337) or env var if None is provided,
+    // Default to a deterministic seed (0x00C0_FFEE_1337) if none is provided,
     // ensuring reproducibility across platforms, cores, and CI runs.
-    let seed_val = seed.unwrap_or_else(|| {
-        std::env::var("BSDB_KMEANS_SEED")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0x00C0_FFEE_1337)
-    });
+    let seed_val = seed.unwrap_or(0x00C0_FFEE_1337);
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed_val);
 
     // Step 1: Flatten training vectors once for SIMD/Cache locality

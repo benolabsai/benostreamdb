@@ -929,6 +929,21 @@ impl Table {
         new_manifest.version = new_version;
         new_manifest.prev_version = Some(version);
         new_manifest.timestamp_ms = chrono::Utc::now().timestamp_millis();
+
+        // Collect superseded cluster index shards before replacement to clean them up post-commit
+        let old_shards_to_clean: Vec<String> = manifest
+            .table_indexes
+            .iter()
+            .filter(|idx| idx.column_name == column)
+            .flat_map(|idx| {
+                let mut files = idx.shard_files.clone();
+                if files.is_empty() {
+                    files.push(idx.file_path.clone());
+                }
+                files
+            })
+            .collect();
+
         new_manifest
             .table_indexes
             .retain(|idx| idx.column_name != column);
@@ -941,6 +956,12 @@ impl Table {
 
         manager.commit_manifest(new_manifest.clone()).await?;
         self.publish_snapshot_async(&new_manifest, "replace").await?;
+
+        // Delete superseded cluster index shard files from the replaced index
+        for old_shard in old_shards_to_clean {
+            let p = object_store::path::Path::from(old_shard.as_str());
+            let _ = self.store.delete(&p).await;
+        }
 
         // A rebuild replaces the artifact bytes; drop every cache that could
         // still serve the previous one.
@@ -1065,6 +1086,7 @@ fn is_vector_algorithm(algo: &crate::core::manifest::IndexAlgorithm) -> bool {
         algo,
         crate::core::manifest::IndexAlgorithm::Hnsw { .. }
             | crate::core::manifest::IndexAlgorithm::HnswTq8 { .. }
+            | crate::core::manifest::IndexAlgorithm::HnswSq8 { .. }
             | crate::core::manifest::IndexAlgorithm::HnswTq4 { .. }
             | crate::core::manifest::IndexAlgorithm::HnswPq { .. }
     )

@@ -30,3 +30,4 @@ class WarmupProcedure extends UnboundProcedure with BoundProcedure {
     java.util.Collections.emptyIterator()
   }
 }
+

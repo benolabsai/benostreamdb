@@ -113,15 +113,22 @@ def build_sections(cpus: str, mem: str, envelope: list[str] | None = None) -> li
     ]
 
     # §2: graph, synthetic plus the named SNAP datasets the report quotes.
-    graph_common = ["--engines", "benostreamdb,networkx",
+    # The synthetic graph runs the same engine set as the SNAP datasets, so the
+    # report's "synthetic graph" comparisons (and the Neo4j speedup ratios that
+    # generate_summary derives from them) are backed by real records.
+    graph_common = ["--engines", "benostreamdb,networkx,neo4j",
                     "--algorithms", "pagerank,connected_components,shortest_path"]
+    # SNAP (5M+ edge) datasets also run Neo4j + GDS as the external-database
+    # reference, alongside the embedded Rust and in-process Python engines.
+    snap_common = ["--engines", "benostreamdb,networkx,neo4j",
+                   "--algorithms", "pagerank,connected_components,shortest_path"]
     graph_commands = [
         [sys.executable, "benchmarks/graph/run.py", "--nodes", "10000", "--edges", "50000",
          *graph_common, "--out", "benchmarks/graph/results/graph_synth_10k.md"],
         [sys.executable, "benchmarks/graph/run.py", "--dataset", "snap-web-google",
-         *graph_common, "--out", "benchmarks/graph/results/graph_snap_web_google.md"],
+         *snap_common, "--out", "benchmarks/graph/results/graph_snap_web_google.md"],
         [sys.executable, "benchmarks/graph/run.py", "--dataset", "snap-roadnet-ca",
-         *graph_common, "--out", "benchmarks/graph/results/graph_snap_roadnet_ca.md"],
+         *snap_common, "--out", "benchmarks/graph/results/graph_snap_roadnet_ca.md"],
     ]
 
     # §4: BEIR lexical/hybrid, three datasets, competitor included when installed.

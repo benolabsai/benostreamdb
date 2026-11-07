@@ -44,3 +44,4 @@ class RebuildClusterIndexProcedure extends Procedure {
     Array(row)
   }
 }
+

@@ -1,0 +1,54 @@
+{
+  "description": "Entity-level Vector Graph RAG on BenoStreamDB (Passages + Entities + Relations + Mentions tables)",
+  "top_k": 5,
+  "seed_k": 2,
+  "hops": 2,
+  "entity_cap": 64,
+  "candidates": 24,
+  "reranker": "bge",
+  "passages": 11656,
+  "entities": 64982,
+  "graph_source": "HippoRAG OpenIE triplets",
+  "strategies": {
+    "vector": {
+      "evidence_recall_at_k": 0.55975,
+      "hit_rate_at_k": 0.931,
+      "all_hit_rate_at_k": 0.226,
+      "precision_at_k": 0.2774000000000001,
+      "qps": 527.6884718820597,
+      "p50_ms": 1.338369995210087,
+      "p99_ms": 1.78210612211842,
+      "queries_evaluated": 1000
+    },
+    "entity_seed": {
+      "evidence_recall_at_k": 0.3228333333333333,
+      "hit_rate_at_k": 0.677,
+      "all_hit_rate_at_k": 0.052,
+      "precision_at_k": 0.3342333333333333,
+      "qps": 130.28665451107037,
+      "p50_ms": 7.045071997708874,
+      "p99_ms": 9.336866583398654,
+      "queries_evaluated": 1000
+    },
+    "entity_bfs": {
+      "evidence_recall_at_k": 0.13475,
+      "hit_rate_at_k": 0.274,
+      "all_hit_rate_at_k": 0.027,
+      "precision_at_k": 0.08844999999999999,
+      "qps": 50.92781184717533,
+      "p50_ms": 19.491823499265593,
+      "p99_ms": 22.374988019582812,
+      "queries_evaluated": 1000
+    },
+    "entity_rag": {
+      "evidence_recall_at_k": 0.214,
+      "hit_rate_at_k": 0.414,
+      "all_hit_rate_at_k": 0.059,
+      "precision_at_k": 0.12645,
+      "qps": 10.804299522146975,
+      "p50_ms": 103.09501799929421,
+      "p99_ms": 148.13371837975865,
+      "queries_evaluated": 1000
+    }
+  }
+}

@@ -3,6 +3,8 @@
 | Metric | Value |
 |---|---|
 | engine | qdrant |
+| index_type | flat |
+| index_precision | f32 |
 | dataset | nytimes-256-angular |
 | workload | vector_ann |
 | device | cpu |
@@ -11,16 +13,16 @@
 | index | m=16, ef_construction=200, ef_search=200, metric=cosine |
 | queries | 500 |
 | k | 10 |
-| build_s | 3.61 |
+| build_s | 4.639 |
 | index_mb | 20.48 |
 | recall_at_k | 0.9986 |
-| pure_index_qps | 632.4 |
-| pure_p50_ms | 1.364 |
-| pure_p99_ms | 2.703 |
-| full_row_qps | 514.9 |
-| full_p50_ms | 1.897 |
-| full_p99_ms | 2.542 |
-| qps | 632.4 |
-| p50_ms | 1.897 |
-| p99_ms | 2.542 |
-| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-38-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |
+| pure_index_qps | 738.4 |
+| pure_p50_ms | 1.141 |
+| pure_p99_ms | 1.811 |
+| full_row_qps | 615.7 |
+| full_p50_ms | 1.597 |
+| full_p99_ms | 2.129 |
+| qps | 738.4 |
+| p50_ms | 1.597 |
+| p99_ms | 2.129 |
+| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-42-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=['NVIDIA GeForce RTX 5070 Ti, 16303 MiB', 'NVIDIA GeForce RTX 5070 Ti, 16303 MiB'] |

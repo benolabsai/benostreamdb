@@ -16,8 +16,8 @@ re-ingesting.
 
 Intra-engine ablation:
 1. Native SQ8
-2. Vanilla TQ8 (Google FWHT)
-3. BenoQuant BQ8 (Rademacher FWHT: H * D)
+2. TurboQuant TQ8 (HNSW-TQ8: H * D)
+3. TurboQuant TQ4 (HNSW-TQ4: H * D + 2B scale)
 """
 
 import argparse
@@ -219,20 +219,6 @@ def load_ground_truth(gt_path: str, n: int, dataset_count: int, queries_count: i
 # --------------------------------------------------------------------------- #
 # Stages
 # --------------------------------------------------------------------------- #
-
-
-def mode_env(mode: str) -> dict:
-    env = {
-        "BSDB_USE_SQ": "0",
-        "BSDB_USE_RADEMACHER": "1",
-    }
-    if mode == "sq8":
-        env["BSDB_USE_SQ"] = "1"
-    elif mode in ("bq8", "bq4", "pq", "f32"):
-        pass
-    else:
-        raise ValueError(f"Unknown mode {mode}")
-    return env
 
 
 def db_size_mb(path: str) -> float:
@@ -464,11 +450,10 @@ def clear_evaluation_caches(table=None, paths=None, label: str = ""):
 def index_mode_marker(db_path: str) -> str:
     """Path of the harness-authored record of which quantizer built the index.
 
-    The engine cannot answer this from the table. `sq8` and `tq8`/`bq8` all map
-    to `IndexAlgorithm::HnswTq8` and all write the same `hnsw-tq8` Puffin blob
-    type; the only difference is the process-global `BSDB_USE_SQ` flag, read at
-    build time. So `--skip-reindex` would otherwise be free to reuse a BQ8 index
-    for an SQ8 run and report it as SQ8 — the quantizer that never ran.
+    Each quantizer is a first-class `IndexAlgorithm` (`hnsw`, `hnsw_sq8`,
+    `hnsw_tq8`, `hnsw_tq4`, `hnsw_pq`), so the mode is recoverable from the
+    manifest. The marker remains as a build-parameter record so `--skip-reindex`
+    can still detect a mismatched index on disk.
     """
     return os.path.join(db_path, ".index_mode.json")
 
@@ -490,7 +475,6 @@ def write_index_mode(db_path: str, mode: str, idx_type: str, args) -> None:
         "quality": args.ef_construction,
         "metric": getattr(args, "metric", None),
         "dim": getattr(args, "dim", None),
-        "use_sq": os.environ.get("BSDB_USE_SQ"),
     }
     with open(index_mode_marker(db_path), "w") as f:
         json.dump(record, f, indent=2, sort_keys=True)
@@ -504,9 +488,6 @@ def reindex_and_preload(bsdb, args, mode: str):
     is why the mode is recorded in `.index_mode.json`: a later `--skip-reindex`
     run can then tell whether the index on disk is the quantizer it asked for.
     """
-    for key, value in mode_env(mode).items():
-        os.environ[key] = value
-
     base_db = getattr(args, "base_db_dir", None) or args.db_dir or os.path.join(args.scratch_dir, "bigann_db")
 
     # One table, rebuilt in place per mode.
@@ -538,13 +519,12 @@ def reindex_and_preload(bsdb, args, mode: str):
     else:
         table = bsdb.Table(db_path)
 
-    # Which algorithm this mode builds. SQ8 is not a distinct index type in the
-    # engine — `sq8`, `bq8` and `tq8` are all `HnswTq8`, and SQ8 is selected by
-    # the process-global BSDB_USE_SQ flag at build time — so the mode is recorded
-    # here rather than inferred from the manifest.
+    # Which algorithm this mode builds. Each quantizer is a distinct, first-class
+    # `IndexAlgorithm` (`hnsw`, `hnsw_sq8`, `hnsw_tq8`, `hnsw_tq4`, `hnsw_pq`),
+    # so the mode is recorded here and also inferable from the manifest.
     if mode == "f32":
         idx_type = "hnsw"
-    elif mode in ("tq4", "bq4"):
+    elif mode == "tq4":
         idx_type = "tq4"
     elif mode == "sq8":
         idx_type = "sq8"
@@ -706,7 +686,6 @@ def reindex_and_preload(bsdb, args, mode: str):
 
 def search_pass(table, args, queries, gt_indices, ef_search: int, n_probe: int, mode: str = "") -> dict:
     """One query pass at a given (ef_search, n_probe) operating point."""
-    os.environ["BSDB_HNSW_N_PROBE"] = str(n_probe)
     q = len(queries)
     query_vectors = [queries[i].tolist() for i in range(q)]
     process = psutil.Process(os.getpid())
@@ -717,9 +696,6 @@ def search_pass(table, args, queries, gt_indices, ef_search: int, n_probe: int, 
             "query": query_vectors[idx],
             "k": args.k,
             "ef_search": ef_search,
-            # Pass n_probe explicitly. The engine still falls back to
-            # BSDB_HNSW_N_PROBE, but that read takes a global lock per segment
-            # and is the wrong place for a per-operating-point parameter.
             "probes": n_probe,
         }
         if getattr(args, "refine_factor", None) is not None and mode.lower() != "f32":
@@ -777,9 +753,7 @@ def render_report(args, records, meta) -> str:
     labels = {
         "f32": "Uncompressed HNSW (f32)",
         "tq8": "TurboQuant TQ8 ($H \\cdot D$)",
-        "bq8": "TurboQuant TQ8 ($H \\cdot D$)",
         "tq4": "TurboQuant TQ4 ($H \\cdot D$ + 2B scale)",
-        "bq4": "TurboQuant TQ4 ($H \\cdot D$ + 2B scale)",
         "sq8": "Native SQ8 (no rotation)",
         "pq": "Product Quantization (PQ)",
     }
@@ -869,10 +843,14 @@ def save_results(args, records, meta) -> None:
 
 GIB = 1024**3
 
-# Reference machine for a leaderboard-comparable run:
+# Reference machines for leaderboard-comparable runs:
 # Azure Standard_D8lds_v5 = 8 vCPU, 16 GiB RAM, local NVMe.
+# Azure Standard_D8s_v5   = 8 vCPU, 32 GiB RAM, local NVMe.
+# Azure Standard_E8ds_v5  = 8 vCPU, 64 GiB RAM, local NVMe.
 HARDWARE_PROFILES = {
     "d8lds": {"label": "Azure Standard_D8lds_v5 (8 vCPU / 16 GiB)", "cpus": 8, "mem_gb": 16},
+    "d8s":   {"label": "Azure Standard_D8s_v5 (8 vCPU / 32 GiB)",   "cpus": 8, "mem_gb": 32},
+    "e8ds":  {"label": "Azure Standard_E8ds_v5 (8 vCPU / 64 GiB)",  "cpus": 8, "mem_gb": 64},
 }
 
 
@@ -1027,16 +1005,18 @@ def main():
     parser.add_argument("--cache-gb", type=int, default=0,
                         help="Override BSDB_CACHE_GB; 0 (default) = half the memory "
                              "envelope. Lower it to leave room for the index build.")
-    parser.add_argument("--hardware", choices=["auto", "local", "d8lds"], default="auto",
+    parser.add_argument("--hardware", choices=["auto", "local", "d8lds", "d8s", "e8ds"], default="auto",
                         help="Evaluation envelope: auto = cgroup limits, d8lds = "
-                             "Azure Standard_D8lds_v5 (8 vCPU / 16 GiB), local = this host")
+                             "Azure Standard_D8lds_v5 (8 vCPU / 16 GiB), d8s = "
+                             "Azure Standard_D8s_v5 (8 vCPU / 32 GiB), e8ds = "
+                             "Azure Standard_E8ds_v5 (8 vCPU / 64 GiB), local = this host")
     parser.add_argument("--strict-hardware", action="store_true",
                         help="Fail unless the process really is constrained to the envelope")
-    parser.add_argument("--mode", type=str, choices=["f32", "tq8", "bq8", "tq4", "bq4", "sq8", "pq"], default="tq8")
+    parser.add_argument("--mode", type=str, choices=["f32", "tq8", "tq4", "sq8", "pq"], default="tq8")
     parser.add_argument("--modes", type=str, default=None,
                         help="Comma-separated list of modes to run (e.g. 'sq8,pq')")
     parser.add_argument("--all-modes", action="store_true",
-                        help="Run the complete evaluation (f32, BQ8, BQ4, SQ8, PQ)")
+                        help="Run the complete evaluation (f32, TQ8, TQ4, SQ8, PQ)")
     parser.add_argument("--stage", choices=["both", "ingest", "query"], default="both",
                         help="ingest: build the table only; query: reindex+query only; "
                              "both: ingest if needed, then query")
@@ -1123,7 +1103,7 @@ def main():
     if args.modes:
         modes = [m.strip().lower() for m in args.modes.split(",") if m.strip()]
     elif args.all_modes:
-        modes = ["f32", "bq8", "bq4", "sq8", "pq"]
+        modes = ["f32", "tq8", "tq4", "sq8", "pq"]
     else:
         modes = [args.mode]
 
@@ -1227,7 +1207,6 @@ def main():
                     print(f"    -> Warming index cache with {nw} untimed query probes ...", flush=True)
                     t_warm_start = time.time()
                     warm_subset = [test_queries[i].tolist() for i in range(nw)]
-                    os.environ["BSDB_HNSW_N_PROBE"] = "16"
                     with ThreadPoolExecutor(max_workers=args.threads) as executor:
                         list(executor.map(
                             lambda q_vec: table.to_arrow(
@@ -1328,8 +1307,9 @@ def main():
         labels = {
             "f32": "Uncompressed HNSW (f32)",
             "sq8": "Native SQ8 (no rotation)",
-            "tq8": "Vanilla TQ8 (FWHT)",
-            "bq8": "**BenoQuant BQ8 ($H \\cdot D$)**",
+            "tq8": "TurboQuant TQ8 ($H \\cdot D$)",
+            "tq4": "TurboQuant TQ4 ($H \\cdot D$ + 2B scale)",
+            "pq": "Product Quantization (PQ)",
         }
         md = [
             "| Scale | Quantizer | ef_search | n_probe | Recall@10 | QPS | p50 (ms) | p99 (ms) |",

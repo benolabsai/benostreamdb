@@ -3,6 +3,8 @@
 | Metric | Value |
 |---|---|
 | engine | faiss |
+| index_type | flat |
+| index_precision | f32 |
 | dataset | glove-100-angular |
 | workload | vector_ann |
 | device | cpu |
@@ -11,16 +13,16 @@
 | index | m=16, ef_construction=200, ef_search=200, metric=cosine |
 | queries | 500 |
 | k | 10 |
-| build_s | 0.401 |
+| build_s | 0.437 |
 | index_mb | 10.88 |
 | recall_at_k | 0.9826 |
-| pure_index_qps | 3438.8 |
-| pure_p50_ms | 0.142 |
-| pure_p99_ms | 0.29 |
-| full_row_qps | 7193.4 |
-| full_p50_ms | 0.141 |
-| full_p99_ms | 0.16 |
-| qps | 3438.8 |
-| p50_ms | 0.141 |
-| p99_ms | 0.16 |
-| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-38-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |
+| pure_index_qps | 3264.6 |
+| pure_p50_ms | 0.151 |
+| pure_p99_ms | 0.35 |
+| full_row_qps | 6408.1 |
+| full_p50_ms | 0.153 |
+| full_p99_ms | 0.227 |
+| qps | 3264.6 |
+| p50_ms | 0.153 |
+| p99_ms | 0.227 |
+| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-42-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=['NVIDIA GeForce RTX 5070 Ti, 16303 MiB', 'NVIDIA GeForce RTX 5070 Ti, 16303 MiB'] |

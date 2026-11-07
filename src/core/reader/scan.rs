@@ -1078,16 +1078,11 @@ impl HybridReader {
             // (chunked builds write one HNSW-IVF index per 100k-vector chunk,
             // each registered as a separate IndexFile with the same blob_type).
             let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
-                match f.blob_type.as_deref() {
-                    Some("hnsw_tq8")
-                    | Some("hnsw_tq4")
-                    | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ8)
-                    | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ4) => 0,
-                    Some("hnsw_pq") | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_PQ) => 1,
-                    Some("hnsw_ivf") => 2,
-                    Some("hnsw")
-                    | Some("hnsw_f32")
-                    | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW) => 3,
+                match f.algorithm.as_str() {
+                    "tq8" | "hnsw_tq8" | "tq4" | "hnsw_tq4" | "sq8" | "hnsw_sq8" => 0,
+                    "pq" | "hnsw_pq" => 1,
+                    "hnsw_ivf" => 2,
+                    "hnsw" | "hnsw_f32" => 3,
                     _ => 4,
                 }
             };
@@ -1240,16 +1235,11 @@ impl HybridReader {
         // last. (Previously the compressed TQ/PQ variants ranked *first*, so a
         // column with both a float and a TQ8 index silently served TQ8.)
         let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
-            match f.blob_type.as_deref() {
-                Some("hnsw")
-                | Some("hnsw_f32")
-                | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW) => 0,
-                Some("hnsw_ivf") => 1,
-                Some("hnsw_pq") | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_PQ) => 2,
-                Some("hnsw_tq8")
-                | Some("hnsw_tq4")
-                | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ8)
-                | Some(crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ4) => 3,
+            match f.algorithm.as_str() {
+                "hnsw" | "hnsw_f32" => 0,
+                "hnsw_ivf" => 1,
+                "pq" | "hnsw_pq" => 2,
+                "tq8" | "hnsw_tq8" | "tq4" | "hnsw_tq4" | "sq8" | "hnsw_sq8" => 3,
                 _ => 4,
             }
         };
@@ -2871,16 +2861,7 @@ impl HybridReader {
         let allowed_bm_clone = allowed_bitmap.clone();
         let hnsw_ivf_clone = hnsw_ivf.clone();
 
-        // Prefer the explicit parameter. The environment read is a fallback for
-        // callers that have not been migrated, and it takes a global lock, so it
-        // must not be the primary path.
-        let n_probe = probes
-            .or_else(|| {
-                std::env::var("BSDB_HNSW_N_PROBE")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-            })
-            .unwrap_or_else(|| {
+        let n_probe = probes.unwrap_or_else(|| {
                 if allowed_bitmap.is_some() {
                     20
                 } else if let Some(ef) = ef_search {
@@ -2921,7 +2902,8 @@ impl HybridReader {
         })
         .await??;
 
-        if std::env::var("BSDB_TRACE_SEARCH").is_ok() {
+        #[cfg(feature = "trace-search")]
+        {
             eprintln!(
                 "[trace] search_hnsw_ivf path={} blob_offset={:?} algo={} cache_key={} top={:?}",
                 idx_info.file_path,

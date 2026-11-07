@@ -792,7 +792,8 @@ impl HybridSegmentWriter {
                     crate::core::manifest::IndexAlgorithm::Hnsw { metric, .. }
                     | crate::core::manifest::IndexAlgorithm::HnswPq { metric, .. }
                     | crate::core::manifest::IndexAlgorithm::HnswTq4 { metric, .. }
-                    | crate::core::manifest::IndexAlgorithm::HnswTq8 { metric, .. } => metric
+                    | crate::core::manifest::IndexAlgorithm::HnswTq8 { metric, .. }
+                    | crate::core::manifest::IndexAlgorithm::HnswSq8 { metric, .. } => metric
                         .parse::<crate::core::index::VectorMetric>()
                         .with_context(|| {
                             format!("Invalid vector metric for {}: {}", col_name, metric)
@@ -805,6 +806,7 @@ impl HybridSegmentWriter {
                     crate::core::manifest::IndexAlgorithm::HnswPq { .. } => "pq",
                     crate::core::manifest::IndexAlgorithm::HnswTq4 { .. } => "tq4",
                     crate::core::manifest::IndexAlgorithm::HnswTq8 { .. } => "tq8",
+                    crate::core::manifest::IndexAlgorithm::HnswSq8 { .. } => "sq8",
                     _ => "idx",
                 };
 
@@ -865,12 +867,7 @@ impl HybridSegmentWriter {
                         .to_string();
 
                     let blob_type = if file_name.ends_with(".hnsw.graph") {
-                        match algo_id {
-                            "tq8" => crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ8,
-                            "tq4" => crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ4,
-                            "pq" => crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_PQ,
-                            _ => crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW,
-                        }
+                        crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_GRAPH
                     } else if file_name.contains(".centroids.parquet") {
                         crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS
                     } else if file_name.contains(".mapping.parquet") {
@@ -1521,7 +1518,7 @@ mod tests {
             "Puffin bundle should contain the vector centroids (has {types:?})"
         );
         assert!(
-            types.contains(&crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW),
+            types.contains(&crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_GRAPH),
             "Puffin bundle should contain the vector HNSW graph (has {types:?})"
         );
 

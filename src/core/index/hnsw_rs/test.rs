@@ -195,7 +195,7 @@ fn test_parallel() {
     }
     let data_with_id = data.iter().zip(0..data.len()).collect();
     let nb_layer = 16.min((nb_elem as f32).ln().trunc() as usize);
-    let mut hns = Hnsw::<f32, dist::DistDot>::new(max_nb_connection, nb_elem, nb_layer, ef_c, dist::DistDot{});
+    let mut hns = Hnsw::<f32, dist::DistDot>::new(max_nb_connection, nb_elem, nb_layer, ef_c, dist::DistDot::norm());
     // !
  //   hns.set_extend_candidates(true);
     let mut start = ProcessTime::now();
@@ -228,7 +228,7 @@ fn test_parallel() {
         l2_normalize(&mut r_vec);
     
         start = ProcessTime::now();
-        let brute_neighbours = brute_force_neighbours(knbn, hns.get_point_indexation() , Box::new(dist::DistDot) , &r_vec);
+        let brute_neighbours = brute_force_neighbours(knbn, hns.get_point_indexation() , Box::new(dist::DistDot::norm()) , &r_vec);
         cpu_time = start.elapsed();
         if nbtest <= 100 {
             println!("\n\n test_par nb_elem {:?}", nb_elem);

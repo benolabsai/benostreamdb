@@ -44,7 +44,7 @@ EFS=200
 # `benostreamdb` is full-precision HNSW (parity with the other float HNSW
 # engines); `benostreamdb_tq8` is the TurboQuant-compressed variant, so
 # the recall/size trade-off is visible rather than conflated.
-CPU_ENGINES="faiss faiss_sq hnswlib lancedb lancedb_sq pgvector opensearch qdrant qdrant_sq milvus weaviate weaviate_sq benostreamdb benostreamdb_tq8"
+CPU_ENGINES="faiss faiss_sq hnswlib lancedb lancedb_sq pgvector opensearch qdrant qdrant_sq milvus milvus_sq weaviate weaviate_sq benostreamdb benostreamdb_tq8 benostreamdb_sq"
 # The GPU pass runs only engines with a *working* GPU execution path. CPU-only
 # competitors run on the CPU inside the GPU container and now correctly report
 # device=cpu (per-engine backend), so re-measuring them adds nothing — the CPU
@@ -159,7 +159,7 @@ if [[ "$BUILD_WHEEL" == "1" ]]; then
   # Build a manylinux_2_28 wheel so it loads on the slim runner image (whose
   # glibc is older than a bleeding-edge host's). Requires `maturin[zig]`.
   echo "building abi3 manylinux_2_28 wheel ..."
-  ( cd "$REPO" && maturin build --release --zig --compatibility manylinux_2_28 -o dist )
+  ( cd "$REPO" && PATH="$REPO/.venv/bin:$PATH" maturin build --release --zig --compatibility manylinux_2_28 -o dist )
 fi
 
 # --- Server engines under the shared envelope ------------------------------- #

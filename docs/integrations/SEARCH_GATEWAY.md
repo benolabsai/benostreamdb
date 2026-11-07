@@ -33,7 +33,7 @@ The search gateway runs as a standalone daemon (`bsdb-search`) and exposes two d
 | `BSDB_QDRANT_PORT` | Port for Qdrant REST server | `6333` |
 | `BSDB_SEARCH_STORAGE_URI` | Base storage URI for indices and collections | `./data` |
 | `BSDB_API_KEY` | Shared secret API key | Unset |
-| `BSDB_SEARCH_WAL_DURABILITY` | Ingestion durability (`"async"` for batching, `"sync"` for fsync) | `"async"` |
+| `BSDB_WAL_DURABILITY` | Ingestion durability (`"async"` for batching, `"sync"` for fsync) | `"async"` |
 | `BSDB_SEARCH_AUTO_REFRESH_SECS` | Background flush interval for memory buffers | `1.0` |
 
 ---

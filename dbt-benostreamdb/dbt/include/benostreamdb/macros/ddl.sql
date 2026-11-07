@@ -5,8 +5,8 @@
 -- The engine intercepts these statements before DataFusion planning and
 -- dispatches them to the core `Table` API, so they work from any dbt model or
 -- hook. `type` is one of the engine's index algorithms (hnsw, hnsw_pq,
--- hnsw_tq4, hnsw_tq8, bm25, bloom, bitmap, composite_bitmap, csr_graph,
--- json_path).
+-- hnsw_tq4, hnsw_tq8, hnsw_sq8, bm25, bloom, bitmap, composite_bitmap,
+-- csr_graph, json_path).
 -- =============================================================================
 
 {% macro create_index(relation, column, type='bitmap', name=none) -%}

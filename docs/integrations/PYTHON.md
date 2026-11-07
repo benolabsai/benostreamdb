@@ -103,7 +103,7 @@ You can configure vector, full-text (BM25), or bitmap indexes over table columns
 
 ```python
 # Add an HNSW vector index on the 'vector' column
-# Index algorithms: "hnsw" (default float32), "hnsw_tq8", "hnsw_tq4", "bm25", "bitmap"
+# Index algorithms: "hnsw" (default float32), "hnsw_tq8", "hnsw_tq4", "hnsw_sq8", "hnsw_pq", "bm25", "bitmap"
 table.add_index("vector", "hnsw")
 
 # Top-k vector search

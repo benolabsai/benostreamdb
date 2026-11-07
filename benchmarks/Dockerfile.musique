@@ -1,0 +1,107 @@
+# MuSiQue Multi-Hop GraphRAG Benchmark Image for BenoStreamDB
+#
+# Designed to run under strict Azure cgroup envelopes (e.g. D8s / 32 GiB RAM or D8lds / 16 GiB RAM).
+# Compatible with Ubuntu 26.04 host toolchain and GLIBC_2.43.
+#
+# Build:
+#   docker build -f benchmarks/Dockerfile.musique -t bsdb-musique:local .
+#
+# Weights must exist in the mounted Hugging Face cache. Pre-fetch on the host once.
+# The default configuration is bge-large retrieval + MiniLM-L6 rerank:
+#   python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; \
+#       SentenceTransformer('BAAI/bge-large-en-v1.5'); \
+#       CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
+# Optional extras (only for --preset research or --embed-model nvembed):
+#   python -c "from sentence_transformers import CrossEncoder; \
+#       CrossEncoder('BAAI/bge-reranker-base')"
+#   python -c "from huggingface_hub import snapshot_download; \
+#       snapshot_download('nvidia/NV-Embed-v2')"              # 4096-d, ~14.6 GiB
+#
+# NV-Embed-v2 needs trust_remote_code and its custom modules (einops/accelerate are
+# installed below). It also needs a 32 GiB+ envelope: the harness refuses to start
+# on the 16 GiB d8lds profile instead of OOMing mid-run, and reserves the model's
+# resident footprint before sizing BSDB_CACHE_GB.
+#
+# GPU encoding (optional). This image installs the default torch wheel, which is
+# CPU-oriented in most indexes. For GPU encoding, rebuild with CUDA wheels and run
+# with the NVIDIA container toolkit. RTX 50-series (Blackwell, sm_120) requires
+# CUDA 12.8+ wheels, hence the cu128 default:
+#
+#   docker build -f benchmarks/Dockerfile.musique \
+#     --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128 \
+#     -t bsdb-musique:gpu .
+#   GPU=1 ./run_musique_docker.sh --embed-model nvembed --encode-gpus cuda:0,cuda:1
+#
+# The runner handles both steps: GPU=1 selects the ':gpu' image, builds it with
+# CUDA wheels, passes --gpus, and defaults --embed-device to cuda. Dual cards host
+# two model replicas and shard the corpus (--encode-gpus); they do not pool VRAM,
+# so a 14.6 GiB bf16 embedder still has to fit in one card, or run at int8.
+#
+# Note that the GPU only helps the corpus build and query encoding. Whether the
+# timed retrieval numbers should be collected on CPU or GPU is a methodology
+# choice; the harness records the encode device for both so the report is explicit.
+#
+# Run:
+#   docker run --rm -it \
+#     --name bsdb-musique \
+#     --cpus=8 \
+#     --memory=32g \
+#     --memory-swap=32g \
+#     -v /home/ralbright/projects/benostreamdb/dist:/wheels:ro \
+#     -v /home/ralbright/data/datasets/musique:/data/musique \
+#     -v /home/ralbright/.cache/huggingface:/root/.cache/huggingface:ro \
+#     -v /home/ralbright/projects/benostreamdb/benchmarks/scratch_musique:/work/scratch \
+#     bsdb-musique:local \
+#       --data-dir /data/musique \
+#       --scratch-dir /work/scratch \
+#       --hardware d8s \
+#       --strict-hardware \
+#       --threads 8 \
+#       --cache-gb 16 \
+#       --mode tq8 \
+#       --max-questions 500 \
+#       --top-k 5 \
+#       --embed-model bge-large \
+#       --reranker minilm
+
+FROM ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+ENV HF_HOME=/root/.cache/huggingface
+# Weights only: the cache is mounted read-only, so no network fetch mid-run.
+ENV HF_HUB_OFFLINE=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-pip ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Optional CUDA torch wheel (empty = default CPU wheel from PyPI).
+ARG TORCH_INDEX_URL=""
+
+# Benchmark dependencies (matching exact requirements for Parquet, Arrow, and Graph evaluation).
+# einops/accelerate are required by nvidia/NV-Embed-v2's remote modeling code;
+# bitsandbytes is only needed for --embed-dtype int8, which requires CUDA.
+RUN pip install --upgrade pip \
+    && if [ -n "$TORCH_INDEX_URL" ]; then \
+         pip install torch --index-url "$TORCH_INDEX_URL"; \
+       fi \
+    && pip install numpy pandas pyarrow psutil sentence-transformers einops accelerate \
+    && if [ -n "$TORCH_INDEX_URL" ]; then pip install bitsandbytes; fi
+
+WORKDIR /opt/bench
+COPY benchmarks/run_musique_graphrag.py /opt/bench/run_musique_graphrag.py
+COPY benchmarks/run_musique_entrypoint.sh /opt/bench/run_musique_entrypoint.sh
+RUN chmod +x /opt/bench/run_musique_entrypoint.sh
+
+# Volumes:
+# - /data/musique: Dataset directory (raw jsonl download)
+# - /wheels: BenoStreamDB release wheel from host dist/
+# - /work/scratch: Iceberg corpus, edge tables, and output reports
+VOLUME ["/data/musique", "/wheels", "/work/scratch"]
+
+ENTRYPOINT ["/opt/bench/run_musique_entrypoint.sh"]
+

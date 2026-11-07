@@ -63,6 +63,9 @@ python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "ar
 java = ["dep:jni"]
 proptest = []
 observability = ["dep:metrics-exporter-prometheus"]
+# Debug/validation toggles, compile-time gated (no runtime env vars).
+trace-search = []
+validate-embeddings = []
 
 # GPU Acceleration Features
 wgpu = ["dep:wgpu", "benostream-gpu-ann/wgpu"]

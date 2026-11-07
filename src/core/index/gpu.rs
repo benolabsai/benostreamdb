@@ -1816,15 +1816,14 @@ pub fn context_from_device_str(device: &str) -> ComputeContext {
     })
 }
 
-/// Resolve the GPU device from `BSDB_GPU_DEVICE` (or `BENOSTREAM_GPU_DEVICE`)
-/// and set the process GPU context. Returns the resolved device string, or
-/// `None` when neither variable is set (leaving the context untouched).
+/// Resolve the GPU device from `BSDB_GPU_DEVICE` and set the process GPU
+/// context. Returns the resolved device string, or `None` when the variable is
+/// unset (leaving the context untouched).
 ///
 /// Called at startup by the Flight and MCP servers so a deployment can pin a
 /// device without any per-query plumbing.
 pub fn apply_gpu_context_from_env() -> Option<String> {
     let device = std::env::var("BSDB_GPU_DEVICE")
-        .or_else(|_| std::env::var("BENOSTREAM_GPU_DEVICE"))
         .ok()
         .filter(|s| !s.trim().is_empty())?;
 

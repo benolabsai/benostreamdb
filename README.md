@@ -1149,4 +1149,8 @@ This project contains modified source code from various upstream open-source pro
 
 **Built with ❤️ in Rust**
 
+---
+
+© 2026 Beno Labs. All rights reserved. BenoStreamDB™ is protected by U.S. Patent Pending (App. No. 64/194,119).
+
 

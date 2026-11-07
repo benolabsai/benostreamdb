@@ -318,6 +318,10 @@ class IndexType:
     BenoStreamDB Indexing Algorithms.
     """
     HNSW = "hnsw"
+    HNSW_PQ = "hnsw_pq"
+    HNSW_TQ4 = "hnsw_tq4"
+    HNSW_TQ8 = "hnsw_tq8"
+    HNSW_SQ8 = "hnsw_sq8"
     BM25 = "bm25"
     BLOOM = "bloom"
     BITMAP = "bitmap"
@@ -799,14 +803,21 @@ class Table:
         iterations: int = 30,
         directed: bool = False,
         seed_weights: Optional[List[float]] = None,
+        nodes: Optional[List[int]] = None,
     ):
         """
         Calculate Personalized PageRank (PPR) biased towards seed nodes.
         Supports both `alpha` (NetworkX convention) and `damping` parameter names.
         Optionally accepts continuous `seed_weights` (HippoRAG-style) to modulate teleportation probabilities.
+
+        `nodes` restricts the aggregate input to the induced subgraph containing
+        those node ids. Without it the UDF scans every edge in the table on each
+        call, which dominates PPR latency on large graphs.
         """
         d = alpha if alpha is not None else damping
-        return self._inner.personalized_pagerank(seeds, d, iterations, directed, seed_weights)
+        return self._inner.personalized_pagerank(
+            seeds, d, iterations, directed, seed_weights, nodes
+        )
 
     def subgraph(
         self,
@@ -1064,7 +1075,10 @@ class Table:
             nodes = self._inner.core_shortest_path(int(start_node), int(end_node), bool(directed), graph_column)
             return PathResult(nodes)
         except Exception as e:
-            logger.debug("Fast-path core_shortest_path fallback triggered: %s", e)
+            # Warn, not debug: the SQL fallback scans the whole edge set, so a
+            # silent downgrade makes point queries look ~1000x slower than the
+            # CSR path without any indication why.
+            logger.warning("Fast-path core_shortest_path fallback triggered: %s", e)
             if graph_column is not None:
                 return PathResult(self.graph_api.shortest_path(graph_column, start_node, end_node))
             res = self._inner.shortest_path(start_node, end_node)
@@ -1974,7 +1988,13 @@ class Table:
 
             # 3. Personalized PageRank Topological Grounding
             try:
-                ppr_res = edge_table.personalized_pagerank(seeds, alpha=alpha, directed=directed, seed_weights=active_weights)
+                ppr_res = edge_table.personalized_pagerank(
+                    seeds,
+                    alpha=alpha,
+                    directed=directed,
+                    seed_weights=active_weights,
+                    nodes=list(neighborhood_nodes),
+                )
                 ppr_df = ppr_res if isinstance(ppr_res, pd.DataFrame) else (ppr_res.to_pandas() if hasattr(ppr_res, "to_pandas") else pd.DataFrame(ppr_res))
                 if not ppr_df.empty and "node" in ppr_df.columns and "score" in ppr_df.columns:
                     ppr_df = ppr_df[ppr_df["node"].isin(neighborhood_nodes)]
@@ -2076,9 +2096,9 @@ class Table:
                 except Exception:
                     pass
 
-            if (rerank_vector or rerank_k is not None) and not nodes_df.empty and id_col in nodes_df.columns:
+            if (rerank_vector or rerank_k is not None) and not nodes_df.empty and id_column in nodes_df.columns:
                 target_k = int(rerank_k) if rerank_k is not None else min(len(nodes_df), top_k)
-                pool = [int(x) for x in nodes_df[id_col].tolist()]
+                pool = [int(x) for x in nodes_df[id_column].tolist()]
                 rerank_vec = query if isinstance(query, list) else None
                 if rerank_vec is not None and pool:
                     try:
@@ -2087,7 +2107,7 @@ class Table:
                             vector_column,
                             rerank_vec,
                             k=min(target_k, len(pool)),
-                            filter=f"{id_col} IN ({id_list})",
+                            filter=f"{id_column} IN ({id_list})",
                         )
                         rr_df = reranked_res.to_pandas() if hasattr(reranked_res, "to_pandas") else pd.DataFrame(reranked_res)
                         if not rr_df.empty:
@@ -3993,6 +4013,31 @@ class Table:
         are driven by environment variables at build time).
         """
         return self._inner.rebuild_index(column)
+
+    def rebuild_cluster_index(
+        self,
+        column: str = "embedding",
+        k: int = 1024,
+        m: int = 16,
+        ef_construction: int = 200,
+        target_shard_bytes: Optional[int] = None,
+    ):
+        """Build table-level cluster-keyed Puffin artifact across Voronoi shards."""
+        return self._inner.rebuild_cluster_index(
+            column,
+            k=k,
+            m=m,
+            ef_construction=ef_construction,
+            target_shard_bytes=target_shard_bytes,
+        )
+
+    def warmup(self, n_probes: Optional[int] = None, max_memory_gb: Optional[float] = None):
+        """Pre-warm vector index caches using synthetic Voronoi centroid probes."""
+        return self._inner.warmup(n_probes=n_probes, max_memory_gb=max_memory_gb)
+
+    def clear_cache(self, all: bool = False):
+        """Invalidate resident index and metadata caches without rebuilding indexes."""
+        return self._inner.clear_cache(all=all)
 
     def set_primary_key(self, columns: Union[str, List[str]]):
         """

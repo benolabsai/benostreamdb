@@ -13,7 +13,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT AND Apache-2.0" }
 authors = [
-    { name = "Beno Labs Artificial Intelligence LLC" }
+    { name = "Beno Labs" }
 ]
 keywords = ["database", "vector", "search", "indexing", "parquet", "iceberg"]
 classifiers = [

@@ -110,21 +110,12 @@ backward compatibility but ignored.
 | `BSDB_INGEST_BACKPRESSURE_GRACE_SECS` | Fail-open grace before a stalled writer proceeds anyway. Non-positive or unparseable values fall back to the default. | `60` |
 | `BSDB_MANIFEST_MAX_FILES_BEFORE_CONSOLIDATION` | Manifest files accumulated by the append-only fast path before a full consolidation commit. | `32` |
 | `BSDB_VACUUM_MIN_FILE_AGE_SECS` | Minimum age before vacuum deletes an unreferenced file. `0` disables the grace period. | `60` |
-| `BSDB_SEARCH_WAL_DURABILITY` | Compatibility alias for `BSDB_WAL_DURABILITY`, read by the search gateway's table opener. | `adaptive` |
 
 ### Vector Index, Quantization & Voronoi Sharding
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `BSDB_GPU_DEVICE` | Device or comma-separated pool for vector index builds and distance kernels: `auto`, `cpu`, `cuda[:N]`, `mps`, or `cuda:0,cuda:1`. A pool assigns one device per worker thread round-robin; a single HNSW search still runs on one device. `BENOSTREAM_GPU_DEVICE` is accepted as a fallback. | unset (`auto`) |
-| `BSDB_HNSW_M` | HNSW per-node neighbour count. | `16` |
-| `BSDB_HNSW_EF_CONSTRUCTION` | HNSW build beam width. | `max(2 × M, 40)` |
-| `BSDB_HNSW_N_LISTS` | IVF list count (number of Voronoi centroid clusters). | Heuristic from vector count |
-| `BSDB_HNSW_N_PROBE` | Number of Voronoi partitions (IVF lists) scanned at query time. | `16` |
-| `BSDB_USE_SQ` | When `1`, forces unrotated native scalar quantization (SQ8) instead of BenoQuant Walsh-Hadamard rotation. | `0` |
-| `BSDB_USE_RADEMACHER` | When `1`, applies randomized Rademacher diagonal sign matrix $D$ ($H \cdot D$) in BenoQuant to equalize coordinate variance. | `1` |
-| `BSDB_KMEANS_SEED` | PRNG seed for k-means centroid initialization during IVF index building. Set to an integer to override the deterministic default seed (`0x00C0_FFEE_1337`). | `0x00C0_FFEE_1337` (deterministic) |
-| `BSDB_HNSW_SEED` | PRNG seed for HNSW layer level assignment during graph building. | unset (thread-local randomness) |
+| `BSDB_GPU_DEVICE` | Device or comma-separated pool for vector index builds and distance kernels: `auto`, `cpu`, `cuda[:N]`, `mps`, or `cuda:0,cuda:1`. A pool assigns one device per worker thread round-robin; a single HNSW search still runs on one device. | unset (`auto`) |
 | `BSDB_NVRTC_PATH` | NVRTC library file or directory used to compile GPU kernels. | Auto-discovery (CUDA home, Python site-packages, `LD_LIBRARY_PATH`) |
 | `BSDB_DRIFT_MEMORY_MB` | In-memory budget for graph-algorithm UDAF accumulators before they spill to the CSR index. | Engine memory budget |
 

@@ -1,0 +1,63 @@
+{
+  "generated_at": "2026-11-07T15:27:37Z",
+  "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+  "python": "3.14.4",
+  "gpu": [
+    "NVIDIA GeForce RTX 5070 Ti",
+    "NVIDIA GeForce RTX 5070 Ti"
+  ],
+  "cases": [
+    {
+      "queries": 512,
+      "vectors": 50000,
+      "dim": 128,
+      "metric": "l2",
+      "cpu_ms": 415.68,
+      "cpu_mdist_s": 61.6,
+      "cuda_ms": 13.86,
+      "cuda_mdist_s": 1846.9,
+      "speedup": 29.99
+    },
+    {
+      "queries": 2048,
+      "vectors": 50000,
+      "dim": 128,
+      "metric": "l2",
+      "cpu_ms": 1830.39,
+      "cpu_mdist_s": 55.9,
+      "cuda_ms": 44.72,
+      "cuda_mdist_s": 2290.0,
+      "speedup": 40.93
+    },
+    {
+      "queries": 1024,
+      "vectors": 200000,
+      "dim": 128,
+      "metric": "l2",
+      "cpu_ms": 3801.25,
+      "cpu_mdist_s": 53.9,
+      "cuda_ms": 94.26,
+      "cuda_mdist_s": 2172.8,
+      "speedup": 40.33
+    },
+    {
+      "queries": 512,
+      "vectors": 50000,
+      "dim": 100,
+      "metric": "cosine",
+      "cpu_ms": 764.36,
+      "cpu_mdist_s": 33.5,
+      "cuda_ms": 12.09,
+      "cuda_mdist_s": 2116.9,
+      "speedup": 63.21
+    }
+  ],
+  "dual_gpu": {
+    "queries": 8192,
+    "vectors": 20000,
+    "dim": 2048,
+    "single_ms": 336.54,
+    "dual_ms": 204.41,
+    "speedup": 1.65
+  }
+}

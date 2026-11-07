@@ -62,6 +62,10 @@ docker/data/
 benchmarks/competitive/data/
 hsdbg_bench_data/
 benchmarks/scratch_*/
+# Downloaded Zilliz/HippoRAG comparison corpora (large, reproducible from upstream)
+benchmarks/musique_corpus.json
+benchmarks/hippo_openie.json
+benchmarks/zilliz_manifest.json
 dist_archive/
 dist_streaming/
 

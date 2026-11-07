@@ -1,0 +1,344 @@
+{
+  "dataset": "synth_10k",
+  "edges": 49975,
+  "env": {
+    "containerized": false,
+    "cores": 32,
+    "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+    "gpus": [
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+    ],
+    "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+    "python": "3.14.4"
+  },
+  "nodes": 10000,
+  "records": [
+    {
+      "algorithm": "pagerank",
+      "available": true,
+      "build_s": 0.147767,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "benostreamdb",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 0.147767,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.0,
+      "result_size": 10000,
+      "seconds": 0.011675,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 0.0,
+      "workload": "graph"
+    },
+    {
+      "algorithm": "pagerank",
+      "available": true,
+      "build_s": 0.07915,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "networkx",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 0.07915,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.0,
+      "result_size": 10000,
+      "seconds": 0.072588,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 0.0,
+      "workload": "graph"
+    },
+    {
+      "algorithm": "pagerank",
+      "available": true,
+      "build_s": 1.585237,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "neo4j",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 1.500733,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.084504,
+      "result_size": 10000,
+      "seconds": 0.268407,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 43.91552,
+      "workload": "graph"
+    },
+    {
+      "algorithm": "connected_components",
+      "available": true,
+      "build_s": 0.149765,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "benostreamdb",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 0.149765,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.0,
+      "result_size": 1,
+      "seconds": 0.002216,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 0.0,
+      "workload": "graph"
+    },
+    {
+      "algorithm": "connected_components",
+      "available": true,
+      "build_s": 0.073187,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "networkx",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 0.073187,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.0,
+      "result_size": 1,
+      "seconds": 0.006165,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 0.0,
+      "workload": "graph"
+    },
+    {
+      "algorithm": "connected_components",
+      "available": true,
+      "build_s": 1.585237,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "neo4j",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 1.500733,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.084504,
+      "result_size": 10000,
+      "seconds": 0.208748,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 43.91552,
+      "workload": "graph"
+    },
+    {
+      "algorithm": "shortest_path",
+      "available": true,
+      "build_s": 0.149931,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "benostreamdb",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 0.149931,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.0,
+      "result_size": 3,
+      "seconds": 3.9e-05,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 0.0,
+      "workload": "graph"
+    },
+    {
+      "algorithm": "shortest_path",
+      "available": true,
+      "build_s": 0.068975,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "networkx",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 0.068975,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.0,
+      "result_size": 3,
+      "seconds": 0.000323,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 0.0,
+      "workload": "graph"
+    },
+    {
+      "algorithm": "shortest_path",
+      "available": true,
+      "build_s": 1.585237,
+      "dataset": "synth_10k",
+      "device": "cpu",
+      "edges": 49975,
+      "engine": "neo4j",
+      "env": {
+        "containerized": false,
+        "cores": 32,
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "gpus": [
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
+          "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
+        ],
+        "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "load_s": 1.500733,
+      "nodes": 10000,
+      "params": {
+        "damping": 0.85,
+        "iterations": 30,
+        "max_edges": 0
+      },
+      "project_s": 0.084504,
+      "result_size": 1,
+      "seconds": 0.075723,
+      "source": {
+        "node": 0,
+        "target": 10
+      },
+      "teardown_s": 43.91552,
+      "workload": "graph"
+    }
+  ],
+  "source_dataset": "synth_graph_n10000_e50000_s42.txt",
+  "workload": "graph"
+}

@@ -212,7 +212,6 @@ impl TableBuilder {
             label_pattern: crate::core::table::LabelPattern::default(),
             wal_dir: None,
             durability: std::env::var("BSDB_WAL_DURABILITY")
-                .or_else(|_| std::env::var("BSDB_SEARCH_WAL_DURABILITY"))
                 .ok()
                 .as_deref()
                 .map(|v| match v.to_ascii_lowercase().as_str() {

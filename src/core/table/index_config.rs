@@ -153,7 +153,8 @@ impl Table {
             IndexAlgorithm::Hnsw { .. }
             | IndexAlgorithm::HnswPq { .. }
             | IndexAlgorithm::HnswTq4 { .. }
-            | IndexAlgorithm::HnswTq8 { .. } => {
+            | IndexAlgorithm::HnswTq8 { .. }
+            | IndexAlgorithm::HnswSq8 { .. } => {
                 // Vector index family - replace existing ones
                 next_indexes.retain(|idx| {
                     !matches!(
@@ -162,6 +163,7 @@ impl Table {
                             | IndexAlgorithm::HnswPq { .. }
                             | IndexAlgorithm::HnswTq4 { .. }
                             | IndexAlgorithm::HnswTq8 { .. }
+                            | IndexAlgorithm::HnswSq8 { .. }
                     )
                 });
             }
@@ -940,7 +942,8 @@ fn physical_index_type(alg: &IndexAlgorithm) -> &'static str {
         IndexAlgorithm::Hnsw { .. }
         | IndexAlgorithm::HnswPq { .. }
         | IndexAlgorithm::HnswTq4 { .. }
-        | IndexAlgorithm::HnswTq8 { .. } => "vector",
+        | IndexAlgorithm::HnswTq8 { .. }
+        | IndexAlgorithm::HnswSq8 { .. } => "vector",
         IndexAlgorithm::Bm25 { .. } => "lexical",
         IndexAlgorithm::Bloom { .. } => "bloom",
         IndexAlgorithm::Bitmap | IndexAlgorithm::CompositeBitmap { .. } => "scalar",

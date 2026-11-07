@@ -10,10 +10,12 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
-# hnswlib has no manylinux wheel for every Python and builds from source, so a
-# C++11 compiler is required.
+# build-essential supplies the toolchain some sdists need; curl is used by
+# server healthchecks (Milvus). The Debian trixie base ships glibc 2.41, which
+# is satisfied by the manylinux_2_28 abi3 wheel (see docker_bench.sh
+# --build-wheel) and lets hnswlib install from its pre-built wheels.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
+    && apt-get install -y --no-install-recommends build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Core numerics + ANN-Benchmarks I/O.
@@ -35,8 +37,9 @@ COPY benchmarks/competitors/run_bench.sh /opt/bench/run_bench.sh
 RUN chmod +x /opt/bench/run_bench.sh
 
 # BenoStreamDB itself: install the abi3 wheel if one is mounted at /wheels.
-# abi3 wheels built for >=3.10 load on 3.12, so the host `maturin build`
-# output is reusable here (see docker_bench.sh).
+# The manylinux_2_28 abi3 wheel (built via `maturin build --zig
+# --compatibility manylinux_2_28`) loads on this Python 3.12 base (see
+# docker_bench.sh --build-wheel).
 RUN mkdir -p /wheels
 
 ENTRYPOINT ["/bin/sh", "-lc"]

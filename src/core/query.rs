@@ -101,11 +101,7 @@ impl QueryConfig {
         num_vectors_per_segment: usize,
         embedding_dim: usize,
     ) -> usize {
-        let manual_readers = self.max_parallel_readers.or_else(|| {
-            std::env::var("BENOSTREAM_MAX_CONCURRENCY")
-                .ok()
-                .and_then(|s| s.parse::<usize>().ok())
-        });
+        let manual_readers = self.max_parallel_readers;
         if let Some(manual) = manual_readers {
             return manual;
         }
@@ -304,8 +300,7 @@ pub struct VectorSearchRequest {
     pub use_mmap: bool,
     pub targeted_clusters: Option<std::sync::Arc<std::collections::HashMap<String, Vec<usize>>>>,
     pub refine_factor: Option<usize>,
-    /// IVF lists to probe per segment. Threaded explicitly so the search path
-    /// does not read `BSDB_HNSW_N_PROBE` from the environment on every call.
+    /// IVF lists to probe per segment.
     pub probes: Option<usize>,
 }
 
@@ -1065,37 +1060,6 @@ pub async fn execute_vector_search_raw_with_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// `BENOSTREAM_MAX_CONCURRENCY` is process-global. The two tests that set it
-    /// run on parallel threads by default, so without this lock one test's
-    /// `remove_var` can race the other's read and the assertion sees the
-    /// auto-detected fallback (2x CPUs) instead of the requested value.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Set an env var and restore the previous value on drop, so a panicking
-    /// assertion cannot leak the override into other tests.
-    struct EnvVarGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = std::env::var(key).ok();
-            std::env::set_var(key, value);
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
 
     #[test]
     fn test_query_config_default() {
@@ -1186,24 +1150,6 @@ mod tests {
         let config2 = config1.clone();
 
         assert_eq!(config1.max_parallel_readers, config2.max_parallel_readers);
-    }
-
-    #[test]
-    fn test_auto_detect_respects_env_var() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _env = EnvVarGuard::set("BENOSTREAM_MAX_CONCURRENCY", "12");
-        let config = QueryConfig::new();
-        let readers = config.auto_detect_parallel_readers(1_000, 128);
-        assert_eq!(readers, 12);
-    }
-
-    #[test]
-    fn test_manual_override_precedes_env_var() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _env = EnvVarGuard::set("BENOSTREAM_MAX_CONCURRENCY", "12");
-        let config = QueryConfig::new().with_max_parallel_readers(5);
-        let readers = config.auto_detect_parallel_readers(1_000, 128);
-        assert_eq!(readers, 5);
     }
 
     #[test]

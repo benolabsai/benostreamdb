@@ -150,7 +150,7 @@ Themes are ordered by priority.
 - [x] **2-byte float16 length scalar fix for 4-bit quantization** — 🟢 **Shipped**:
   - Implemented IEEE 754 binary16 length normalization scalar ($\alpha = \frac{\langle y, \hat{y} \rangle}{\|\hat{y}\|^2}$) trailer and 7.5-centered nibble math in `src/core/index/benoquant.rs` and `distance.rs`.
 - [x] **Native SQ8 index type and routing** — 🟢 **Shipped**:
-  - Added `hnsw_sq8` engine routing and PyO3 bindings (`BSDB_USE_SQ=1`).
+  - Added `hnsw_sq8` as a first-class `IndexAlgorithm` variant and PyO3 bindings.
 - [x] **Preserve PQ and BQ4 in engine core** — 🟢 **Shipped**:
   - Retained `IndexAlgorithm::HnswPq` and `IndexAlgorithm::HnswBq4` in core segment writers, readers, and physical planners.
 

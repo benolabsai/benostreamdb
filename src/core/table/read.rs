@@ -391,6 +391,7 @@ impl Table {
                     access_mode = match f.algorithm.as_str() {
                         "tq8" | "hnsw_tq8" => "HNSW-TQ8 Cluster Index",
                         "tq4" | "hnsw_tq4" => "HNSW-TQ4 Cluster Index",
+                        "sq8" | "hnsw_sq8" => "HNSW-SQ8 Cluster Index",
                         "pq" | "hnsw_pq" => "HNSW-PQ Cluster Index",
                         _ => "HNSW-IVF Cluster Index",
                     };
@@ -490,12 +491,7 @@ impl Table {
                     let vp = &vps[0];
                     if let Ok(Some(index)) = self.ensure_cluster_index(&vp.column).await {
                         if let crate::core::index::VectorValue::Float32(q) = &vp.query {
-                            let probes = vp.probes.unwrap_or_else(|| {
-                                std::env::var("BSDB_HNSW_N_PROBE")
-                                    .ok()
-                                    .and_then(|v| v.parse::<usize>().ok())
-                                    .unwrap_or(16)
-                            });
+                            let probes = vp.probes.unwrap_or(16);
                             let scored = index.search(q, vp.k, probes, vp.ef_search)?;
                             tracing::info!(
                                 column = %vp.column,
@@ -517,19 +513,7 @@ impl Table {
             for vp in vps.iter_mut() {
                 if vp.candidate_segments.is_none() {
                     if let Ok(Some(router)) = self.ensure_vector_router(&vp.column).await {
-                        // Read per query, deliberately not cached. The benchmark
-                        // sweep sets `BSDB_HNSW_N_PROBE` per operating point, so
-                        // a `OnceLock` would freeze the first value and silently
-                        // run every later point at the wrong probe count. The
-                        // real fix is to plumb `probes` through
-                        // `VectorSearchParams` and stop reading the environment
-                        // here at all.
-                        let probes = vp.probes.unwrap_or_else(|| {
-                            std::env::var("BSDB_HNSW_N_PROBE")
-                                .ok()
-                                .and_then(|v| v.parse::<usize>().ok())
-                                .unwrap_or(16)
-                        });
+                        let probes = vp.probes.unwrap_or(16);
                         let plan = match &vp.query {
                             crate::core::index::VectorValue::Float32(q_f32) => {
                                 Some(router.route(q_f32, probes))
@@ -812,11 +796,6 @@ impl Table {
         let expr_arc = expr.map(Arc::new);
         let concurrency = config
             .max_parallel_readers
-            .or_else(|| {
-                std::env::var("BENOSTREAM_MAX_CONCURRENCY")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-            })
             .unwrap_or_else(|| {
                 std::thread::available_parallelism()
                     .map(|n| n.get())
@@ -1410,12 +1389,7 @@ impl Table {
         if filter.is_none() {
             if let Ok(Some(index)) = self.ensure_cluster_index(&params.column).await {
                 if let crate::core::index::VectorValue::Float32(q) = &params.query {
-                    let probes = params.probes.unwrap_or_else(|| {
-                        std::env::var("BSDB_HNSW_N_PROBE")
-                            .ok()
-                            .and_then(|v| v.parse::<usize>().ok())
-                            .unwrap_or(16)
-                    });
+                    let probes = params.probes.unwrap_or(16);
                     let scored = index.search(q, params.k, probes, params.ef_search)?;
                     crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
                         .observe(start_time.elapsed().as_secs_f64());

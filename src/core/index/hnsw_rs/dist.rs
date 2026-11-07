@@ -62,21 +62,57 @@ impl Distance<f32> for DistCosine {
     }
 }
 
-/// Dot product distance (1.0 - cosine), i.e. inner product on L2-normalized
-/// vectors.
+/// Inner-product distance with a selectable normalisation mode.
 ///
-/// Inner product is **not a metric**, so HNSW's neighbour-selection heuristic
-/// (which assumes the triangle inequality) builds a graph dominated by
-/// high-norm hubs when the vectors are unnormalized — recall collapses (e.g.
-/// `lastfm-64-dot`: ~0.10 vs ~0.75 for the cosine path on the same data, whose
-/// ground truth is identical). Normalizing here is the standard "maximum inner
-/// product on unit vectors" setup and is what the `hnsw_rs` crate's `DistDot`
-/// expects (see `annhdf5.rs`). The result is also non-negative, as the
-/// neighbour-selection heuristic requires.
-#[derive(Default, Clone, Copy)]
-pub struct DistDot;
+/// - [`DistDot::norm()`] (`normalized = true`, **the default**): `1 - cos`, i.e.
+///   inner product on L2-normalized vectors, bounded in `[0, 2]`. **This is the
+///   distance to use inside an HNSW graph.** Inner product is not a metric, so
+///   HNSW's neighbour-selection heuristic (which assumes the triangle
+///   inequality) builds a graph dominated by high-norm hubs when vectors are
+///   unnormalized, which collapses recall on magnitude-skewed data (for
+///   example `lastfm-64-dot`, whose ground truth is the raw inner product).
+///   Normalizing is the standard "maximum inner product on unit vectors" setup
+///   and is what the `hnsw_rs` crate expects (see `annhdf5.rs`). The result is
+///   non-negative, which the search core's `assert!(dist >= 0)` requires.
+/// - [`DistDot::raw()`] (`normalized = false`): `-<a, b>`, true
+///   maximum-inner-product search. **Do not build an HNSW graph with this** — it
+///   goes negative for positively-aligned vectors and violates the search core's
+///   non-negative-distance invariant (it asserts, and the greedy descent
+///   degenerates). Use it only for *exact* scoring of candidate lists: brute
+///   force, rescoring, or top-k refinement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DistDot {
+    /// `true` → `1 - cos` (safe for HNSW); `false` → raw `-dot` (exact only).
+    pub normalized: bool,
+}
+
+impl Default for DistDot {
+    /// Defaults to the **safe** normalized mode, so an accidental
+    /// `DistDot::default()` cannot be used to build a broken graph.
+    fn default() -> Self {
+        Self { normalized: true }
+    }
+}
+
+impl DistDot {
+    /// `1 - cos`: the HNSW graph distance (and the [`Default`]).
+    #[inline]
+    pub const fn norm() -> Self {
+        Self { normalized: true }
+    }
+
+    /// Raw `-dot`: exact scoring only, never a graph metric.
+    #[inline]
+    pub const fn raw() -> Self {
+        Self { normalized: false }
+    }
+}
+
 impl Distance<f32> for DistDot {
     fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
+        if !self.normalized {
+            return -distance::dot_product(va, vb);
+        }
         let na = va.iter().map(|x| x * x).sum::<f32>().sqrt();
         let nb = vb.iter().map(|x| x * x).sum::<f32>().sqrt();
         if na == 0.0 || nb == 0.0 {
@@ -288,17 +324,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dist_dot_is_cosine_on_normalized_vectors() {
+    fn dist_dot_norm_is_cosine_on_normalized_vectors() {
+        let d = DistDot::norm();
         // Same direction, different magnitude -> cosine distance 0.
         let a = [3.0f32, 4.0];
         let b = [6.0f32, 8.0];
-        assert!(DistDot.eval(&a, &b).abs() < 1e-6);
+        assert!(d.eval(&a, &b).abs() < 1e-6);
         // Orthogonal -> distance 1.
         let c = [-4.0f32, 3.0];
-        assert!((DistDot.eval(&a, &c) - 1.0).abs() < 1e-6);
+        assert!((d.eval(&a, &c) - 1.0).abs() < 1e-6);
         // Opposite -> distance 2.
-        let d = [-3.0f32, -4.0];
-        assert!((DistDot.eval(&a, &d) - 2.0).abs() < 1e-6);
+        let e = [-3.0f32, -4.0];
+        assert!((d.eval(&a, &e) - 2.0).abs() < 1e-6);
+        // Always non-negative (HNSW graph invariant).
+        assert!(d.eval(&a, &a) >= 0.0);
+        assert!(d.eval(&a, &b) >= 0.0);
+        // Default is the safe normalized mode.
+        assert!(DistDot::default().normalized);
+    }
+
+    #[test]
+    fn dist_dot_raw_is_negative_inner_product() {
+        let d = DistDot::raw();
+        // Raw inner product is magnitude-sensitive and may be negative.
+        let a = [3.0f32, 4.0];
+        let b = [6.0f32, 8.0];
+        // dot = 50 -> -50.
+        assert!((d.eval(&a, &b) + 50.0).abs() < 1e-4);
+        // Orthogonal -> 0.
+        let c = [-4.0f32, 3.0];
+        assert!(d.eval(&a, &c).abs() < 1e-5);
+        // Opposite: dot = -25 -> +25.
+        let e = [-3.0f32, -4.0];
+        assert!((d.eval(&a, &e) - 25.0).abs() < 1e-4);
     }
 
     #[test]

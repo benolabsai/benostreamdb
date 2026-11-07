@@ -174,9 +174,6 @@ runtime's worker count:
 
 | Knob | Default | Effect |
 | --- | --- | --- |
-| `BSDB_HNSW_M` | `16` | HNSW per-node neighbour count (`M`) for index builds. |
-| `BSDB_HNSW_EF_CONSTRUCTION` | engine default | HNSW build beam width (`ef_construction`). |
-| `BSDB_HNSW_N_LISTS` | size-derived | IVF list count for HNSW-IVF builds (more lists = smaller, faster-to-build buckets). |
 | `BSDB_DRIFT_MEMORY_MB` | derived memory budget | Memory budget for drift search (`graph_view`). |
 | `BSDB_MANIFEST_MAX_FILES_BEFORE_CONSOLIDATION` | `32` | Append-only manifest files accumulated before a full-rewrite consolidation. Bounds read cost while amortizing small appends. |
 | `BSDB_VACUUM_MIN_FILE_AGE_SECS` | `60` | Grace period before vacuum may delete an unreferenced file; closes the GC-vs-writer race. `0` disables the grace period. |

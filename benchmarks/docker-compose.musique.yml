@@ -1,0 +1,95 @@
+services:
+  # CPU envelope: Azure Standard_D8s_v5 emulation (8 vCPU / 32 GiB).
+  musique:
+    build:
+      context: ..
+      dockerfile: benchmarks/Dockerfile.musique
+    image: bsdb-musique:local
+    container_name: bsdb-musique-graphrag
+    deploy:
+      resources:
+        limits:
+          cpus: "8.0"
+          memory: 32G
+    volumes:
+      - ../dist:/wheels:ro
+      - run_musique_graphrag.py:/opt/bench/run_musique_graphrag.py:ro
+      - /home/ralbright/data/datasets/musique:/data/musique
+      - ./scratch_musique:/work/scratch
+    environment:
+      - TMPDIR=/work/scratch/tmp
+    command:
+      - "--data-dir"
+      - "/data/musique"
+      - "--scratch-dir"
+      - "/work/scratch"
+      - "--hardware"
+      - "d8s"
+      - "--strict-hardware"
+      - "--threads"
+      - "8"
+      - "--cache-gb"
+      - "16"
+      - "--mode"
+      - "tq8"
+      - "--max-questions"
+      - "500"
+      - "--top-k"
+      - "5"
+
+  # GPU variant: CUDA torch wheels plus both local GPUs (e.g. dual RTX 5070 Ti).
+  # Each GPU hosts its own embedder replica and encodes half the corpus; VRAM is
+  # not pooled, so a 14.6 GiB bf16 embedder needs --embed-dtype int8 on 16 GiB cards.
+  # bge-large is small enough that the GPUs are only worth it for repeat rebuilds.
+  musique-gpu:
+    build:
+      context: ..
+      dockerfile: benchmarks/Dockerfile.musique
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
+    image: bsdb-musique:gpu
+    container_name: bsdb-musique-graphrag-gpu
+    deploy:
+      resources:
+        limits:
+          cpus: "8.0"
+          memory: 32G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ../dist:/wheels:ro
+      - run_musique_graphrag.py:/opt/bench/run_musique_graphrag.py:ro
+      - /home/ralbright/data/datasets/musique:/data/musique
+      - ./scratch_musique:/work/scratch
+      - /home/ralbright/.cache/huggingface:/root/.cache/huggingface:ro
+    environment:
+      - TMPDIR=/work/scratch/tmp
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    shm_size: 2gb
+    command:
+      - "--data-dir"
+      - "/data/musique"
+      - "--scratch-dir"
+      - "/work/scratch"
+      - "--hardware"
+      - "d8s"
+      - "--threads"
+      - "8"
+      - "--mode"
+      - "tq8"
+      - "--embed-model"
+      - "bge-large"
+      - "--embed-device"
+      - "cuda"
+      - "--encode-gpus"
+      - "cuda:0,cuda:1"
+      - "--reranker"
+      - "minilm"
+      - "--max-questions"
+      - "500"
+      - "--top-k"
+      - "5"
+

@@ -65,7 +65,7 @@ The single most important interface fact: [`fetch_results_by_id`](src/core/table
 
 | File | Change |
 |---|---|
-| [`puffin.rs`](src/core/puffin.rs:44) | Add `PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ8 = "org.apache.iceberg.vector.cluster-hnsw-tq8"` (and `_TQ4`, `_PQ`). |
+| [`puffin.rs`](src/core/puffin.rs:44) | Graph blobs use a single quantization-agnostic `PUFFIN_BLOB_VECTOR_HNSW_GRAPH` label; the quantizer is carried by the centroids `quantizer_config`. |
 | New: `src/core/index/cluster_index.rs` | The artifact. Layout per cluster: `centroid (f32×dim)`, `codes (u8×dim × n)`, `adjacency (u32×M × n)`, `node_meta ((u16 segment_idx, u32 row_id) × n)`, plus a `segment_table: Vec<String>` mapping `segment_idx → segment_id`. |
 
 `node_meta` is the only genuinely new structure. Everything else is the existing HNSW + quantizer output.

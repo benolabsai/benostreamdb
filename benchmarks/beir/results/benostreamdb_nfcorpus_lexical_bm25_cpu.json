@@ -11,14 +11,14 @@
   "recall_at_k": 0.1491,
   "ndcg_at_k": 0.3067,
   "mrr_at_k": 0.5151,
-  "qps": 798.6,
-  "p50_ms": 1.007,
-  "p99_ms": 2.151,
+  "qps": 757.6,
+  "p50_ms": 1.052,
+  "p99_ms": 2.641,
   "env": {
     "cpu_model": "x86_64",
     "cores": 32,
     "ram_gb": 121.4,
-    "os": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
     "python": "3.14.4",
     "containerized": false,
     "gpus": [

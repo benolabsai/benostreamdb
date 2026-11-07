@@ -724,15 +724,23 @@ class QdrantAdapter(VectorAdapter):
 
 
 class MilvusAdapter(VectorAdapter):
-    """Milvus (dense collection + HNSW) via pymilvus."""
+    """Milvus (dense collection + HNSW / IVF_SQ8) via pymilvus."""
 
-    def __init__(self) -> None:
-        super().__init__(name="milvus", module="pymilvus", server_side=True)
+    def __init__(self, index_type: str = "hnsw") -> None:
+        name = "milvus_sq" if index_type == "ivf_sq8" else "milvus"
+        super().__init__(name=name, module="pymilvus", server_side=True)
+        self.index_type = index_type
+        self.index_precision = "sq" if index_type == "ivf_sq8" else "f32"
+        self._nlist = 0
 
     def build(self, train, params, ctx):
         from pymilvus import MilvusClient
+        from pymilvus.milvus_client.index import IndexParams
 
-        uri = ctx.get("host") or os.environ.get("MILVUS_URI") or "http://localhost:19530"
+        # `tcp://` selects gRPC (the low-latency benchmark path); `http://` selects
+        # the RESTful API whose per-request overhead (~200 ms p50) dominated the
+        # earlier "misconfigured" numbers.
+        uri = ctx.get("host") or os.environ.get("MILVUS_URI") or "tcp://localhost:19530"
         client = MilvusClient(uri=uri)
         metric = {
             "cosine": "COSINE",
@@ -741,23 +749,41 @@ class MilvusAdapter(VectorAdapter):
         name = "bsdb_bench"
         if client.has_collection(name):
             client.drop_collection(name)
+
+        # pymilvus 3.x requires an `IndexParams` object (not a dict). Declare the
+        # index at collection creation: `create_collection` auto-creates an
+        # AUTOINDEX on the vector field when `index_params` is omitted, and a
+        # second index on the same field is rejected — so the index must be passed
+        # in here, not added via a later `create_index` call. `Strong` (rather than
+        # the default `Bounded`) keeps the build-then-search sequence deterministic.
+        index_params = IndexParams()
+        if self.index_type == "ivf_sq8":
+            # IVF_SQ8: inverted-file clustering + 8-bit scalar quantization. nlist
+            # scales with the corpus size (~4·sqrt(n)); nprobe is derived from
+            # ef_search at query time.
+            self._nlist = min(16384, max(4, int(4 * (int(train.shape[0]) ** 0.5))))
+            index_params.add_index(
+                field_name="vector",
+                index_type="IVF_SQ8",
+                index_name="bsdb_ivf_sq8",
+                metric_type=metric,
+                params={"nlist": self._nlist},
+            )
+        else:
+            index_params.add_index(
+                field_name="vector",
+                index_type="HNSW",
+                index_name="bsdb_hnsw",
+                metric_type=metric,
+                params={"M": int(params["m"]), "efConstruction": int(params["ef_construction"])},
+            )
         client.create_collection(
             collection_name=name,
             dimension=int(train.shape[1]),
             metric_type=metric,
             auto_id=False,
-            # `Bounded` (the default) can answer a search before it sees the
-            # just-inserted rows (reads as recall 0); `Strong` makes the
-            # build-then-search sequence deterministic.
             consistency_level="Strong",
-            index_params={
-                "index_type": "HNSW",
-                "metric_type": metric,
-                "params": {
-                    "M": int(params["m"]),
-                    "efConstruction": int(params["ef_construction"]),
-                },
-            },
+            index_params=index_params,
         )
         batch = 512
         for start in range(0, len(train), batch):
@@ -769,6 +795,12 @@ class MilvusAdapter(VectorAdapter):
         client.load_collection(name)
         return (client, name, metric, int(train.shape[1]), int(len(train)))
 
+    def _search_params(self, mtype, ef_search):
+        if self.index_type == "ivf_sq8":
+            nprobe = min(self._nlist, max(1, int(ef_search) // 10))
+            return {"metric_type": mtype, "params": {"nprobe": nprobe}}
+        return {"metric_type": mtype, "params": {"ef": int(ef_search)}}
+
     def search(self, handle, queries, k, ef_search, metric):
         client, name, mtype, _dim, _n = handle
         out = []
@@ -777,7 +809,7 @@ class MilvusAdapter(VectorAdapter):
                 collection_name=name,
                 data=[q.tolist()],
                 limit=int(k),
-                search_params={"metric_type": mtype, "params": {"ef": int(ef_search)}},
+                search_params=self._search_params(mtype, ef_search),
             )
             out.append([int(h["id"]) for h in hits[0]])
         return np.array(out)
@@ -791,7 +823,7 @@ class MilvusAdapter(VectorAdapter):
                 data=[q.tolist()],
                 limit=int(k),
                 output_fields=["id", "vector"],
-                search_params={"metric_type": mtype, "params": {"ef": int(ef_search)}},
+                search_params=self._search_params(mtype, ef_search),
             )
             out.append(hits[0])
         return out
@@ -918,6 +950,7 @@ def vector_adapters() -> dict[str, VectorAdapter]:
         "qdrant": QdrantAdapter("flat"),
         "qdrant_sq": QdrantAdapter("hnsw_sq"),
         "milvus": MilvusAdapter(),
+        "milvus_sq": MilvusAdapter("ivf_sq8"),
         "weaviate": WeaviateAdapter("flat"),
         "weaviate_sq": WeaviateAdapter("hnsw_sq"),
     }

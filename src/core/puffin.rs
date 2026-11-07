@@ -41,10 +41,11 @@ pub struct PuffinWriter<W: Write + Seek> {
 }
 
 /// Standard Apache Iceberg Puffin blob types.
-pub const PUFFIN_BLOB_VECTOR_HNSW_TQ8: &str = "org.apache.iceberg.vector.hnsw-tq8";
-pub const PUFFIN_BLOB_VECTOR_HNSW_TQ4: &str = "org.apache.iceberg.vector.hnsw-tq4";
-pub const PUFFIN_BLOB_VECTOR_HNSW_PQ: &str = "org.apache.iceberg.vector.hnsw-pq";
-pub const PUFFIN_BLOB_VECTOR_HNSW: &str = "org.apache.iceberg.vector.hnsw";
+///
+/// The HNSW graph payload uses a single, quantization-agnostic blob type. The
+/// quantizer (f32 / sq8 / tq8 / tq4 / pq) is carried by the manifest `algorithm`
+/// field and the centroids `quantizer_config` — not by the Puffin blob type.
+pub const PUFFIN_BLOB_VECTOR_HNSW_GRAPH: &str = "org.apache.iceberg.vector.hnsw-graph";
 pub const PUFFIN_BLOB_LEXICAL_BM25: &str = "org.apache.iceberg.lexical.bm25";
 pub const PUFFIN_BLOB_LEXICAL_DOCLEN: &str = "org.apache.iceberg.lexical.doclen";
 pub const PUFFIN_BLOB_INDEX_ROARING: &str = "org.apache.iceberg.index.roaring-bitmap";
@@ -66,12 +67,6 @@ pub const PUFFIN_BLOB_HNSW_CLUSTER_MAPPING: &str = "org.apache.iceberg.vector.cl
 // graph node, which is what lets the existing row fetcher resolve a hit even
 // though a cluster's members are spread across many Parquet files.
 // ---------------------------------------------------------------------------
-pub const PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ8: &str =
-    "org.apache.iceberg.vector.cluster-hnsw-tq8";
-pub const PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_TQ4: &str =
-    "org.apache.iceberg.vector.cluster-hnsw-tq4";
-pub const PUFFIN_BLOB_VECTOR_CLUSTER_HNSW_PQ: &str = "org.apache.iceberg.vector.cluster-hnsw-pq";
-pub const PUFFIN_BLOB_VECTOR_CLUSTER_HNSW: &str = "org.apache.iceberg.vector.cluster-hnsw";
 pub const PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META: &str =
     "org.apache.iceberg.vector.cluster-node-meta";
 pub const PUFFIN_BLOB_VECTOR_CLUSTER_SEGMENTS: &str =
@@ -740,7 +735,7 @@ mod tests {
             "vector",
             "tq8",
             "embedding",
-            PUFFIN_BLOB_VECTOR_HNSW_TQ8,
+            PUFFIN_BLOB_VECTOR_HNSW_GRAPH,
             payload1_path.to_str().unwrap(),
             vec![],
             props1,

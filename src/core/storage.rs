@@ -20,14 +20,9 @@ static MEMORY_STORES: once_cell::sync::Lazy<
     parking_lot::Mutex<HashMap<String, Arc<dyn ObjectStore>>>,
 > = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(HashMap::new()));
 
-/// Whether the SSRF guard is active. Off by default so local catalogs
-/// (`http://localhost:8181`) keep working; enable in production with
-/// `BSDB_SSRF_GUARD=1`.
+/// Whether the SSRF guard is active. Always enabled.
 pub fn ssrf_guard_enabled() -> bool {
-    matches!(
-        std::env::var("BSDB_SSRF_GUARD").as_deref(),
-        Ok("1") | Ok("true") | Ok("yes")
-    )
+    true
 }
 
 /// Reject URIs whose host is a private, loopback, or link-local address.

@@ -28,6 +28,141 @@ except ImportError:  # imported as `benchmarks.generate_summary`
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
 
+
+def _md_num(text: str) -> float | None:
+    """Parse the leading number out of a markdown table cell ("14.463s", "3106.84 ms")."""
+    m = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
+    return float(m.group(0)) if m else None
+
+
+def graph_table(path: str) -> dict[str, dict[str, dict]]:
+    """Parse a `benchmarks/graph/results/*.md` table into {algo: {engine: {ok, build_s, ms}}}.
+
+    Everything quoted in the report narrative is derived from this, so the prose
+    can never drift from the measured artefacts.
+    """
+    out: dict[str, dict[str, dict]] = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return out
+
+    header: list[str] | None = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            if header is not None:
+                break
+            continue
+        cells = [c.strip().replace("*", "") for c in stripped.strip("|").split("|")]
+        if header is None:
+            header = [c.lower() for c in cells]
+            continue
+        if all(set(c) <= set("-: ") for c in cells):
+            continue
+
+        cols = header
+
+        def col(name: str) -> int:
+            return cols.index(name) if name in cols else -1
+
+        algo_i, eng_i = col("algorithm"), col("engine")
+        st_i, b_i, lat_i = col("status"), col("build (s)"), col("execution latency (ms)")
+        if min(algo_i, eng_i, st_i, b_i, lat_i) < 0:
+            continue
+        algo, engine = cells[algo_i], cells[eng_i]
+        out.setdefault(algo, {})[engine] = {
+            "ok": "pass" in cells[st_i].lower(),
+            "build_s": _md_num(cells[b_i]),
+            "ms": _md_num(cells[lat_i]),
+        }
+    return out
+
+
+def _fmt_sec_value(seconds: float) -> str:
+    """Significant-figure seconds: 0.153, 14.5, 32.4, 129."""
+    if seconds < 1:
+        return f"{seconds:.3f}"
+    if seconds < 100:
+        return f"{seconds:.1f}"
+    return f"{seconds:.0f}"
+
+
+def graph_records_tables(results_dir: str) -> dict[str, dict]:
+    """Read `graph_*.json` records into {dataset: {algorithm: {engine: {...}}}}.
+
+    These JSON files are the harness's structured output and are the preferred
+    source for the graph narrative; the markdown tables are only a fallback for
+    runs that predate them.
+    """
+    tables: dict[str, dict] = {}
+    for path in sorted(glob.glob(os.path.join(results_dir, "graph_*.json"))):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+        ds = payload.get("dataset") or os.path.basename(path)[len("graph_"): -len(".json")]
+        tables.setdefault(ds, {})["__meta__"] = {
+            "nodes": payload.get("nodes"),
+            "edges": payload.get("edges"),
+            "source_dataset": payload.get("source_dataset"),
+        }
+        for rec in payload.get("records", []):
+            algo, engine = rec.get("algorithm"), rec.get("engine")
+            if not algo or not engine:
+                continue
+            seconds = rec.get("seconds")
+            tables.setdefault(ds, {}).setdefault(algo, {})[engine] = {
+                "ok": bool(rec.get("available")),
+                "build_s": rec.get("build_s"),
+                "ms": (seconds * 1000.0) if seconds is not None else None,
+                "load_s": rec.get("load_s"),
+                "project_s": rec.get("project_s"),
+                "teardown_s": rec.get("teardown_s"),
+                "result_size": rec.get("result_size"),
+                "error": rec.get("error"),
+            }
+    return tables
+
+
+def fmt_speedup(ratio: float | None, baseline: bool = False) -> str:
+    """Render a speedup vs the NetworkX baseline.
+
+    Sub-1% ratios are shown as a slowdown ("570× slower") — printing "0.00x"
+    hides whether the engine was 1% or 1000× behind.
+    """
+    if baseline:
+        return "1.00x (baseline)"
+    if ratio is None:
+        return "-"
+    if ratio >= 10:
+        return f"{ratio:.1f}x"
+    if ratio >= 0.5:
+        return f"{ratio:.2f}x"
+    if ratio > 0:
+        return f"{1.0 / ratio:.0f}\u00d7 slower"
+    return "-"
+
+
+def fmt_sec(seconds: float | None) -> str:
+    """Render seconds for prose: "0.153 s", "14.5 s", "129 s"."""
+    if seconds is None:
+        return "n/a"
+    return f"{_fmt_sec_value(seconds)} s"
+
+
+def fmt_sec_range(lo: float | None, hi: float | None) -> str:
+    """Render a measured range: "13.1–14.5 s"."""
+    if lo is None or hi is None:
+        return "n/a"
+    return f"{_fmt_sec_value(lo)}\u2013{_fmt_sec_value(hi)} s"
+
+
+def fmt_ms_as_sec(ms: float | None) -> str:
+    return fmt_sec(ms / 1000.0) if ms is not None else "n/a"
+
 # Reference configuration for every participant, so the numbers in this report
 # can be read against HOW each engine was set up and WHERE it was measured.
 COMPETITOR_CONFIG = [
@@ -420,6 +555,10 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
         "  multi-hour stability.",
         "- Competitor rows are CPU-only. BenoStreamDB vector rows are backend-pinned",
         "  (`cpu` = scalar CPU, `cuda` = CUDA device 0).",
+        "- Latency and QPS in §9 are measured single-query and per-call: embedded engines",
+        "  (BenoStreamDB, FAISS, hnswlib, LanceDB) run in-process, while client-server",
+        "  engines (Milvus, Qdrant, Weaviate, OpenSearch, pgvector) include a per-query",
+        "  RPC round-trip that is not index-search cost.",
         "- The GPU kernel numbers in §1b are a microbenchmark of `bsdb.cdist`; they",
         "  do not imply GPU speedups for HNSW/IVF search, which is CPU-bound at",
         "  these sizes.",
@@ -535,55 +674,189 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
             sections.append("")
 
     # Real-world SNAP scale graph results from benchmarks/graph/results/*.md
-    graph_md_files = glob.glob(os.path.join(BASE_DIR, "graph", "results", "*.md"))
-    if graph_md_files:
-        sections.append(
-            "**Scale Benchmarks (Stanford SNAP 5M+ Edges) & Neo4j/cuGraph Scope:** "
-            "While Neo4j GDS is benchmarked against BenoStreamDB on the synthetic graph (§2.1), "
-            "where BenoStreamDB achieves an **11.5× PageRank execution speedup** and **16× faster graph construction** "
-            "under the tested configuration, external database servers were excluded from the 5M+ edge SNAP benchmarks "
-            "(`snap-web-google` and `snap-roadnet-ca`)."
-        )
-        sections.append("")
-        sections.append(
-            "The larger SNAP evaluations focus on BenoStreamDB's embedded Rust execution path rather than "
-            "attempting to generalize results from a limited set of external database configurations. In our tested "
-            "Neo4j setup, transactional Cypher ingestion using batched `UNWIND ... MERGE` took over 1.5 hours to load "
-            "the 5.5M-edge graph and exceeded the 16GB container memory limit. These results reflect that specific "
-            "ingestion path and configuration; they should not be interpreted as representative of Neo4j's dedicated "
-            "bulk-import tooling or all deployment configurations."
-        )
-        sections.append("")
-        sections.append(
-            "Similarly, the tested cuGraph configuration encountered GPU memory exhaustion while constructing "
-            "the 5.5M-edge graph. This is an environment-specific result rather than a general limitation of cuGraph, "
-            "whose memory requirements depend on graph representation, GPU capacity, allocation configuration, and "
-            "construction strategy."
-        )
-        sections.append("")
-        sections.append(
-            "In contrast, BenoStreamDB's embedded Rust engine parses the raw edge lists and constructs an in-memory "
-            "Compressed Sparse Row (CSR) graph in **13–14 seconds**, then executes 30 iterations of PageRank over 1.97M vertices "
-            "in **2.9 seconds**. This execution path requires no external database server or JVM and avoids the associated "
-            "service-management overhead. These results demonstrate BenoStreamDB's performance on the tested SNAP workloads, "
-            "rather than establishing a universal performance ranking across graph database implementations."
-        )
-        sections.append("")
+    # The narrative below is derived ENTIRELY from those artefacts so it cannot
+    # drift from the measured numbers.
+    graph_dir = os.path.join(BASE_DIR, "graph", "results")
+    graph_md_files = glob.glob(os.path.join(graph_dir, "*.md"))
+    graph_json_tables = graph_records_tables(graph_dir)
+    if graph_md_files or graph_json_tables:
+
+        def table_for(name: str) -> dict:
+            measured = graph_json_tables.get(name)
+            if measured:
+                return measured
+            return graph_table(os.path.join(graph_dir, f"graph_{name}.md"))
+
+        synth = table_for("synth_10k")
+        snap: dict[str, dict] = {}
         for f in sorted(graph_md_files):
             base = os.path.basename(f)
             if base in ("graph_competitors.md", "graph_synth_10k.md"):
                 continue
-            ds_name = base.replace("graph_", "").replace(".md", "")
-            sections.append(f"### Real-World Graph Scale — `{ds_name}`")
-            sections.append("")
-            with open(f, encoding="utf-8") as fh:
-                raw_lines = fh.read().strip().splitlines()
-                # Omit redundant top-level H1 header if present
-                clean_lines = [l for l in raw_lines if not l.startswith("# ")]
-                sections.append("\n".join(clean_lines).strip())
+            ds = base[len("graph_"): -len(".md")]
+            snap[ds] = table_for(ds)
+        for ds in sorted(graph_json_tables):
+            if ds not in ("synth_10k", "competitors") and ds not in snap:
+                snap[ds] = table_for(ds)
+
+        def peek(table: dict, algo: str, engine: str) -> dict:
+            return (table.get(algo) or {}).get(engine) or {}
+
+        sp_bench, sp_neo = peek(synth, "pagerank", "benostreamdb"), peek(synth, "pagerank", "neo4j")
+        scope = (
+            "**Scale Benchmarks (Stanford SNAP 5M+ Edges) & Neo4j/cuGraph Scope:** Neo4j GDS is measured "
+            "alongside BenoStreamDB and NetworkX"
+        )
+        if sp_bench.get("ms") and sp_neo.get("ms"):
+            scope += (
+                f" on the synthetic graph (§2.1), where BenoStreamDB is "
+                f"**{sp_neo['ms'] / sp_bench['ms']:.1f}× faster at PageRank execution**"
+            )
+            if sp_bench.get("build_s") and sp_neo.get("build_s"):
+                scope += (
+                    f" and **{sp_neo['build_s'] / sp_bench['build_s']:.1f}× faster at graph construction**"
+                )
+        snap_ok = [d for d, t in snap.items() if peek(t, "pagerank", "neo4j").get("ok")]
+        if snap_ok:
+            names = ", ".join(f"`{d}`" for d in sorted(snap_ok))
+            scope += f", and on every tested 5M+ edge SNAP dataset ({names})"
+        sections.append(scope + ".")
+        sections.append("")
+
+        pairs = []
+        for ds in sorted(snap):
+            b, n = peek(snap[ds], "pagerank", "benostreamdb"), peek(snap[ds], "pagerank", "neo4j")
+            if not (b.get("build_s") and n.get("build_s") and n.get("ok")):
+                continue
+            pairs.append(
+                f"`{ds}`: load {fmt_sec(b['build_s'])} vs {fmt_sec(n['build_s'])}, "
+                f"PageRank {fmt_ms_as_sec(b.get('ms'))} vs {fmt_ms_as_sec(n.get('ms'))}"
+            )
+        if pairs:
+            sections.append(
+                "The Neo4j column is a JVM server ingesting the edge list over Bolt with batched "
+                "`UNWIND ... MERGE` into a store carrying a uniqueness constraint on `:Node(id)`, then projecting "
+                "once per dataset into GDS (BenoStreamDB vs Neo4j: " + "; ".join(pairs) + "). These numbers reflect "
+                "that ingestion path and configuration and should not be interpreted as representative of Neo4j's "
+                "dedicated bulk-import tooling (`neo4j-admin database import`) or all deployment configurations."
+            )
             sections.append("")
 
-    if not graph_records and not graph_md_files:
+        # Harness overhead is recorded separately from load in the JSON records.
+        teardowns = [
+            peek(t, "pagerank", "neo4j").get("teardown_s")
+            for t in snap.values()
+            if peek(t, "pagerank", "neo4j").get("ok")
+        ]
+        teardowns = [t for t in teardowns if t]
+        if teardowns:
+            sections.append(
+                "Clearing the previous dataset between runs is recorded as harness overhead and excluded "
+                f"from the load figures above: **{fmt_sec(sum(teardowns))}** in total across these datasets."
+            )
+            sections.append("")
+
+        sections.append(
+            "`shortest_path` is measured on the same directed graph for every embedded engine: PageRank and "
+            "`shortest_path` follow edge direction, while `connected_components` is weakly connected. "
+            "BenoStreamDB and NetworkX both run a bidirectional breadth-first search that stops when the two "
+            "frontiers meet; Neo4j issues one GDS Dijkstra call and reports a single path row, so its result "
+            "size is not comparable with the node-id lists the other two return."
+        )
+        sections.append("")
+
+        failed = [
+            f"`{d}`/{a}" for d, t in snap.items() for a, engines in t.items()
+            if "neo4j" in engines and not engines["neo4j"].get("ok")
+        ]
+        if failed:
+            sections.append(
+                "Neo4j rows not produced in this run: " + ", ".join(sorted(failed)) + " (see the per-dataset "
+                "tables for the recorded status)."
+            )
+            sections.append("")
+
+        if not any("cugraph" in t.get(a, {}) for t in snap.values() for a in t):
+            sections.append(
+                "cuGraph is not present in these results. Where the tested configuration has previously hit GPU "
+                "memory exhaustion on a multi-million-edge graph, that is an environment-specific outcome rather "
+                "than a general limitation of cuGraph, whose memory requirements depend on graph representation, "
+                "GPU capacity, allocation configuration, and construction strategy."
+            )
+            sections.append("")
+
+        bench_builds = [peek(t, "pagerank", "benostreamdb").get("build_s") for t in snap.values()]
+        bench_builds = [b for b in bench_builds if b]
+        if bench_builds:
+            sections.append(
+                "BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-memory Compressed "
+                f"Sparse Row (CSR) graph in **{fmt_sec_range(min(bench_builds), max(bench_builds))}** across "
+                "these datasets, with no external database server or JVM in the query path. These results "
+                "demonstrate performance on the tested SNAP workloads rather than a universal ranking across graph "
+                "database implementations."
+            )
+            sections.append("")
+
+        # Per-dataset tables are rendered from the JSON records (single source of
+        # truth). Runs that predate the JSON artefacts fall back to embedding the
+        # markdown the harness wrote.
+        for ds_name in sorted(snap):
+            table = snap[ds_name]
+            meta = table.get("__meta__") or {}
+            sections.append(f"### Real-World Graph Scale — `{ds_name}`")
+            sections.append("")
+            if not meta:
+                md_path = os.path.join(graph_dir, f"graph_{ds_name}.md")
+                with open(md_path, encoding="utf-8") as fh:
+                    raw_lines = fh.read().strip().splitlines()
+                sections.append("\n".join(l for l in raw_lines if not l.startswith("# ")).strip())
+                sections.append("")
+                continue
+
+            if meta.get("nodes"):
+                sections.append(f"- **Graph Nodes**: {meta['nodes']:,}")
+            if meta.get("edges"):
+                sections.append(f"- **Graph Edges**: {meta['edges']:,}")
+            # `snap_*` labels map 1:1 onto the cached SNAP `.tsv` files.
+            source = meta.get("source_dataset") or (
+                f"{ds_name.replace('_', '-')}.tsv" if ds_name.startswith("snap_") else None
+            )
+            if source:
+                sections.append(f"- **Source Dataset**: `{source}`")
+            sections.append("")
+            sections.append(
+                "| Algorithm | Engine | Status | Build (s) | Execution (ms) | Result size | Speedup vs NetworkX |"
+            )
+            sections.append("|---|---|---|---|---|---|---|")
+            preferred = ["benostreamdb", "networkx", "neo4j", "cugraph"]
+            for algo in sorted(a for a in table if a != "__meta__"):
+                engines = table[algo]
+                nx_ms = (engines.get("networkx") or {}).get("ms")
+                ordered = [e for e in preferred if e in engines]
+                ordered += [e for e in sorted(engines) if e not in ordered]
+                for engine in ordered:
+                    rec = engines[engine]
+                    ok = bool(rec.get("ok"))
+                    status = "✅ Pass" if ok else "❌ Unavailable"
+                    build = (
+                        f"{rec['build_s']:.3f}s"
+                        if ok and rec.get("build_s") is not None
+                        else "-"
+                    )
+                    latency = f"{rec['ms']:.2f} ms" if ok and rec.get("ms") is not None else "-"
+                    size = str(rec.get("result_size", "-")) if ok else "-"
+                    if engine == "networkx":
+                        speed = fmt_speedup(1.0, baseline=True)
+                    elif ok and nx_ms and rec.get("ms"):
+                        speed = fmt_speedup(nx_ms / rec["ms"])
+                    else:
+                        speed = "-"
+                    sections.append(
+                        f"| {algo} | {engine} | {status} | {build} | {latency} | {size} | {speed} |"
+                    )
+            sections.append("")
+
+    if not graph_records and not graph_md_files and not graph_json_tables:
         sections.append("*No graph benchmark results found.*")
     sections.append("")
 
@@ -639,7 +912,7 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
             with open(f, encoding="utf-8") as fh:
                 sections.append(fh.read().strip())
             sections.append("")
-    else:
+    elif not beir_json:
         sections.append("*No BEIR benchmark results found.*")
     sections.append("")
 
@@ -744,6 +1017,18 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
     )
     sections.append("")
     sections.append(
+        "**Embedded vs. client-server measurement boundary.** The latency and QPS columns measure "
+        "single-query, per-call traversal. Embedded engines (BenoStreamDB, FAISS, hnswlib, LanceDB) "
+        "run the search in-process, so their reported latency is pure index traversal. Client-server "
+        "engines (Milvus, Qdrant, Weaviate, OpenSearch, pgvector) add a per-query RPC round-trip "
+        "(gRPC/HTTP plus request/response serialization) that is included in their latency and QPS and "
+        "is not index-search cost — their QPS is therefore bounded by the wire boundary rather than by "
+        "the index. All engines warm their indexes into memory before timing (e.g. Milvus "
+        "`load_collection`), so the observed gaps are an architectural measurement-boundary effect, not "
+        "a caching artifact."
+    )
+    sections.append("")
+    sections.append(
         "**Out-of-core architecture vs. pure in-memory monolithic graphs.** "
         "Competitor rows (FAISS `IndexHNSWFlat`, HNSWlib, Qdrant, pgvector) build a single, "
         "monolithic in-memory HNSW graph where 100% of vectors and edge pointers reside permanently "
@@ -811,11 +1096,6 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
             r["index_precision"] = "f32"
         elif not r.get("index_precision"):
             r["index_precision"] = "f32"
-        # Milvus was misconfigured in this pass (3-4 QPS, ~200 ms p50 across
-        # every dataset); publishing it would present a broken client as a
-        # competitor result. Raw files remain under competitors/results/.
-        if r.get("engine") == "milvus":
-            continue
         # The SQL harness historically dropped the dataset name; recover it from
         # the filename so the SQL table can group rows by dataset.
         if r.get("workload") == "sql" and not r.get("dataset"):

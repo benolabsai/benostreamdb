@@ -194,6 +194,52 @@ impl HnswGraph {
         }
     }
 
+    /// Retrieve the stored vector for a neighbour, for exact rescoring.
+    ///
+    /// The f32 graph variants return the raw vector. The compressed variants
+    /// return the quantizer-decoded approximation (the graph stores codes, not
+    /// raw vectors). Returns `None` when the graph's element type cannot be
+    /// decoded to f32.
+    pub fn get_vector_for_rescore(
+        &self,
+        neighbour: &Neighbour,
+        quantizer: Option<&QuantizerImpl>,
+    ) -> Option<Vec<f32>> {
+        // Arrow-backed graphs store rows in layer-indexed order: `d_id` is the
+        // original row id while `p_id.1` is the Arrow row index. `get_vector`
+        // indexes the Arrow table, so it must use `p_id.1`, not `d_id`.
+        let arrow_row = neighbour.p_id.1.max(0) as usize;
+        match self {
+            HnswGraph::Dot(h) => h.get_point_indexation().get_point_data(&neighbour.p_id),
+            HnswGraph::DotArrow(h) => Some(h.get_vector(arrow_row)),
+            HnswGraph::TurboQuant8(h) => {
+                let code = h.get_point_indexation().get_point_data(&neighbour.p_id)?;
+                quantizer.map(|q| q.decode(&code))
+            }
+            HnswGraph::TurboQuant4(h) => {
+                let code = h.get_point_indexation().get_point_data(&neighbour.p_id)?;
+                quantizer.map(|q| q.decode(&code))
+            }
+            HnswGraph::Pq(h) => {
+                let code = h.get_point_indexation().get_point_data(&neighbour.p_id)?;
+                quantizer.map(|q| q.decode(&code))
+            }
+            HnswGraph::TurboQuant8Arrow(h) => {
+                let code = h.get_vector(arrow_row);
+                quantizer.map(|q| q.decode(&code))
+            }
+            HnswGraph::TurboQuant4Arrow(h) => {
+                let code = h.get_vector(arrow_row);
+                quantizer.map(|q| q.decode(&code))
+            }
+            HnswGraph::PqArrow(h) => {
+                let code = h.get_vector(arrow_row);
+                quantizer.map(|q| q.decode(&code))
+            }
+            _ => None,
+        }
+    }
+
     /// Approximate bytes the decoded graph occupies.
     ///
     /// The Arrow IPC variants are flat record batches served zero-copy — over an
@@ -476,8 +522,48 @@ pub struct HnswIvfIndex {
     dim: usize,
     /// Optional quantizer for compression (TurboQuant or PQ)
     pub quantizer: Option<QuantizerImpl>,
+    /// Candidate oversampling factor used before exact InnerProduct rescoring.
+    ///
+    /// The per-cluster HNSW graph ranks by its own safe, non-negative distance
+    /// (cosine for the `Dot` variants after the `DistDot` revert). For
+    /// `InnerProduct` we retrieve `k * rescore_oversample` candidates per
+    /// cluster and then re-rank them by exact raw `-dot` in f32. The default of
+    /// `4` matches the pre-existing `k * 4` candidate budget, so behaviour is
+    /// unchanged unless the factor is raised.
+    rescore_oversample: usize,
     /// Hardware acceleration context (Open Source)
     _compute_context: crate::core::index::gpu::ComputeContext,
+}
+
+/// Re-rank candidates by exact raw `-dot` (MIPS) using their stored f32 vectors.
+///
+/// `candidates` carries `(row_id, approximate_distance, raw_vector)`. When the
+/// raw vector is available and matches the query dimensionality, the distance
+/// is recomputed as `-dot(query, vector)`; otherwise the approximate distance
+/// from the graph is kept. The result is sorted ascending (most similar first),
+/// de-duplicated by row id, and truncated to `k`.
+fn rescore_inner_product(
+    query: &[f32],
+    candidates: Vec<(usize, f32, Option<Vec<f32>>)>,
+    k: usize,
+) -> Vec<(usize, f32)> {
+    let mut scored: Vec<(usize, f32)> = candidates
+        .into_iter()
+        .map(|(row_id, approx, raw)| match raw {
+            Some(v) if v.len() == query.len() => {
+                (row_id, -crate::core::index::distance::dot_product(query, &v))
+            }
+            _ => (row_id, approx),
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    scored.dedup_by_key(|x| x.0);
+    scored.truncate(k);
+    scored
 }
 
 /// CPU fallback for batched k-means assignment (flat `vectors` buffer, same
@@ -669,7 +755,7 @@ fn build_bucket_graph(
                 c_vectors.len(),
                 max_layers,
                 ef_construction,
-                DistDot,
+                DistDot::norm(),
             )),
             VectorMetric::L1 => HnswGraph::L1(Hnsw::new(
                 hnsw_m,
@@ -932,11 +1018,6 @@ impl HnswIvfIndex {
 
         let num_cpus = num_cpus::get();
         let n_lists = n_lists
-            .or_else(|| {
-                std::env::var("BSDB_HNSW_N_LISTS")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-            })
             .unwrap_or_else(|| {
                 if n_vectors < 1000 {
                     4
@@ -951,14 +1032,10 @@ impl HnswIvfIndex {
             .max(1);
 
         let hnsw_m = hnsw_m
-            .or_else(|| {
-                std::env::var("BSDB_HNSW_M")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-            })
             .or_else(|| match algo {
                 IndexAlgorithm::Hnsw { complexity, .. }
                 | IndexAlgorithm::HnswTq8 { complexity, .. }
+                | IndexAlgorithm::HnswSq8 { complexity, .. }
                 | IndexAlgorithm::HnswTq4 { complexity, .. }
                 | IndexAlgorithm::HnswPq { complexity, .. } => Some(*complexity),
                 _ => None,
@@ -979,21 +1056,12 @@ impl HnswIvfIndex {
         };
 
         let quantizer = match algo {
-            IndexAlgorithm::HnswTq8 { .. } => {
-                let use_sq = std::env::var("BSDB_USE_SQ")
-                    .ok()
-                    .map(|v| v == "1" || v.to_lowercase() == "true")
-                    .unwrap_or(false);
-                if use_sq {
-                    Some(QuantizerImpl::Sq(
-                        crate::core::index::sq::SqEncoder::train(&vectors_sampled, 8, metric)?,
-                    ))
-                } else {
-                    Some(QuantizerImpl::BenoQuant(
-                        BenoQuantEncoder::train(&vectors_sampled, 8, metric)?,
-                    ))
-                }
-            }
+            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(
+                BenoQuantEncoder::train(&vectors_sampled, 8, metric)?,
+            )),
+            IndexAlgorithm::HnswSq8 { .. } => Some(QuantizerImpl::Sq(
+                crate::core::index::sq::SqEncoder::train(&vectors_sampled, 8, metric)?,
+            )),
             IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(
                 BenoQuantEncoder::train(&vectors_sampled, 4, metric)?,
             )),
@@ -1094,17 +1162,14 @@ impl HnswIvfIndex {
         }
 
         // Pass 3: Build HNSW graphs per bucket in parallel, streaming each directly to disk!
-        let ef_construction = std::env::var("BSDB_HNSW_EF_CONSTRUCTION")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .or_else(|| match algo {
-                IndexAlgorithm::Hnsw { quality, .. }
-                | IndexAlgorithm::HnswTq8 { quality, .. }
-                | IndexAlgorithm::HnswTq4 { quality, .. }
-                | IndexAlgorithm::HnswPq { quality, .. } => Some(*quality),
-                _ => None,
-            })
-            .unwrap_or((hnsw_m * 2).max(40));
+        let ef_construction = match algo {
+            IndexAlgorithm::Hnsw { quality, .. }
+            | IndexAlgorithm::HnswTq8 { quality, .. }
+            | IndexAlgorithm::HnswSq8 { quality, .. }
+            | IndexAlgorithm::HnswTq4 { quality, .. }
+            | IndexAlgorithm::HnswPq { quality, .. } => *quality,
+            _ => (hnsw_m * 2).max(40),
+        };
         let max_layers = 16;
 
         let cluster_list: Vec<(usize, String)> = cluster_files
@@ -1286,14 +1351,7 @@ impl HnswIvfIndex {
         }
 
         let num_cpus = num_cpus::get();
-        // `BSDB_HNSW_N_LISTS` overrides the IVF list count for tuning without a
-        // rebuild (more lists = smaller, faster-to-build buckets).
         let n_lists = n_lists
-            .or_else(|| {
-                std::env::var("BSDB_HNSW_N_LISTS")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-            })
             .unwrap_or_else(|| {
                 if n_vectors < 1000 {
                     4
@@ -1307,16 +1365,11 @@ impl HnswIvfIndex {
             .min(n_vectors / 10)
             .max(1);
 
-        // `BSDB_HNSW_M` overrides the per-node neighbour count.
         let hnsw_m = hnsw_m
-            .or_else(|| {
-                std::env::var("BSDB_HNSW_M")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-            })
             .or_else(|| match algo {
                 IndexAlgorithm::Hnsw { complexity, .. }
                 | IndexAlgorithm::HnswTq8 { complexity, .. }
+                | IndexAlgorithm::HnswSq8 { complexity, .. }
                 | IndexAlgorithm::HnswTq4 { complexity, .. }
                 | IndexAlgorithm::HnswPq { complexity, .. } => Some(*complexity),
                 _ => None,
@@ -1326,21 +1379,12 @@ impl HnswIvfIndex {
         let (centroids, _) = simple_kmeans_with_seed(&vectors_sampled, n_lists, 10, seed)?;
 
         let quantizer = match algo {
-            IndexAlgorithm::HnswTq8 { .. } => {
-                let use_sq = std::env::var("BSDB_USE_SQ")
-                    .ok()
-                    .map(|v| v == "1" || v.to_lowercase() == "true")
-                    .unwrap_or(false);
-                if use_sq {
-                    Some(QuantizerImpl::Sq(
-                        crate::core::index::sq::SqEncoder::train(&vectors_sampled, 8, metric)?,
-                    ))
-                } else {
-                    Some(QuantizerImpl::BenoQuant(
-                        BenoQuantEncoder::train(&vectors_sampled, 8, metric)?,
-                    ))
-                }
-            }
+            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(
+                BenoQuantEncoder::train(&vectors_sampled, 8, metric)?,
+            )),
+            IndexAlgorithm::HnswSq8 { .. } => Some(QuantizerImpl::Sq(
+                crate::core::index::sq::SqEncoder::train(&vectors_sampled, 8, metric)?,
+            )),
             IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(
                 BenoQuantEncoder::train(&vectors_sampled, 4, metric)?,
             )),
@@ -1448,18 +1492,14 @@ impl HnswIvfIndex {
         // (~n_vectors / n_lists), so at most `num_threads` buckets are resident
         // at once. This was previously a sequential loop and dominated the
         // whole out-of-core build.
-        // `BSDB_HNSW_EF_CONSTRUCTION` overrides the build beam width.
-        let ef_construction = std::env::var("BSDB_HNSW_EF_CONSTRUCTION")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .or_else(|| match algo {
-                IndexAlgorithm::Hnsw { quality, .. }
-                | IndexAlgorithm::HnswTq8 { quality, .. }
-                | IndexAlgorithm::HnswTq4 { quality, .. }
-                | IndexAlgorithm::HnswPq { quality, .. } => Some(*quality),
-                _ => None,
-            })
-            .unwrap_or((hnsw_m * 2).max(40));
+        let ef_construction = match algo {
+            IndexAlgorithm::Hnsw { quality, .. }
+            | IndexAlgorithm::HnswTq8 { quality, .. }
+            | IndexAlgorithm::HnswSq8 { quality, .. }
+            | IndexAlgorithm::HnswTq4 { quality, .. }
+            | IndexAlgorithm::HnswPq { quality, .. } => *quality,
+            _ => (hnsw_m * 2).max(40),
+        };
         let max_layers = 16;
 
         let cluster_list: Vec<(usize, String)> = cluster_files
@@ -1509,6 +1549,7 @@ impl HnswIvfIndex {
             _n_lists: n_lists,
             dim,
             quantizer,
+            rescore_oversample: 4,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
@@ -1609,14 +1650,10 @@ impl HnswIvfIndex {
             .max(1);
 
         let hnsw_m = hnsw_m
-            .or_else(|| {
-                std::env::var("BSDB_HNSW_M")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-            })
             .or_else(|| match algo {
                 IndexAlgorithm::Hnsw { complexity, .. }
                 | IndexAlgorithm::HnswTq8 { complexity, .. }
+                | IndexAlgorithm::HnswSq8 { complexity, .. }
                 | IndexAlgorithm::HnswTq4 { complexity, .. }
                 | IndexAlgorithm::HnswPq { complexity, .. } => Some(*complexity),
                 _ => None,
@@ -1644,21 +1681,12 @@ impl HnswIvfIndex {
 
         // Step 2: Train Quantizer if requested
         let quantizer = match algo {
-            IndexAlgorithm::HnswTq8 { .. } => {
-                let use_sq = std::env::var("BSDB_USE_SQ")
-                    .ok()
-                    .map(|v| v == "1" || v.to_lowercase() == "true")
-                    .unwrap_or(false);
-                if use_sq {
-                    Some(QuantizerImpl::Sq(
-                        crate::core::index::sq::SqEncoder::train(&vectors, 8, metric)?,
-                    ))
-                } else {
-                    Some(QuantizerImpl::BenoQuant(
-                        BenoQuantEncoder::train(&vectors, 8, metric)?,
-                    ))
-                }
-            }
+            IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(
+                BenoQuantEncoder::train(&vectors, 8, metric)?,
+            )),
+            IndexAlgorithm::HnswSq8 { .. } => Some(QuantizerImpl::Sq(
+                crate::core::index::sq::SqEncoder::train(&vectors, 8, metric)?,
+            )),
             IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(
                 BenoQuantEncoder::train(&vectors, 4, metric)?,
             )),
@@ -1713,17 +1741,14 @@ impl HnswIvfIndex {
             .into_par_iter()
             .map(|(cluster_id, vecs): (usize, Vec<(Vec<f32>, usize)>)| {
                 let max_layers = 16;
-                let ef_construction = std::env::var("BSDB_HNSW_EF_CONSTRUCTION")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .or_else(|| match algo {
-                        IndexAlgorithm::Hnsw { quality, .. }
-                        | IndexAlgorithm::HnswTq8 { quality, .. }
-                        | IndexAlgorithm::HnswTq4 { quality, .. }
-                        | IndexAlgorithm::HnswPq { quality, .. } => Some(*quality),
-                        _ => None,
-                    })
-                    .unwrap_or((hnsw_m * 2).max(40));
+                let ef_construction = match algo {
+                    IndexAlgorithm::Hnsw { quality, .. }
+                    | IndexAlgorithm::HnswTq8 { quality, .. }
+                    | IndexAlgorithm::HnswSq8 { quality, .. }
+                    | IndexAlgorithm::HnswTq4 { quality, .. }
+                    | IndexAlgorithm::HnswPq { quality, .. } => *quality,
+                    _ => (hnsw_m * 2).max(40),
+                };
 
                 // Determine HNSW node type and distance metric
                 let mut hnsw = if let Some(q) = quantizer.as_ref() {
@@ -1790,7 +1815,7 @@ impl HnswIvfIndex {
                             vecs.len(),
                             max_layers,
                             ef_construction,
-                            DistDot,
+                            DistDot::norm(),
                         )),
                         VectorMetric::L1 => HnswGraph::L1(Hnsw::new(
                             hnsw_m,
@@ -1866,6 +1891,7 @@ impl HnswIvfIndex {
             _n_lists: n_lists,
             dim,
             quantizer,
+            rescore_oversample: 4,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
@@ -1979,7 +2005,7 @@ impl HnswIvfIndex {
                 VectorMetric::InnerProduct => HnswGraph::DotArrow(
                     crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
                         graph_bytes,
-                        DistDot,
+                        DistDot::norm(),
                     )
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                 ),
@@ -2181,6 +2207,7 @@ impl HnswIvfIndex {
             _n_lists: n_lists,
             dim,
             quantizer,
+            rescore_oversample: 4,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
@@ -2220,8 +2247,7 @@ impl HnswIvfIndex {
             }
             Some(QuantizerImpl::Pq(ref q)) => {
                 let mut q_vec = query_f32.to_vec();
-                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
-                {
+                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine {
                     let norm = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
                     if norm > 1e-6 {
                         let inv = 1.0 / norm;
@@ -2234,6 +2260,13 @@ impl HnswIvfIndex {
             }
             _ => query.clone(),
         }
+    }
+
+    /// Set the candidate oversampling factor used before exact InnerProduct
+    /// rescoring. Values below `1` are clamped to `1`.
+    pub fn with_rescore_oversample(mut self, factor: usize) -> Self {
+        self.rescore_oversample = factor.max(1);
+        self
     }
 
     /// Search specific targeted clusters directly without running coarse search
@@ -2257,7 +2290,15 @@ impl HnswIvfIndex {
         };
 
         let effective_query = self.quantize_query(query_f32, query);
-        self.search_clusters_internal(&effective_query, target_clusters, k, filter, ef_search, t_start)
+        self.search_clusters_internal(
+            query_f32,
+            &effective_query,
+            target_clusters,
+            k,
+            filter,
+            ef_search,
+            t_start,
+        )
     }
 
     /// Search for k nearest neighbors
@@ -2326,10 +2367,7 @@ impl HnswIvfIndex {
             .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let total_clusters = self.centroids.len();
-        let env_n_probe = std::env::var("BSDB_HNSW_N_PROBE")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok());
-        let effective_n_probe = env_n_probe.unwrap_or(n_probe).clamp(1, total_clusters);
+        let effective_n_probe = n_probe.clamp(1, total_clusters);
 
         let clusters_to_search: Vec<usize> = cluster_distances
             .iter()
@@ -2339,11 +2377,20 @@ impl HnswIvfIndex {
         tracing::debug!("Sorted cluster distances: {:?}", cluster_distances);
         tracing::debug!("Clusters to search: {:?}", clusters_to_search);
 
-        self.search_clusters_internal(&effective_query, &clusters_to_search, k, filter, ef_search, t_start)
+        self.search_clusters_internal(
+            query_f32,
+            &effective_query,
+            &clusters_to_search,
+            k,
+            filter,
+            ef_search,
+            t_start,
+        )
     }
 
     fn search_clusters_internal(
         &self,
+        query_f32: &[f32],
         effective_query: &VectorValue,
         clusters_to_search: &[usize],
         k: usize,
@@ -2356,9 +2403,21 @@ impl HnswIvfIndex {
 
         // Step 2: Search HNSW graphs in selected clusters in parallel (fine search)
         let ef = ef_search.unwrap_or(if filter.is_some() { 100 } else { 40 });
-        let cluster_k = (k * 4).max(ef.min(k * 8));
+        let base_cluster_k = (k * 4).max(ef.min(k * 8));
+        // For InnerProduct the graph ranks by its own safe, non-negative distance
+        // (cosine for the `Dot` variants). Widen the candidate pool so the exact
+        // raw `-dot` rescore has enough candidates to re-rank.
+        // Escape hatch for A/B benchmarking: set BSDB_DISABLE_IP_RESCORE=1 to
+        // fall back to the graph's own distance ordering for InnerProduct.
+        let rescore = self.metric == VectorMetric::InnerProduct
+            && std::env::var_os("BSDB_DISABLE_IP_RESCORE").is_none();
+        let cluster_k = if rescore {
+            base_cluster_k.max(k.saturating_mul(self.rescore_oversample))
+        } else {
+            base_cluster_k
+        };
 
-        let mut candidates: Vec<(usize, f32)> = clusters_to_search
+        let candidates: Vec<(usize, f32, Option<Vec<f32>>)> = clusters_to_search
             .into_par_iter()
             .flat_map_iter(|&cluster_id| {
                 if let Some(cluster_data) = self.get_cluster(cluster_id) {
@@ -2384,25 +2443,28 @@ impl HnswIvfIndex {
                         local_filter_opt.as_ref(),
                     );
 
-                    // Map local indices back to global row IDs and apply filter
+                    // Map local indices back to global row IDs and apply filter.
+                    // For InnerProduct, also fetch the stored vector so the
+                    // candidate can be re-ranked by exact raw `-dot`.
                     results
                         .into_iter()
                         .filter_map(|neighbor| {
                             let local_id = neighbor.d_id;
-                            if local_id < row_id_mapping.len() {
-                                let global_id = row_id_mapping[local_id];
-                                if let Some(f) = filter {
-                                    if f.contains(global_id as u32) {
-                                        Some((global_id, neighbor.distance))
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    Some((global_id, neighbor.distance))
+                            if local_id >= row_id_mapping.len() {
+                                return None;
+                            }
+                            let global_id = row_id_mapping[local_id];
+                            if let Some(f) = filter {
+                                if !f.contains(global_id as u32) {
+                                    return None;
                                 }
+                            }
+                            let raw = if rescore {
+                                hnsw.get_vector_for_rescore(&neighbor, self.quantizer.as_ref())
                             } else {
                                 None
-                            }
+                            };
+                            Some((global_id, neighbor.distance, raw))
                         })
                         .collect::<Vec<_>>()
                 } else {
@@ -2411,18 +2473,29 @@ impl HnswIvfIndex {
             })
             .collect();
 
-        // Step 3: Merge and return top-k
+        // Step 3: Merge and return top-k. InnerProduct candidates are re-ranked
+        // by exact raw `-dot`; every other metric keeps the graph distance.
         tracing::debug!("Candidates before sort/dedup: len={}", candidates.len());
-        candidates.sort_by(|a, b| {
-            match a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Equal => a.0.cmp(&b.0),
-                other => other,
-            }
-        });
-        candidates.dedup_by_key(|x| x.0); // Remove duplicates
+        let candidates = if rescore {
+            rescore_inner_product(query_f32, candidates, k)
+        } else {
+            let mut merged: Vec<(usize, f32)> = candidates
+                .into_iter()
+                .map(|(row_id, distance, _)| (row_id, distance))
+                .collect();
+            merged.sort_by(|a, b| {
+                match a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal) {
+                    std::cmp::Ordering::Equal => a.0.cmp(&b.0),
+                    other => other,
+                }
+            });
+            merged.dedup_by_key(|x| x.0); // Remove duplicates
+            merged.truncate(k);
+            merged
+        };
         tracing::debug!("Candidates after dedup: len={}", candidates.len());
-        candidates.truncate(k);
-        if std::env::var("BSDB_TRACE_SEARCH").is_ok() {
+        #[cfg(feature = "trace-search")]
+        {
             let loaded_count = if !self.cluster_graphs.is_empty() {
                 self.cluster_graphs.len()
             } else {
@@ -2886,6 +2959,7 @@ impl HnswIvfIndex {
             _n_lists: n_lists,
             dim,
             quantizer,
+            rescore_oversample: 4,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         };
 
@@ -3227,7 +3301,7 @@ impl HnswIvfIndex {
                     VectorMetric::InnerProduct => HnswGraph::DotArrow(
                         crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
                             &graph_bytes,
-                            DistDot,
+                            DistDot::norm(),
                         )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),
@@ -3287,6 +3361,7 @@ impl HnswIvfIndex {
             _n_lists: n_lists,
             dim,
             quantizer,
+            rescore_oversample: 4,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
@@ -3330,6 +3405,38 @@ impl HnswIvfIndex {
 mod tests {
     use super::*;
     use roaring::RoaringBitmap;
+
+    #[test]
+    fn rescore_inner_product_orders_by_raw_dot() {
+        let query = [1.0f32, 0.0];
+        // Approximate (graph) distances are deliberately wrong; the raw vectors
+        // are what must decide the final order.
+        let candidates = vec![
+            (10usize, 0.1f32, Some(vec![0.5f32, 0.0])), // dot 0.5 -> -0.5
+            (11usize, 0.2f32, Some(vec![2.0f32, 0.0])), // dot 2.0 -> -2.0 (best)
+            (12usize, 0.3f32, Some(vec![1.0f32, 0.0])), // dot 1.0 -> -1.0
+        ];
+        let out = rescore_inner_product(&query, candidates, 3);
+        assert_eq!(
+            out.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![11, 12, 10]
+        );
+        assert!((out[0].1 + 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rescore_inner_product_falls_back_and_truncates() {
+        let query = [1.0f32, 0.0];
+        let candidates = vec![
+            (1usize, 0.9f32, None),                    // no raw vector -> keep 0.9
+            (2usize, 0.4f32, Some(vec![1.0f32, 0.0])), // dot 1.0 -> -1.0
+            (3usize, 0.7f32, Some(vec![0.0f32, 1.0])), // dot 0.0 -> 0.0
+        ];
+        let out = rescore_inner_product(&query, candidates, 2);
+        assert_eq!(out.len(), 2);
+        // -1.0 < 0.0 < 0.9, so ids 2 and 3 survive the truncation.
+        assert_eq!(out.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![2, 3]);
+    }
 
     #[test]
     fn test_hnsw_ivf_pre_filtering() {

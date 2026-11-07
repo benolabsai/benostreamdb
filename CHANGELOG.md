@@ -39,8 +39,8 @@ Major release consolidating vector search, out-of-core indexing, and performance
     paired with an IEEE 754-2008 binary16 length normalization scalar
     ($\alpha = \frac{\langle y, \hat{y} \rangle}{\|\hat{y}\|^2}$), storing 128-dim vectors
     in 66 bytes total. Nibbles centered at 7.5 prevent norm bias.
-- **Native Scalar Quantization (SQ8)** — Added native `hnsw_sq8` index algorithm
-  (`BSDB_USE_SQ=1`, `BSDB_USE_RADEMACHER=0`), enabling axis-aligned INT8 scalar
+- **Native Scalar Quantization (SQ8)** — Added native `hnsw_sq8` as a
+  first-class `IndexAlgorithm` variant, enabling axis-aligned INT8 scalar
   quantization without rotation for direct intra-engine ablation.
 - **Voronoi Puffin Sharding & Compaction (`compact_indexes`)** — Implemented
   `Table.compact_indexes(column, target_shard_bytes=536870912)` in `maintenance.rs`
@@ -75,6 +75,101 @@ Major release consolidating vector search, out-of-core indexing, and performance
     and `warmup(...)` statement updates, plus custom `rebuild_cluster_index` and `warmup` Flight actions.
   - **REST Search Gateway (`benostreamdb-search`)**: Added `POST /{index}/_rebuild_cluster`
     and `POST /{index}/_warmup` endpoints for index compaction and RAM cache pre-warming.
+
+### Removed
+- **Streamlined Configuration Surface** — Removed legacy and redundant environment-variable
+  knobs in favor of per-table/per-index APIs and compile-time feature flags:
+  - **Legacy aliases**: Dropped `BENOSTREAM_GPU_DEVICE` (use `BSDB_GPU_DEVICE`),
+    `BENOSTREAM_MAX_CONCURRENCY` (use `BSDB_MAX_CONCURRENCY`), and the
+    `BSDB_SEARCH_WAL_DURABILITY` alias (use `BSDB_WAL_DURABILITY`).
+  - **Debug toggles → Cargo features**: `BSDB_TRACE_SEARCH` and `BSDB_VALIDATE_EMBEDDINGS`
+    are now compile-time `trace-search` and `validate-embeddings` features instead of
+    runtime environment reads; `BSDB_SSRF_GUARD` is now always on.
+  - **HNSW/IVF build knobs → per-index API**: Removed `BSDB_HNSW_M`,
+    `BSDB_HNSW_EF_CONSTRUCTION`, `BSDB_HNSW_N_LISTS`, `BSDB_HNSW_N_PROBE`,
+    `BSDB_HNSW_SEED`, and `BSDB_KMEANS_SEED`. M/ef_construction now come from the
+    `IndexAlgorithm` `complexity`/`quality` fields, IVF probe count from the explicit
+    `probes` search parameter, and k-means determinism from the `seed` build parameter
+    (defaulting to `0x00C0_FFEE_1337`).
+
+### Fixed
+- **`shortest_path` Returned Wrong Results and Ran Unidirectionally**: The CSR-graph fast path
+  used a `MAX_SHORTEST_PATH_NODES` guard of 100k, which a
+  13-hop query on an 876k-node / 5.1M-edge graph legitimately exceeds — the search aborted
+  halfway and returned an **empty path for pairs that are reachable** (`snap-web-google`
+  `0 -> 10` reported 0 nodes against a directed-BFS oracle's 14). The cap is now a runaway
+  guard (4M nodes) and exceeding it returns an error instead of a false "no path". The search
+  is also bidirectional now — forward CSR from the source, reverse CSR from the target,
+  expanding the smaller frontier and meeting at a layer boundary — so it no longer has to
+  enumerate the entire reachable frontier (a correct bidirectional search touches ~12k nodes for
+  that query, versus ~600k for the forward sweep). The reverse CSR is now also discovered when it
+  is registered as a graph index on the target endpoint column (`target` with src=target,
+  dst=source) rather than under the `{column}_rev` convention — without that fallback the search
+  silently stayed forward-only. Supporting fixes: resolved CSR graphs are
+  cached per `(uri, manifest version, columns)` because resolving one walks the manifest and
+  reads the offsets/edges/dict blobs — work that dwarfed the traversal itself; neighbour
+  expansion reuses a scratch buffer via `get_neighbors_into` instead of allocating a `Vec` per
+  node; and the Python wrapper now logs a **warning** (previously `debug`) when it silently
+  downgrades to the SQL UDF fallback, which re-scans the whole edge set per call and was hiding
+  the fast-path failure.
+- **Neo4j Graph Reference Was Never Actually Measured**: The `neo4j` service published no
+  ports, so the host-side graph harness (`benchmarks/graph/run.py`, default
+  `bolt://localhost:7687`) could not reach it and every SNAP row silently reported
+  `Unavailable` while the container was healthy. Bolt/HTTP are now published. Four further
+  defects were fixed once it could connect, and all three algorithms now report on both 5M+
+  edge SNAP datasets: (1) there was **no index or constraint on `:Node(id)`**, so
+  `MERGE (a:Node {id: ...})` degenerated to a per-row label scan — a
+  `CONSTRAINT ... REQUIRE n.id IS UNIQUE` now gives `MERGE` an index to probe;
+  (2) `gds.graph.project` keys nodes by Neo4j's *internal* id, so `shortestPath`'s
+  `sourceNode`/`targetNode` (dataset ids) never matched — the harness now translates the
+  dataset ids to internal ids before calling dijkstra (projecting on the external `n.id` via
+  `project.cypher` instead produced `Unable to load NODE <external id>` on `snap-web-google`);
+  (3) the harness reloaded the whole graph for every algorithm, which exhausted
+  `dbms.memory.transaction.total.max` while tearing down the previous load — the graph is now
+  loaded and projected once per dataset and reused; (4) the teardown used
+  `CALL { ... } IN TRANSACTIONS`, which cannot clear a multi-million-relationship graph within
+  the transaction pool and left the next dataset's load half-applied — it is now a driver-side
+  loop of small independently-committed batches, timed separately from ingestion so it never
+  pollutes the load figures. The graph section is therefore reproducible end-to-end in one
+  unattended pass. `benchmarks/graph/run.py` now writes a structured JSON record per
+  engine/algorithm (`build_s`, `load_s`, `project_s`, `teardown_s`, `seconds`, `result_size`,
+  `env`), and `generate_summary.py` derives every figure quoted in the report narrative from
+  those artefacts instead of hard-coding them.
+- **Orphaned Cluster Index Shard Cleanup & Vacuuming**: Fixed an issue where superseded
+  table-level cluster index shards (`indexes/cluster_{column}_{version}_shard_*.puffin`)
+  remained unlinked on disk after consecutive index compaction runs, causing historical
+  benchmark runs on Cohere 10M to accumulate ~53.5 GB of dead orphaned Puffin files.
+  Updated `rebuild_cluster_index` to immediately delete superseded shard files upon
+  committing new index versions, and updated `vacuum()` to discover, re-validate, and
+  reap unreferenced Puffin index shards during table maintenance.
+- **Inner-Product Distance Split (`DistDotNorm` vs `DistDot`)**: Separated the two distinct
+  inner-product semantics that were previously conflated in one `DistDot` type. `DistDotNorm`
+  (`1 - cos`, bounded `[0, 2]`) is the only distance used when building/loading an HNSW graph;
+  `DistDot` (raw `-dot`) is now available for exact scoring of candidate lists. This restores
+  the pre-existing `VectorMetric::InnerProduct` behaviour (`1 - normalized dot`, with query
+  L2-normalization on the quantized paths) across the f32, `hnsw_sq8`, `hnsw_tq8`, `hnsw_tq4`
+  and `hnsw_pq` tiers. A raw `-dot` distance must *not* be fed to this HNSW implementation: it is
+  negative for positively-aligned vectors and violates the search core's
+  `assert!(dist >= 0)`, so graph construction degrades or panics (measured recall ~0.002 on a
+  synthetic MIPS set). Clients such as Qdrant avoid this by searching in "score space"
+  (higher-is-better) with an optional exact rescore; faiss/hnswlib use `-dot` with no
+  non-negativity assert.
+- **Oversampled Exact Inner-Product Rescore (`HnswIvfIndex`)**: Implemented the true-MIPS
+  path on top of the split above. The per-cluster HNSW graph still ranks by the safe,
+  non-negative `DistDotNorm` (`1 - cos`) distance, but for `VectorMetric::InnerProduct` the
+  IVF fine-search now retrieves `k * rescore_oversample` candidates per probed cluster and
+  re-ranks them by exact raw `-dot` in f32 (`rescore_inner_product`). The f32 tiers use the
+  stored vectors directly; the quantized tiers (`hnsw_sq8`, `hnsw_tq8`, `hnsw_tq4`,
+  `hnsw_pq`) decode the stored code to f32 first. Candidates whose raw vector cannot be
+  recovered fall back to the graph distance. The oversampling factor defaults to `4`
+  (matching the pre-existing `k * 4` candidate budget, so behaviour is unchanged unless
+  raised) and is configurable via `HnswIvfIndex::with_rescore_oversample`. This gives correct
+  MIPS ordering without feeding negative distances into the HNSW core. Arrow-backed graphs
+  store rows in layer-indexed order, so the rescore fetches the stored vector by the Arrow row
+  index (`p_id.1`), not the original row id (`d_id`); using `d_id` paired the correct score
+  with the wrong row and dropped `lastfm-64-dot` f32 recall from 0.90 to 0.32. Measured after
+  the fix: `lastfm-64-dot` f32 recall@10 **0.9000** (1138 QPS) and `hnsw_tq8` **0.8834**
+  (1039 QPS), versus 0.61 for tq8 before the rescore.
 
 ### Performance
 - **Compaction Throughput Acceleration**: Rayon multi-threading saturates 8 vCPUs at $300\% - 600\%$

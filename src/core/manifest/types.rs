@@ -51,7 +51,7 @@ pub struct IndexFile {
     pub file_path: String,
 
     /// Puffin blob type if packed into an Iceberg Puffin container
-    /// e.g., "org.apache.iceberg.vector.hnsw-tq8", "org.apache.iceberg.lexical.bm25"
+    /// e.g., "org.apache.iceberg.vector.hnsw-graph", "org.apache.iceberg.lexical.bm25"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob_type: Option<String>,
 
@@ -616,6 +616,14 @@ pub enum IndexAlgorithm {
         #[serde(default = "default_quality", alias = "ef_construction")]
         quality: usize,
     },
+    HnswSq8 {
+        #[serde(default = "default_metric")]
+        metric: String,
+        #[serde(default = "default_complexity", alias = "m")]
+        complexity: usize,
+        #[serde(default = "default_quality", alias = "ef_construction")]
+        quality: usize,
+    },
     Bm25 {
         #[serde(default)]
         k1: f32,
@@ -659,6 +667,7 @@ impl IndexAlgorithm {
             IndexAlgorithm::HnswPq { .. } => "hnsw_pq",
             IndexAlgorithm::HnswTq4 { .. } => "hnsw_tq4",
             IndexAlgorithm::HnswTq8 { .. } => "hnsw_tq8",
+            IndexAlgorithm::HnswSq8 { .. } => "hnsw_sq8",
             IndexAlgorithm::Bm25 { .. } => "bm25",
             IndexAlgorithm::Bloom { .. } => "bloom",
             IndexAlgorithm::Bitmap => "bitmap",
@@ -686,6 +695,7 @@ impl IndexAlgorithm {
             "hnsw_pq" | "pq" => Some(IndexAlgorithm::hnsw_pq()),
             "hnsw_tq4" | "tq4" => Some(IndexAlgorithm::hnsw_tq4()),
             "hnsw_tq8" | "tq8" => Some(IndexAlgorithm::hnsw_tq8()),
+            "hnsw_sq8" | "sq8" => Some(IndexAlgorithm::hnsw_sq8()),
             "bm25" | "lexical" | "inverted" => Some(IndexAlgorithm::Bm25 {
                 k1: 1.2,
                 b: 0.75,
@@ -714,6 +724,7 @@ impl IndexAlgorithm {
             "hnsw_pq",
             "hnsw_tq4",
             "hnsw_tq8",
+            "hnsw_sq8",
             "bm25",
             "bloom",
             "bitmap",
@@ -784,6 +795,15 @@ impl IndexAlgorithm {
         }
     }
 
+    /// Create an 8-bit scalar-quantized index (4x compression, no rotation).
+    pub fn hnsw_sq8() -> Self {
+        Self::HnswSq8 {
+            metric: default_metric(),
+            complexity: default_complexity(),
+            quality: default_quality(),
+        }
+    }
+
     /// Create a 4-bit TurboQuant optimized index (8x compression).
     pub fn hnsw_tq4() -> Self {
         Self::HnswTq4 {
@@ -809,7 +829,8 @@ impl IndexAlgorithm {
             Self::Hnsw { metric, .. }
             | Self::HnswPq { metric, .. }
             | Self::HnswTq4 { metric, .. }
-            | Self::HnswTq8 { metric, .. } => *metric = m,
+            | Self::HnswTq8 { metric, .. }
+            | Self::HnswSq8 { metric, .. } => *metric = m,
             _ => {}
         }
         self
@@ -820,7 +841,8 @@ impl IndexAlgorithm {
             Self::Hnsw { complexity: c, .. }
             | Self::HnswPq { complexity: c, .. }
             | Self::HnswTq4 { complexity: c, .. }
-            | Self::HnswTq8 { complexity: c, .. } => *c = complexity,
+            | Self::HnswTq8 { complexity: c, .. }
+            | Self::HnswSq8 { complexity: c, .. } => *c = complexity,
             _ => {}
         }
         self
@@ -831,7 +853,8 @@ impl IndexAlgorithm {
             Self::Hnsw { quality: q, .. }
             | Self::HnswPq { quality: q, .. }
             | Self::HnswTq4 { quality: q, .. }
-            | Self::HnswTq8 { quality: q, .. } => *q = quality,
+            | Self::HnswTq8 { quality: q, .. }
+            | Self::HnswSq8 { quality: q, .. } => *q = quality,
             _ => {}
         }
         self

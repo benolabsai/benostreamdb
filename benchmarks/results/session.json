@@ -12,14 +12,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 234.0262,
-        "measured_at": "2026-10-28T17:51:19Z",
-        "random_gather_ns_per_access": 7.2827,
-        "triad_gbs": 14.9069
+        "matmul_gflops": 86.8891,
+        "measured_at": "2026-11-07T16:08:57Z",
+        "random_gather_ns_per_access": 6.994,
+        "triad_gbs": 13.4032
       },
-      "captured_at": "2026-10-28T17:51:19Z",
+      "captured_at": "2026-11-07T16:08:57Z",
       "note": null,
-      "session": "ca3f0760eaeb"
+      "session": "90e73110d464"
     },
     "filters": {
       "artifacts": [
@@ -28,14 +28,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 222.0827,
-        "measured_at": "2026-10-28T17:51:39Z",
-        "random_gather_ns_per_access": 8.7357,
-        "triad_gbs": 11.4966
+        "matmul_gflops": 89.5112,
+        "measured_at": "2026-11-07T16:08:59Z",
+        "random_gather_ns_per_access": 8.0599,
+        "triad_gbs": 13.3289
       },
-      "captured_at": "2026-10-28T17:51:39Z",
+      "captured_at": "2026-11-07T16:08:59Z",
       "note": null,
-      "session": "ca3f0760eaeb"
+      "session": "90e73110d464"
     },
     "gpu_cdist": {
       "artifacts": [
@@ -43,48 +43,53 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 225.4835,
-        "measured_at": "2026-10-28T17:21:56Z",
-        "random_gather_ns_per_access": 6.7025,
-        "triad_gbs": 15.0137
+        "matmul_gflops": 227.9743,
+        "measured_at": "2026-11-07T15:27:38Z",
+        "random_gather_ns_per_access": 6.4732,
+        "triad_gbs": 14.7743
       },
-      "captured_at": "2026-10-28T17:21:56Z",
+      "captured_at": "2026-11-07T15:27:38Z",
       "note": null,
-      "session": "ca3f0760eaeb"
+      "session": "90e73110d464"
     },
     "graph": {
       "artifacts": [
         "graph/results/graph_snap_roadnet_ca.md",
         "graph/results/graph_snap_web_google.md",
-        "graph/results/graph_synth_10k.md"
+        "graph/results/graph_synth_10k.md",
+        "graph/results/graph_snap_roadnet_ca.json",
+        "graph/results/graph_snap_web_google.json",
+        "graph/results/graph_synth_10k.json"
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 229.3179,
-        "measured_at": "2026-10-28T17:24:34Z",
-        "random_gather_ns_per_access": 7.1551,
-        "triad_gbs": 13.4389
+        "matmul_gflops": 74.0657,
+        "measured_at": "2026-11-07T16:08:18Z",
+        "random_gather_ns_per_access": 7.5967,
+        "triad_gbs": 12.7995
       },
-      "captured_at": "2026-10-28T17:24:34Z",
+      "captured_at": "2026-11-07T16:08:18Z",
       "note": null,
-      "session": "ca3f0760eaeb"
+      "session": "90e73110d464"
     },
     "production": {
       "artifacts": [
         "results/production_concurrency.md",
         "results/production_concurrent.json",
-        "results/production_maintenance.json"
+        "results/production_maintenance.json",
+        "results/production_filters.json",
+        "results/production_filters.md"
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 283.3145,
-        "measured_at": "2026-10-28T17:25:45Z",
-        "random_gather_ns_per_access": 6.6828,
-        "triad_gbs": 13.6323
+        "matmul_gflops": 161.4944,
+        "measured_at": "2026-11-07T16:09:22Z",
+        "random_gather_ns_per_access": 7.559,
+        "triad_gbs": 11.9822
       },
-      "captured_at": "2026-10-28T17:25:45Z",
+      "captured_at": "2026-11-07T16:09:22Z",
       "note": null,
-      "session": "ca3f0760eaeb"
+      "session": "90e73110d464"
     },
     "sql": {
       "artifacts": [
@@ -92,14 +97,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 133.8338,
-        "measured_at": "2026-10-28T17:24:36Z",
-        "random_gather_ns_per_access": 7.1445,
-        "triad_gbs": 14.668
+        "matmul_gflops": 91.0005,
+        "measured_at": "2026-11-07T16:08:21Z",
+        "random_gather_ns_per_access": 7.4561,
+        "triad_gbs": 11.5199
       },
-      "captured_at": "2026-10-28T17:24:36Z",
+      "captured_at": "2026-11-07T16:08:21Z",
       "note": null,
-      "session": "ca3f0760eaeb"
+      "session": "90e73110d464"
     },
     "vector_ann": {
       "artifacts": [
@@ -138,14 +143,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 275.3877,
-        "measured_at": "2026-10-28T17:55:03Z",
-        "random_gather_ns_per_access": 6.9344,
-        "triad_gbs": 14.5626
+        "matmul_gflops": 161.4215,
+        "measured_at": "2026-11-07T15:29:50Z",
+        "random_gather_ns_per_access": 6.4325,
+        "triad_gbs": 14.6899
       },
-      "captured_at": "2026-10-28T17:55:03Z",
+      "captured_at": "2026-11-07T15:29:50Z",
       "note": null,
-      "session": "ca3f0760eaeb"
+      "session": "90e73110d464"
     },
     "vector_matrix": {
       "artifacts": [
@@ -236,21 +241,274 @@
         "competitors/results/weaviate_lastfm-64-dot_cpu.json",
         "competitors/results/weaviate_mnist-784-euclidean_cpu.json",
         "competitors/results/weaviate_nytimes-256-angular_cpu.json",
-        "competitors/results/weaviate_sift-128-euclidean_cpu.json"
+        "competitors/results/weaviate_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/faiss_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/faiss_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/faiss_sq_glove-100-angular_cpu.json",
+        "competitors/results/faiss_sq_glove-200-angular_cpu.json",
+        "competitors/results/faiss_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/faiss_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/faiss_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/faiss_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/lancedb_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/lancedb_sq_glove-100-angular_cpu.json",
+        "competitors/results/lancedb_sq_glove-200-angular_cpu.json",
+        "competitors/results/lancedb_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/lancedb_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/lancedb_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/milvus_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/milvus_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/milvus_sq_glove-100-angular_cpu.json",
+        "competitors/results/milvus_sq_glove-200-angular_cpu.json",
+        "competitors/results/milvus_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/milvus_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/milvus_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/milvus_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/qdrant_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/qdrant_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/qdrant_sq_glove-100-angular_cpu.json",
+        "competitors/results/qdrant_sq_glove-200-angular_cpu.json",
+        "competitors/results/qdrant_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/qdrant_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/qdrant_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/qdrant_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/weaviate_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/weaviate_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/weaviate_sq_glove-100-angular_cpu.json",
+        "competitors/results/weaviate_sq_glove-200-angular_cpu.json",
+        "competitors/results/weaviate_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/weaviate_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/weaviate_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/weaviate_sq_sift-128-euclidean_cpu.json"
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 79.5519,
-        "measured_at": "2026-10-28T18:58:10Z",
-        "random_gather_ns_per_access": 7.6324,
-        "triad_gbs": 13.528
+        "matmul_gflops": 79.5457,
+        "measured_at": "2026-11-07T15:59:06Z",
+        "random_gather_ns_per_access": 7.5177,
+        "triad_gbs": 13.2066
       },
-      "captured_at": "2026-10-28T18:58:10Z",
+      "captured_at": "2026-11-07T15:59:06Z",
       "note": null,
-      "session": "ca3f0760eaeb"
+      "session": "90e73110d464"
     }
   },
   "sessions": {
+    "90e73110d464": {
+      "calibrations": [
+        {
+          "available": true,
+          "matmul_gflops": 76.7316,
+          "measured_at": "2026-11-06T22:29:14Z",
+          "random_gather_ns_per_access": 7.0989,
+          "triad_gbs": 15.1051
+        },
+        {
+          "available": true,
+          "matmul_gflops": 93.635,
+          "measured_at": "2026-11-06T22:31:26Z",
+          "random_gather_ns_per_access": 6.1843,
+          "triad_gbs": 15.5694
+        },
+        {
+          "available": true,
+          "matmul_gflops": 202.9833,
+          "measured_at": "2026-11-06T22:59:46Z",
+          "random_gather_ns_per_access": 6.126,
+          "triad_gbs": 14.3963
+        },
+        {
+          "available": true,
+          "matmul_gflops": 188.0865,
+          "measured_at": "2026-11-06T23:02:16Z",
+          "random_gather_ns_per_access": 6.8159,
+          "triad_gbs": 14.7473
+        },
+        {
+          "available": true,
+          "matmul_gflops": 235.7879,
+          "measured_at": "2026-11-06T23:02:19Z",
+          "random_gather_ns_per_access": 6.2179,
+          "triad_gbs": 15.3332
+        },
+        {
+          "available": true,
+          "matmul_gflops": 89.2694,
+          "measured_at": "2026-11-06T23:02:52Z",
+          "random_gather_ns_per_access": 6.2481,
+          "triad_gbs": 14.9196
+        },
+        {
+          "available": true,
+          "matmul_gflops": 197.2875,
+          "measured_at": "2026-11-06T23:02:53Z",
+          "random_gather_ns_per_access": 6.1082,
+          "triad_gbs": 13.571
+        },
+        {
+          "available": true,
+          "matmul_gflops": 245.2754,
+          "measured_at": "2026-11-06T23:03:16Z",
+          "random_gather_ns_per_access": 6.1377,
+          "triad_gbs": 15.925
+        },
+        {
+          "available": true,
+          "matmul_gflops": 127.4894,
+          "measured_at": "2026-11-07T00:19:18Z",
+          "random_gather_ns_per_access": 6.6471,
+          "triad_gbs": 15.8955
+        },
+        {
+          "available": true,
+          "matmul_gflops": 93.4022,
+          "measured_at": "2026-11-07T00:21:30Z",
+          "random_gather_ns_per_access": 6.9572,
+          "triad_gbs": 13.9139
+        },
+        {
+          "available": true,
+          "matmul_gflops": 211.1239,
+          "measured_at": "2026-11-07T00:49:35Z",
+          "random_gather_ns_per_access": 6.7079,
+          "triad_gbs": 14.609
+        },
+        {
+          "available": true,
+          "matmul_gflops": 89.5263,
+          "measured_at": "2026-11-07T00:52:25Z",
+          "random_gather_ns_per_access": 6.6342,
+          "triad_gbs": 14.802
+        },
+        {
+          "available": true,
+          "matmul_gflops": 244.867,
+          "measured_at": "2026-11-07T00:52:27Z",
+          "random_gather_ns_per_access": 6.9504,
+          "triad_gbs": 14.6832
+        },
+        {
+          "available": true,
+          "matmul_gflops": 202.0944,
+          "measured_at": "2026-11-07T00:53:01Z",
+          "random_gather_ns_per_access": 6.779,
+          "triad_gbs": 14.7096
+        },
+        {
+          "available": true,
+          "matmul_gflops": 244.7764,
+          "measured_at": "2026-11-07T00:53:03Z",
+          "random_gather_ns_per_access": 6.4844,
+          "triad_gbs": 14.6834
+        },
+        {
+          "available": true,
+          "matmul_gflops": 274.0156,
+          "measured_at": "2026-11-07T00:53:26Z",
+          "random_gather_ns_per_access": 6.9182,
+          "triad_gbs": 14.6263
+        },
+        {
+          "available": true,
+          "matmul_gflops": 227.9743,
+          "measured_at": "2026-11-07T15:27:38Z",
+          "random_gather_ns_per_access": 6.4732,
+          "triad_gbs": 14.7743
+        },
+        {
+          "available": true,
+          "matmul_gflops": 161.4215,
+          "measured_at": "2026-11-07T15:29:50Z",
+          "random_gather_ns_per_access": 6.4325,
+          "triad_gbs": 14.6899
+        },
+        {
+          "available": true,
+          "matmul_gflops": 79.5457,
+          "measured_at": "2026-11-07T15:59:06Z",
+          "random_gather_ns_per_access": 7.5177,
+          "triad_gbs": 13.2066
+        },
+        {
+          "available": true,
+          "matmul_gflops": 74.0657,
+          "measured_at": "2026-11-07T16:08:18Z",
+          "random_gather_ns_per_access": 7.5967,
+          "triad_gbs": 12.7995
+        },
+        {
+          "available": true,
+          "matmul_gflops": 91.0005,
+          "measured_at": "2026-11-07T16:08:21Z",
+          "random_gather_ns_per_access": 7.4561,
+          "triad_gbs": 11.5199
+        },
+        {
+          "available": true,
+          "matmul_gflops": 86.8891,
+          "measured_at": "2026-11-07T16:08:57Z",
+          "random_gather_ns_per_access": 6.994,
+          "triad_gbs": 13.4032
+        },
+        {
+          "available": true,
+          "matmul_gflops": 89.5112,
+          "measured_at": "2026-11-07T16:08:59Z",
+          "random_gather_ns_per_access": 8.0599,
+          "triad_gbs": 13.3289
+        },
+        {
+          "available": true,
+          "matmul_gflops": 161.4944,
+          "measured_at": "2026-11-07T16:09:22Z",
+          "random_gather_ns_per_access": 7.559,
+          "triad_gbs": 11.9822
+        }
+      ],
+      "fingerprint": {
+        "cpu_cores": 32,
+        "cpu_freq_limits": {
+          "boost_disabled": false,
+          "driver": "amd-pstate-epp",
+          "hw_max_khz": 4981510,
+          "hw_min_khz": 570173,
+          "policy_max_khz": 4981510,
+          "policy_min_khz": 1740528
+        },
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "dimm_config": null,
+        "engine_version": "0.15.0",
+        "governor": "powersave",
+        "hostname": "desktop",
+        "kernel": "7.0.0-42-generic",
+        "mem_total_bytes": 130400088064,
+        "package_power_limits": null,
+        "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "first_seen": "2026-11-06T22:29:14Z",
+      "last_seen": "2026-11-07T16:09:22Z",
+      "sections": [
+        "gpu_cdist",
+        "vector_ann",
+        "vector_matrix",
+        "graph",
+        "sql",
+        "beir",
+        "filters",
+        "production"
+      ]
+    },
     "ca3f0760eaeb": {
       "calibrations": [
         {

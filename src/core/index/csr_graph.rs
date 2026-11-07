@@ -291,6 +291,7 @@ impl GraphView for MmapCsrGraph {
     }
 }
 
+#[derive(Clone)]
 pub struct MultiSegmentCsrGraph {
     pub segments: Vec<MmapCsrGraph>,
 }

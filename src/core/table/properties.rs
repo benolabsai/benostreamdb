@@ -368,13 +368,7 @@ fn string_vector_dim(value: &str) -> Option<usize> {
 /// `FixedSizeList` dimensions, which is O(fields) and catches schema mismatches
 /// without touching every value.
 fn value_scan_enabled() -> bool {
-    let Ok(value) = std::env::var("BSDB_VALIDATE_EMBEDDINGS") else {
-        return false;
-    };
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "on" | "strict" | "yes"
-    )
+    cfg!(feature = "validate-embeddings")
 }
 
 #[cfg(test)]
