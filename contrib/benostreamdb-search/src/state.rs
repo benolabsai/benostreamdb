@@ -1141,11 +1141,11 @@ mod tests {
         std::env::remove_var("BSDB_CATALOG_TYPE");
         assert!(resolve_catalog().await.is_none());
 
-        // 2. Set REST catalog -> Some
+        // 2. Set REST catalog -> Some (use a non-loopback host; SSRF guard rejects 'localhost')
         std::env::set_var("BSDB_SEARCH_CATALOG_TYPE", "rest");
         std::env::set_var(
             "BSDB_SEARCH_CATALOG_URL",
-            "http://localhost:8181/api/catalog/v1",
+            "https://catalog.example.com:8181/api/catalog/v1",
         );
         std::env::set_var("BSDB_SEARCH_CATALOG_NAMESPACE", "analytics");
 
