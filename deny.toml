@@ -60,6 +60,10 @@ ignore = [
     #          compression-codecs use the bulk API, we use `decode_all`.
     # The bundled zstd-sys is already on the patched 2.1.2 (RUSTSEC-2026-0410).
     # Tracked in docs/DEPENDENCY_RISK.md.
+    # thrift 0.17.0 (RUSTSEC-2026-0435). Pinned transitively by parquet 57.3.1 /
+    # datafusion 52.5.0 for Parquet Thrift metadata decoding. Moving requires the
+    # upstream Arrow/DataFusion upgrade.
+    "RUSTSEC-2026-0435",
     "RUSTSEC-2026-0391",
     "RUSTSEC-2026-0398",
     "RUSTSEC-2026-0403",

@@ -3508,7 +3508,7 @@ impl HnswIvfIndex {
         })
     }
 
-    /// Bytes this index occupies, used as the weight of [`HNSW_IVF_CACHE`].
+    /// Bytes this index occupies, used as the weight of [`HNSW_IVF_CACHE`](crate::core::cache::HNSW_IVF_CACHE).
     ///
     /// This must describe the **loaded** representation, not the builder's. The
     /// old estimate charged 20 KB/point plus `dim * 4` bytes per vector, which

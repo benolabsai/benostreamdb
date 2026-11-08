@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use jni::objects::{JClass, JObject, JString};
-use jni::sys::{jboolean, jint, jlong, jstring};
+use jni::sys::{jboolean, jdouble, jint, jlong, jstring};
 use jni::JNIEnv;
 // use std::sync::Arc;
 use crate::core::manifest::IndexAlgorithm;
