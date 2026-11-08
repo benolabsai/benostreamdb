@@ -6,12 +6,12 @@
 
 | Algorithm | Engine | Status | Build (s) | Execution Latency (ms) | Result Size | Speedup vs NetworkX |
 |---|---|---|---|---|---|---|
-| pagerank | benostreamdb | ✅ Pass | 13.794s | 2478.35 ms | 1965206 | 1.41x |
-| pagerank | networkx | ✅ Pass | 8.298s | 3499.09 ms | 1965206 | 1.00x (baseline) |
-| pagerank | neo4j | ✅ Pass | 81.364s | 31003.24 ms | 1965206 | 9× slower |
-| connected_components | benostreamdb | ✅ Pass | 13.657s | 531.19 ms | 2638 | 1.71x |
-| connected_components | networkx | ✅ Pass | 7.363s | 908.71 ms | 2638 | 1.00x (baseline) |
-| connected_components | neo4j | ✅ Pass | 81.364s | 30717.12 ms | 1965206 | 34× slower |
-| shortest_path | benostreamdb | ✅ Pass | 13.648s | 0.08 ms | 13 | 4.56x |
-| shortest_path | networkx | ✅ Pass | 8.171s | 0.38 ms | 13 | 1.00x (baseline) |
-| shortest_path | neo4j | ✅ Pass | 81.364s | 18.07 ms | 1 | 47× slower |
+| pagerank | benostreamdb | ✅ Pass | 38.554s | 15608.17 ms | 1965206 | 4× slower |
+| pagerank | networkx | ✅ Pass | 8.187s | 3472.67 ms | 1965206 | 1.00x (baseline) |
+| pagerank | neo4j | ✅ Pass | 81.359s | 30626.56 ms | 1965206 | 9× slower |
+| connected_components | benostreamdb | ✅ Pass | 38.751s | 2475.01 ms | 2638 | 3× slower |
+| connected_components | networkx | ✅ Pass | 6.945s | 906.21 ms | 2638 | 1.00x (baseline) |
+| connected_components | neo4j | ✅ Pass | 81.359s | 29541.85 ms | 1965206 | 33× slower |
+| shortest_path | benostreamdb | ✅ Pass | 38.226s | 0.32 ms | 13 | 1.18x |
+| shortest_path | networkx | ✅ Pass | 8.139s | 0.38 ms | 13 | 1.00x (baseline) |
+| shortest_path | neo4j | ✅ Pass | 81.359s | 15.18 ms | 1 | 40× slower |

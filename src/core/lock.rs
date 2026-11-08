@@ -25,10 +25,30 @@ pub struct LockGuard {
     path: Path,
     owner: String,
     abort_tx: Option<oneshot::Sender<()>>,
+    released: bool,
+}
+
+impl LockGuard {
+    /// Release the lock synchronously, waiting for the delete to complete.
+    ///
+    /// `Drop` spawns the delete on the runtime, so a caller that immediately
+    /// re-acquires the same lock (for example, rebuilding two columns in a row)
+    /// can observe the still-present lock file and fail. Call this before
+    /// returning from a short critical section.
+    pub async fn release(mut self) {
+        if let Some(tx) = self.abort_tx.take() {
+            let _ = tx.send(());
+        }
+        let _ = self.store.delete(&self.path).await;
+        self.released = true;
+    }
 }
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
+        if self.released {
+            return;
+        }
         if let Some(tx) = self.abort_tx.take() {
             let _ = tx.send(());
         }
@@ -222,6 +242,7 @@ impl FileBasedLock {
             path: self.path.clone(),
             owner: self.owner.clone(),
             abort_tx: Some(tx),
+            released: false,
         }
     }
 

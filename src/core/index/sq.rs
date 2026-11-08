@@ -1,8 +1,10 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
+use crate::core::index::hnsw_rs::dist::Distance;
 use crate::core::index::{Quantizer, VectorMetric};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Standard Uniform Scalar Quantization (SQ8)
 ///
@@ -55,7 +57,22 @@ impl SqEncoder {
 
         let sample_size = vectors.len().min(10000);
         for i in 0..sample_size {
-            let v = &vectors[i];
+            // Cosine is norm-invariant. Normalize before measuring the
+            // per-dimension range so the quantized codes live on the unit
+            // sphere; the HNSW graph ranks SQ codes with byte-space L2, which
+            // is then cosine-equivalent. Without this, L2 on the raw vectors is
+            // sensitive to the ~5% norm variation and scrambles the top-k on
+            // angular datasets (e.g. nytimes-256-angular).
+            let mut v = vectors[i].clone();
+            if metric == VectorMetric::Cosine {
+                let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if norm > 1e-12 {
+                    let inv = 1.0 / norm;
+                    for x in &mut v {
+                        *x *= inv;
+                    }
+                }
+            }
             for j in 0..dim {
                 let val = v[j];
                 if val < min_vals[j] {
@@ -101,8 +118,24 @@ impl Quantizer for SqEncoder {
     fn encode(&self, vector: &[f32]) -> Vec<u8> {
         let max_quant = ((1 << self.bits) - 1) as f32;
         let mut encoded = Vec::with_capacity(self.dim);
-        for j in 0..self.dim.min(vector.len()) {
-            let q = ((vector[j] - self.offsets[j]) * self.scales[j]).round();
+        // Cosine is norm-invariant: normalize before quantizing so the stored
+        // codes and the query codes both live on the unit sphere. The graph
+        // ranks with byte-space L2, which is then cosine-equivalent.
+        let normalized: Vec<f32>;
+        let v: &[f32] = if self.metric == VectorMetric::Cosine {
+            let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 1e-12 {
+                let inv = 1.0 / norm;
+                normalized = vector.iter().map(|x| x * inv).collect();
+                &normalized
+            } else {
+                vector
+            }
+        } else {
+            vector
+        };
+        for j in 0..self.dim.min(v.len()) {
+            let q = ((v[j] - self.offsets[j]) * self.scales[j]).round();
             encoded.push(q.clamp(0.0, max_quant) as u8);
         }
         encoded
@@ -137,6 +170,56 @@ impl Quantizer for SqEncoder {
 
     fn dim(&self) -> usize {
         self.dim
+    }
+}
+
+/// Distance over SQ8 codes that decodes each dimension with its own scale and
+/// then applies the index metric.
+///
+/// The HNSW graph stores `u8` codes, so a plain byte-space L2 (`DistL2u8`) is
+/// only correct for isotropic quantization. SQ8 uses per-dimension scales, and
+/// for cosine the byte-space L2 is dominated by the vector norm: an all-zero
+/// vector sits at distance ~1.0 from every query, closer than the ~1.4 between
+/// real unit vectors, so it ranks first instead of last. Decoding restores the
+/// metric (cosine for angular datasets, L2 otherwise).
+#[derive(Clone)]
+pub struct DistSq8 {
+    pub encoder: Arc<SqEncoder>,
+}
+
+impl Distance<u8> for DistSq8 {
+    fn eval(&self, va: &[u8], vb: &[u8]) -> f32 {
+        let n = va.len().min(vb.len()).min(self.encoder.dim);
+        match self.encoder.metric {
+            VectorMetric::Cosine => {
+                let mut dot = 0.0f32;
+                let mut na = 0.0f32;
+                let mut nb = 0.0f32;
+                for j in 0..n {
+                    let a = va[j] as f32 * self.encoder.inv_scales[j] + self.encoder.offsets[j];
+                    let b = vb[j] as f32 * self.encoder.inv_scales[j] + self.encoder.offsets[j];
+                    dot += a * b;
+                    na += a * a;
+                    nb += b * b;
+                }
+                let denom = (na * nb).sqrt();
+                if denom > 1e-12 {
+                    1.0 - dot / denom
+                } else {
+                    1.0
+                }
+            }
+            _ => {
+                let mut dist_sq = 0.0f32;
+                for j in 0..n {
+                    let a = va[j] as f32 * self.encoder.inv_scales[j] + self.encoder.offsets[j];
+                    let b = vb[j] as f32 * self.encoder.inv_scales[j] + self.encoder.offsets[j];
+                    let diff = a - b;
+                    dist_sq += diff * diff;
+                }
+                dist_sq
+            }
+        }
     }
 }
 

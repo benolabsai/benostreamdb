@@ -17,7 +17,7 @@
     {
       "algorithm": "pagerank",
       "available": true,
-      "build_s": 12.870561,
+      "build_s": 33.696799,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -33,7 +33,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 12.870561,
+      "load_s": 33.696799,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
@@ -42,7 +42,7 @@
       },
       "project_s": 0.0,
       "result_size": 875713,
-      "seconds": 1.551673,
+      "seconds": 10.047382,
       "source": {
         "node": 0,
         "target": 10
@@ -53,7 +53,7 @@
     {
       "algorithm": "pagerank",
       "available": true,
-      "build_s": 8.163589,
+      "build_s": 7.956921,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -69,7 +69,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 8.163589,
+      "load_s": 7.956921,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
@@ -78,7 +78,7 @@
       },
       "project_s": 0.0,
       "result_size": 875713,
-      "seconds": 2.822084,
+      "seconds": 2.802966,
       "source": {
         "node": 0,
         "target": 10
@@ -89,7 +89,7 @@
     {
       "algorithm": "pagerank",
       "available": true,
-      "build_s": 102.763793,
+      "build_s": 100.860622,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -105,27 +105,27 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 102.541092,
+      "load_s": 100.645339,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
         "iterations": 30,
         "max_edges": 0
       },
-      "project_s": 0.222701,
+      "project_s": 0.215283,
       "result_size": 875713,
-      "seconds": 13.551346,
+      "seconds": 13.719129,
       "source": {
         "node": 0,
         "target": 10
       },
-      "teardown_s": 0.278816,
+      "teardown_s": 0.311338,
       "workload": "graph"
     },
     {
       "algorithm": "connected_components",
       "available": true,
-      "build_s": 13.167361,
+      "build_s": 33.885382,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -141,7 +141,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 13.167361,
+      "load_s": 33.885382,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
@@ -150,7 +150,7 @@
       },
       "project_s": 0.0,
       "result_size": 2746,
-      "seconds": 0.487469,
+      "seconds": 1.931389,
       "source": {
         "node": 0,
         "target": 10
@@ -161,7 +161,7 @@
     {
       "algorithm": "connected_components",
       "available": true,
-      "build_s": 7.968968,
+      "build_s": 7.910873,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -177,7 +177,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 7.968968,
+      "load_s": 7.910873,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
@@ -186,7 +186,7 @@
       },
       "project_s": 0.0,
       "result_size": 2746,
-      "seconds": 1.065702,
+      "seconds": 1.071206,
       "source": {
         "node": 0,
         "target": 10
@@ -197,7 +197,7 @@
     {
       "algorithm": "connected_components",
       "available": true,
-      "build_s": 102.763793,
+      "build_s": 100.860622,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -213,27 +213,27 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 102.541092,
+      "load_s": 100.645339,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
         "iterations": 30,
         "max_edges": 0
       },
-      "project_s": 0.222701,
+      "project_s": 0.215283,
       "result_size": 875713,
-      "seconds": 13.616743,
+      "seconds": 12.67923,
       "source": {
         "node": 0,
         "target": 10
       },
-      "teardown_s": 0.278816,
+      "teardown_s": 0.311338,
       "workload": "graph"
     },
     {
       "algorithm": "shortest_path",
       "available": true,
-      "build_s": 12.842637,
+      "build_s": 33.787241,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -249,7 +249,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 12.842637,
+      "load_s": 33.787241,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
@@ -258,7 +258,7 @@
       },
       "project_s": 0.0,
       "result_size": 14,
-      "seconds": 0.002345,
+      "seconds": 0.014943,
       "source": {
         "node": 0,
         "target": 10
@@ -269,7 +269,7 @@
     {
       "algorithm": "shortest_path",
       "available": true,
-      "build_s": 7.687962,
+      "build_s": 7.659724,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -285,7 +285,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 7.687962,
+      "load_s": 7.659724,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
@@ -294,7 +294,7 @@
       },
       "project_s": 0.0,
       "result_size": 14,
-      "seconds": 0.005338,
+      "seconds": 0.005532,
       "source": {
         "node": 0,
         "target": 10
@@ -305,7 +305,7 @@
     {
       "algorithm": "shortest_path",
       "available": true,
-      "build_s": 102.763793,
+      "build_s": 100.860622,
       "dataset": "snap_web_google",
       "device": "cpu",
       "edges": 5105039,
@@ -321,21 +321,21 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 102.541092,
+      "load_s": 100.645339,
       "nodes": 875713,
       "params": {
         "damping": 0.85,
         "iterations": 30,
         "max_edges": 0
       },
-      "project_s": 0.222701,
+      "project_s": 0.215283,
       "result_size": 1,
-      "seconds": 0.253928,
+      "seconds": 0.247638,
       "source": {
         "node": 0,
         "target": 10
       },
-      "teardown_s": 0.278816,
+      "teardown_s": 0.311338,
       "workload": "graph"
     }
   ],

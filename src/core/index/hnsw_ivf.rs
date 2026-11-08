@@ -110,6 +110,11 @@ pub enum HnswGraph {
     Jaccard(Hnsw<f32, DistJaccard>),
     BinaryHamming(Hnsw<u8, DistHammingPacked>),
     TurboQuant8(Hnsw<u8, crate::core::index::distance::DistL2u8>),
+    /// SQ8 codes ranked by the decoded metric (cosine for angular datasets,
+    /// L2 otherwise). Byte-space L2 is wrong for SQ8: per-dimension scales and
+    /// the vector norm dominate the ranking, so an all-zero vector ranks first
+    /// instead of last on cosine data.
+    Sq8(Hnsw<u8, crate::core::index::sq::DistSq8>),
     TurboQuant4(Hnsw<u8, crate::core::index::distance::DistL2u4>),
     SparseDot(Hnsw<crate::core::index::SparseVector, DistSparseDot>),
     Pq(Hnsw<u8, crate::core::index::pq::DistPqSdc>),
@@ -127,6 +132,9 @@ pub enum HnswGraph {
             u8,
             crate::core::index::distance::DistL2u8,
         >,
+    ),
+    Sq8Arrow(
+        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<u8, crate::core::index::sq::DistSq8>,
     ),
     TurboQuant4Arrow(
         crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<
@@ -162,6 +170,7 @@ impl HnswGraph {
             (HnswGraph::Jaccard(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
             (HnswGraph::BinaryHamming(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::TurboQuant8(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::Sq8(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::TurboQuant4(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::Pq(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::SparseDot(h), VectorValue::Sparse(q)) => {
@@ -180,6 +189,7 @@ impl HnswGraph {
                 h.search(q, k, ef, filter)
             }
             (HnswGraph::TurboQuant8Arrow(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::Sq8Arrow(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::TurboQuant4Arrow(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::PqArrow(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::SparseDotArrow(h), VectorValue::Sparse(q)) => {
@@ -216,6 +226,10 @@ impl HnswGraph {
                 let code = h.get_point_indexation().get_point_data(&neighbour.p_id)?;
                 quantizer.map(|q| q.decode(&code))
             }
+            HnswGraph::Sq8(h) => {
+                let code = h.get_point_indexation().get_point_data(&neighbour.p_id)?;
+                quantizer.map(|q| q.decode(&code))
+            }
             HnswGraph::TurboQuant4(h) => {
                 let code = h.get_point_indexation().get_point_data(&neighbour.p_id)?;
                 quantizer.map(|q| q.decode(&code))
@@ -225,6 +239,10 @@ impl HnswGraph {
                 quantizer.map(|q| q.decode(&code))
             }
             HnswGraph::TurboQuant8Arrow(h) => {
+                let code = h.get_vector(arrow_row);
+                quantizer.map(|q| q.decode(&code))
+            }
+            HnswGraph::Sq8Arrow(h) => {
                 let code = h.get_vector(arrow_row);
                 quantizer.map(|q| q.decode(&code))
             }
@@ -259,6 +277,7 @@ impl HnswGraph {
             HnswGraph::JaccardArrow(h) => h.footprint_bytes(),
             HnswGraph::BinaryHammingArrow(h) => h.footprint_bytes(),
             HnswGraph::TurboQuant8Arrow(h) => h.footprint_bytes(),
+            HnswGraph::Sq8Arrow(h) => h.footprint_bytes(),
             HnswGraph::TurboQuant4Arrow(h) => h.footprint_bytes(),
             HnswGraph::SparseDotArrow(h) => h.footprint_bytes(),
             HnswGraph::PqArrow(h) => h.footprint_bytes(),
@@ -271,6 +290,7 @@ impl HnswGraph {
             HnswGraph::Jaccard(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
             HnswGraph::BinaryHamming(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
             HnswGraph::TurboQuant8(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
+            HnswGraph::Sq8(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
             HnswGraph::TurboQuant4(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
             HnswGraph::SparseDot(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
             HnswGraph::Pq(h) => h.get_nb_point() * LEGACY_BYTES_PER_POINT,
@@ -288,6 +308,7 @@ impl HnswGraph {
             (HnswGraph::Jaccard(h), VectorValue::Float32(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::BinaryHamming(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::TurboQuant8(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::Sq8(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::TurboQuant4(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::Pq(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => h.insert_slice((&[v], local_id)),
@@ -302,6 +323,7 @@ impl HnswGraph {
             | (HnswGraph::JaccardArrow(_), _)
             | (HnswGraph::BinaryHammingArrow(_), _)
             | (HnswGraph::TurboQuant8Arrow(_), _)
+            | (HnswGraph::Sq8Arrow(_), _)
             | (HnswGraph::TurboQuant4Arrow(_), _)
             | (HnswGraph::SparseDotArrow(_), _)
             | (HnswGraph::PqArrow(_), _) => {
@@ -332,6 +354,7 @@ impl HnswGraph {
             | HnswGraph::JaccardArrow(_)
             | HnswGraph::BinaryHammingArrow(_)
             | HnswGraph::TurboQuant8Arrow(_)
+            | HnswGraph::Sq8Arrow(_)
             | HnswGraph::TurboQuant4Arrow(_)
             | HnswGraph::SparseDotArrow(_)
             | HnswGraph::PqArrow(_) => {
@@ -383,6 +406,10 @@ impl HnswGraph {
                 .file_dump(&path_string)
                 .map(|_| ())
                 .map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::Sq8(h) => h
+                .file_dump(&path_string)
+                .map(|_| ())
+                .map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
             HnswGraph::TurboQuant4(h) => h
                 .file_dump(&path_string)
                 .map(|_| ())
@@ -403,6 +430,7 @@ impl HnswGraph {
             | HnswGraph::JaccardArrow(_)
             | HnswGraph::BinaryHammingArrow(_)
             | HnswGraph::TurboQuant8Arrow(_)
+            | HnswGraph::Sq8Arrow(_)
             | HnswGraph::TurboQuant4Arrow(_)
             | HnswGraph::SparseDotArrow(_)
             | HnswGraph::PqArrow(_) => Err(Box::new(std::io::Error::other(
@@ -421,6 +449,7 @@ impl HnswGraph {
             HnswGraph::Jaccard(h) => h.set_extend_candidates(flag),
             HnswGraph::BinaryHamming(h) => h.set_extend_candidates(flag),
             HnswGraph::TurboQuant8(h) => h.set_extend_candidates(flag),
+            HnswGraph::Sq8(h) => h.set_extend_candidates(flag),
             HnswGraph::TurboQuant4(h) => h.set_extend_candidates(flag),
             HnswGraph::Pq(h) => h.set_extend_candidates(flag),
             HnswGraph::SparseDot(h) => h.set_extend_candidates(flag),
@@ -438,6 +467,7 @@ impl HnswGraph {
             HnswGraph::Jaccard(h) => h.set_keeping_pruned(flag),
             HnswGraph::BinaryHamming(h) => h.set_keeping_pruned(flag),
             HnswGraph::TurboQuant8(h) => h.set_keeping_pruned(flag),
+            HnswGraph::Sq8(h) => h.set_keeping_pruned(flag),
             HnswGraph::TurboQuant4(h) => h.set_keeping_pruned(flag),
             HnswGraph::Pq(h) => h.set_keeping_pruned(flag),
             HnswGraph::SparseDot(h) => h.set_keeping_pruned(flag),
@@ -721,12 +751,14 @@ fn build_bucket_graph(
                     ))
                 }
             }
-            QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8(Hnsw::new(
+            QuantizerImpl::Sq(q) => HnswGraph::Sq8(Hnsw::new(
                 hnsw_m,
                 c_vectors.len(),
                 max_layers,
                 ef_construction,
-                crate::core::index::distance::DistL2u8,
+                crate::core::index::sq::DistSq8 {
+                    encoder: std::sync::Arc::new(q.clone()),
+                },
             )),
             QuantizerImpl::Pq(pq) => {
                 let dist = crate::core::index::pq::DistPqSdc {
@@ -799,6 +831,11 @@ fn build_bucket_graph(
         let encoded = q.encode_batch(&c_vectors);
         match &mut hnsw {
             HnswGraph::TurboQuant8(g) => {
+                for (i, v) in encoded.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            HnswGraph::Sq8(g) => {
                 for (i, v) in encoded.iter().enumerate() {
                     g.insert((v, i));
                 }
@@ -1831,12 +1868,14 @@ impl HnswIvfIndex {
                                 ))
                             }
                         }
-                        QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8(Hnsw::new(
+                        QuantizerImpl::Sq(q) => HnswGraph::Sq8(Hnsw::new(
                             hnsw_m,
                             vecs.len(),
                             max_layers,
                             ef_construction,
-                            crate::core::index::distance::DistL2u8,
+                            crate::core::index::sq::DistSq8 {
+                                encoder: std::sync::Arc::new(q.clone()),
+                            },
                         )),
                         QuantizerImpl::Pq(pq) => {
                             let dist = crate::core::index::pq::DistPqSdc {
@@ -2027,10 +2066,12 @@ impl HnswIvfIndex {
                         )
                     }
                 }
-                QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8Arrow(
+                QuantizerImpl::Sq(q) => HnswGraph::Sq8Arrow(
                     crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
                         graph_bytes,
-                        crate::core::index::distance::DistL2u8,
+                        crate::core::index::sq::DistSq8 {
+                            encoder: std::sync::Arc::new(q.clone()),
+                        },
                     )
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                 ),
@@ -3367,10 +3408,12 @@ impl HnswIvfIndex {
                             )
                         }
                     }
-                    crate::core::index::QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8Arrow(
+                    crate::core::index::QuantizerImpl::Sq(q) => HnswGraph::Sq8Arrow(
                         crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
                             &graph_bytes,
-                            crate::core::index::distance::DistL2u8,
+                            crate::core::index::sq::DistSq8 {
+                                encoder: std::sync::Arc::new(q.clone()),
+                            },
                         )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),

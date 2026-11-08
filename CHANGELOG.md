@@ -93,6 +93,31 @@ Major release consolidating vector search, out-of-core indexing, and performance
     (defaulting to `0x00C0_FFEE_1337`).
 
 ### Fixed
+- **Index Rebuilds Evicted Every Other Table's Caches**: `rebuild_index`,
+  `compact_indexes`, and `rebuild_cluster_index` called `invalidate_all()` on the
+  process-global index caches, so rebuilding one table evicted every other table's resident
+  graphs and vectors in the same process — a performance cliff, and a correctness hazard when
+  a concurrent reader observed a cache miss mid-search. The expensive caches (`HNSW_IVF_CACHE`,
+  `HNSW_CACHE`, `INDEX_CACHE`, `CSR_GRAPH_CACHE`, `INVERTED_INDEX_CACHE`) are now invalidated
+  only for the table's URI (matching both the normalized `file://` form and the raw path). The
+  small, short-TTL manifest caches are still cleared globally, which is cheap and avoids a
+  stale-version read when a caller keys them by the raw path. `rebuild_index` also takes a
+  cross-process `FileBasedLock` (`_metadata/rebuild.lock`, object-store create-if-absent, so it
+  works on Linux, macOS, and Windows) so two processes cannot write the same
+  `{segment}.{column}.tmp.*` files and corrupt the build; the lock is released synchronously so
+  back-to-back rebuilds do not observe a stale lock file.
+- **SQ8 Ranked Cosine Datasets by L2 and Collapsed on Zero Vectors**: The `hnsw_sq8` index
+  ranked candidates with a plain byte-space L2 (`DistL2u8`) over the quantized codes, ignoring
+  the index metric. On `nytimes-256-angular` (cosine ground truth) this dropped recall@10 to
+  **0.1574** while every competitor's SQ stayed at 0.86–0.998. Two effects compounded: the
+  dataset contains ten all-zero vectors, and a zero vector sits at L2 distance ≈1.0 from every
+  query — closer than the ≈1.4 between real unit vectors — so L2 ranked them **first** while
+  cosine ranks them last; and the remaining ~5% norm variation reordered the rest. SQ8 now
+  ranks through a new `DistSq8` that decodes each dimension with its own scale and applies the
+  index metric (cosine for angular datasets, L2 otherwise), wired through new `HnswGraph::Sq8`
+  and `Sq8Arrow` variants. Recall@10 on `nytimes-256-angular` is now **0.9736**. The decode is
+  per-distance rather than SIMD byte-L2, so SQ8 QPS drops (≈2008 → ≈70 on that dataset); that
+  is the cost of ranking by the correct metric, and it is still far cheaper than f32.
 - **Table Vector Router Pruned the Segment That Owned the Query**: Two independent defects in
   the table-level vector router caused `randomized_differential_workload_matches_model` to miss
   the exactly-nearest row (distance 0) after a commit added a segment. First,
@@ -157,10 +182,11 @@ Major release consolidating vector search, out-of-core indexing, and performance
   Updated `rebuild_cluster_index` to immediately delete superseded shard files upon
   committing new index versions, and updated `vacuum()` to discover, re-validate, and
   reap unreferenced Puffin index shards during table maintenance.
-- **Inner-Product Distance Split (`DistDotNorm` vs `DistDot`)**: Separated the two distinct
-  inner-product semantics that were previously conflated in one `DistDot` type. `DistDotNorm`
-  (`1 - cos`, bounded `[0, 2]`) is the only distance used when building/loading an HNSW graph;
-  `DistDot` (raw `-dot`) is now available for exact scoring of candidate lists. This restores
+- **Inner-Product Distance Modes (`DistDot::norm` vs `DistDot::raw`)**: The single `DistDot`
+  type now carries an explicit `normalized` flag instead of conflating the two inner-product
+  semantics. `DistDot::norm()` (`1 - cos`, bounded `[0, 2]`) is the only distance used when
+  building/loading an HNSW graph; `DistDot::raw()` (raw `-dot`) is available for exact scoring
+  of candidate lists. This restores
   the pre-existing `VectorMetric::InnerProduct` behaviour (`1 - normalized dot`, with query
   L2-normalization on the quantized paths) across the f32, `hnsw_sq8`, `hnsw_tq8`, `hnsw_tq4`
   and `hnsw_pq` tiers. A raw `-dot` distance must *not* be fed to this HNSW implementation: it is

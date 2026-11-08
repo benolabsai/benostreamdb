@@ -1412,12 +1412,14 @@ fn build_graph(
                     ))
                 }
             }
-            QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8(Hnsw::new(
+            QuantizerImpl::Sq(q) => HnswGraph::Sq8(Hnsw::new(
                 m,
                 vectors.len(),
                 max_layers,
                 ef_construction,
-                crate::core::index::distance::DistL2u8,
+                crate::core::index::sq::DistSq8 {
+                    encoder: Arc::new(q.clone()),
+                },
             )),
             QuantizerImpl::Pq(pq) => {
                 let dist = crate::core::index::pq::DistPqSdc {
@@ -1520,9 +1522,14 @@ fn deserialize_graph(
                     )
                 }
             }
-            QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8Arrow(
-                ArrowHnsw::load_from_bytes_owned(bytes, crate::core::index::distance::DistL2u8)
-                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {e}"))?,
+            QuantizerImpl::Sq(q) => HnswGraph::Sq8Arrow(
+                ArrowHnsw::load_from_bytes_owned(
+                    bytes,
+                    crate::core::index::sq::DistSq8 {
+                        encoder: Arc::new(q.clone()),
+                    },
+                )
+                .map_err(|e| anyhow::anyhow!("HNSW load failed: {e}"))?,
             ),
             QuantizerImpl::Pq(pq) => {
                 let dist = crate::core::index::pq::DistPqSdc {

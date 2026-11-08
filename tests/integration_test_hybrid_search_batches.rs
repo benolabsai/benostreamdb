@@ -15,6 +15,13 @@ use arrow::record_batch::RecordBatch;
 use benostreamdb::core::manifest::IndexAlgorithm;
 use benostreamdb::Table;
 use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// `rebuild_index` clears the process-global index/manifest caches, so tests
+/// that build indexes must not run concurrently: one test's rebuild can evict
+/// another's freshly-built index between its cache lookup and its search, and
+/// the search then returns no candidates. Serialize the index-building tests.
+static SERIAL: Mutex<()> = Mutex::const_new(());
 
 fn sample_batch() -> RecordBatch {
     let ids = Int64Array::from(vec![1, 2, 3]);
@@ -50,6 +57,7 @@ fn sample_batch() -> RecordBatch {
 
 #[tokio::test]
 async fn hybrid_search_batches_fuses_vector_and_keyword() -> Result<()> {
+    let _guard = SERIAL.lock().await;
     let dir = tempfile::tempdir()?;
     let uri = format!("file://{}", dir.path().to_str().unwrap());
 
@@ -126,6 +134,7 @@ async fn table_with_indexes() -> Result<(tempfile::TempDir, Table)> {
 
 #[tokio::test]
 async fn hybrid_search_filter_is_pushed_down() -> Result<()> {
+    let _guard = SERIAL.lock().await;
     let (_dir, table) = table_with_indexes().await?;
 
     let batches = table
@@ -163,6 +172,7 @@ async fn hybrid_search_filter_is_pushed_down() -> Result<()> {
 
 #[tokio::test]
 async fn hybrid_search_rejects_malformed_filter_without_panicking() -> Result<()> {
+    let _guard = SERIAL.lock().await;
     let (_dir, table) = table_with_indexes().await?;
 
     // Connector-supplied predicates are untrusted input: malformed SQL must come

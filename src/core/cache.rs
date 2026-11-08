@@ -794,6 +794,48 @@ pub async fn invalidate_file_caches(root_uri: &str, path: &str) {
     }
 }
 
+/// Invalidate the index and metadata caches for a single table, leaving other
+/// tables' entries resident.
+///
+/// `rebuild_index` used to call `invalidate_all()` on every cache, which evicted
+/// every other table's indexes in the same process. That is both a performance
+/// cliff (every concurrent table reloads from storage) and a correctness hazard
+/// (a reader can observe a cache miss mid-search and fall back to a stale
+/// artifact). Cache keys are prefixed with the table URI, so scope the
+/// invalidation to that prefix.
+pub async fn invalidate_table_caches(uri: &str) {
+    let uri = uri.to_string();
+    // A table's own manager uses the normalized `file://` URI, but callers that
+    // construct a `ManifestManager` from the raw path (tests, CLI helpers) key
+    // the same caches without the scheme. Match both so neither view goes stale.
+    let bare = uri.strip_prefix("file://").unwrap_or(&uri).to_string();
+    macro_rules! invalidate_scoped {
+        ($cache:expr) => {{
+            let u = uri.clone();
+            let b = bare.clone();
+            let _ =
+                $cache.invalidate_entries_if(move |k: &String, _| k.contains(&u) || k.contains(&b));
+            // `invalidate_entries_if` is applied lazily; flush it so a caller
+            // that reads the index immediately after a rebuild sees the new
+            // bytes rather than the cached ones.
+            $cache.run_pending_tasks().await;
+        }};
+    }
+    // The expensive artifacts (graphs, vectors, inverted lists) are scoped to
+    // this table so concurrent tables keep their resident indexes.
+    invalidate_scoped!(HNSW_IVF_CACHE);
+    invalidate_scoped!(HNSW_CACHE);
+    invalidate_scoped!(INDEX_CACHE);
+    invalidate_scoped!(CSR_GRAPH_CACHE);
+    invalidate_scoped!(INVERTED_INDEX_CACHE);
+    // The manifest caches are tiny (bounded entry counts, short TTLs) and are
+    // keyed by both the normalized and raw table path depending on the caller.
+    // Clearing them globally is cheap and avoids a stale-version read.
+    MANIFEST_CACHE.invalidate_all();
+    MANIFEST_LIST_CACHE.invalidate_all();
+    LATEST_VERSION_CACHE.invalidate_all();
+}
+
 /// Invalidate all index and metadata caches across all tables without a rebuild.
 pub fn invalidate_index_caches() {
     HNSW_IVF_CACHE.invalidate_all();

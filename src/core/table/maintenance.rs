@@ -708,6 +708,21 @@ impl Table {
     /// `rebuild_index` procedures and the ablation harness, which rebuilds one
     /// index per quantizer over the same table.
     pub async fn rebuild_index(&self, column: String) -> Result<()> {
+        // Cross-process mutual exclusion. The in-process `maintenance_lock`
+        // cannot see another process, and two processes rebuilding the same
+        // table write the same `{segment}.{column}.tmp.*` files and corrupt the
+        // build. `FileBasedLock` uses the object store's create-if-absent
+        // primitive, so it works for both local and remote tables.
+        let lock_path = object_store::path::Path::from("_metadata/rebuild.lock");
+        let lock = crate::core::lock::FileBasedLock::new(self.store.clone(), lock_path, 300);
+        let cross_process_guard = match lock.try_acquire().await? {
+            Some(guard) => guard,
+            None => anyhow::bail!(
+                "another process is rebuilding table {}; retry after it finishes",
+                self.uri
+            ),
+        };
+
         let algorithms = {
             let configs = self.indexing.index_configs.read();
             configs
@@ -752,17 +767,13 @@ impl Table {
         // 0.86 from the same DB. Rebuilds are rare and explicit, so clearing
         // every cache that can hold a vector-index or manifest snapshot is the
         // safe trade.
-        crate::core::cache::HNSW_IVF_CACHE.invalidate_all();
-        crate::core::cache::HNSW_CACHE.invalidate_all();
-        crate::core::cache::INDEX_CACHE.invalidate_all();
-        crate::core::cache::CSR_GRAPH_CACHE.invalidate_all();
-        crate::core::cache::INVERTED_INDEX_CACHE.invalidate_all();
-        crate::core::cache::MANIFEST_CACHE.invalidate_all();
-        crate::core::cache::MANIFEST_LIST_CACHE.invalidate_all();
-        crate::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+        crate::core::cache::invalidate_table_caches(&self.uri).await;
         self.indexing.vector_routers.write().clear();
 
         tracing::info!(column = %column, "rebuild_index: index rebuilt from persisted data");
+        // Release synchronously so a caller that rebuilds another column
+        // immediately does not observe the still-present lock file.
+        cross_process_guard.release().await;
         Ok(())
     }
 
@@ -847,13 +858,10 @@ impl Table {
         // 1. Ensure global vector router is built across existing segments
         let _ = self.ensure_vector_router(column).await?;
 
-        // 2. Invalidate caches so query path picks up fresh sidecar topology
-        crate::core::cache::HNSW_IVF_CACHE.invalidate_all();
-        crate::core::cache::HNSW_CACHE.invalidate_all();
-        crate::core::cache::INDEX_CACHE.invalidate_all();
-        crate::core::cache::MANIFEST_CACHE.invalidate_all();
-        crate::core::cache::MANIFEST_LIST_CACHE.invalidate_all();
-        crate::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+        // 2. Invalidate this table's caches so the query path picks up the fresh
+        // sidecar topology. Scoped to the URI: a global clear would evict every
+        // other table's indexes in the same process.
+        crate::core::cache::invalidate_table_caches(&self.uri).await;
 
         // 3. Trim jemalloc dirty pages back to OS
         crate::core::memory::trim_heap();
@@ -986,14 +994,12 @@ impl Table {
             let _ = self.store.delete(&p).await;
         }
 
-        // A rebuild replaces the artifact bytes; drop every cache that could
-        // still serve the previous one.
+        // A rebuild replaces the artifact bytes; drop this table's caches that
+        // could still serve the previous one. Scoped to the URI so concurrent
+        // tables keep their resident indexes.
         self.indexing.cluster_indexes.write().clear();
         self.indexing.vector_routers.write().clear();
-        crate::core::cache::HNSW_IVF_CACHE.invalidate_all();
-        crate::core::cache::MANIFEST_CACHE.invalidate_all();
-        crate::core::cache::MANIFEST_LIST_CACHE.invalidate_all();
-        crate::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+        crate::core::cache::invalidate_table_caches(&self.uri).await;
 
         tracing::info!(
             column = %column,
