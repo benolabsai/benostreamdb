@@ -13,16 +13,16 @@
 | index | m=16, ef_construction=200, ef_search=200, metric=cosine |
 | queries | 500 |
 | k | 10 |
-| build_s | 3.342 |
+| build_s | 3.054 |
 | index_mb | 8.0 |
 | recall_at_k | 0.8474 |
-| pure_index_qps | 615.0 |
-| pure_p50_ms | 1.291 |
-| pure_p99_ms | 1.979 |
-| full_row_qps | 530.6 |
-| full_p50_ms | 1.847 |
-| full_p99_ms | 2.395 |
-| qps | 615.0 |
-| p50_ms | 1.847 |
-| p99_ms | 2.395 |
+| pure_index_qps | 632.8 |
+| pure_p50_ms | 1.255 |
+| pure_p99_ms | 1.526 |
+| full_row_qps | 559.5 |
+| full_p50_ms | 1.756 |
+| full_p99_ms | 2.381 |
+| qps | 632.8 |
+| p50_ms | 1.756 |
+| p99_ms | 2.381 |
 | env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-42-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=['NVIDIA GeForce RTX 5070 Ti, 16303 MiB', 'NVIDIA GeForce RTX 5070 Ti, 16303 MiB'] |
