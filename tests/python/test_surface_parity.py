@@ -65,6 +65,7 @@ FLIGHT_SERVER = ROOT / "server" / "flight_sql" / "src" / "server.rs"
 INDEX_ALGORITHMS = {
     "hnsw",
     "hnsw_pq",
+    "hnsw_sq8",
     "hnsw_tq4",
     "hnsw_tq8",
     "bm25",
@@ -102,6 +103,8 @@ TABLE_ACTIONS = {
     "rewrite_data_files",
     "compact",
     "expire_snapshots",
+    "rebuild_cluster_index",
+    "warmup",
 }
 
 
@@ -148,6 +151,7 @@ def test_python_accepts_every_index_algorithm(tmp_path):
     configs = {
         "hnsw": "hnsw",
         "hnsw_pq": "hnsw_pq",
+        "hnsw_sq8": "hnsw_sq8",
         "hnsw_tq4": "hnsw_tq4",
         "hnsw_tq8": "hnsw_tq8",
         "bm25": "bm25",

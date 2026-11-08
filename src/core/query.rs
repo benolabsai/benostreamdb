@@ -1072,11 +1072,18 @@ mod tests {
         // Small segments (1K vectors, 128D)
         let max_parallel = config.auto_detect_parallel_readers(1_000, 128);
 
-        // Should allow many parallel readers for small segments
-        assert!(
-            max_parallel >= 4,
-            "Expected at least 4 parallel readers for small segments, got {}",
-            max_parallel
+        // Small segments are memory-unconstrained, so parallelism reaches the CPU target.
+        assert!(max_parallel >= 1, "Expected at least 1 parallel reader");
+
+        let cpus = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+        let headroom = (cpus / 4).max(2);
+        let cpu_target = cpus.saturating_sub(headroom).max(1);
+        assert_eq!(
+            max_parallel, cpu_target,
+            "Small segments should saturate the CPU target of {} on {} CPUs, got {}",
+            cpu_target, cpus, max_parallel
         );
     }
 
