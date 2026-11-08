@@ -30,6 +30,7 @@ python/**/*.dylib
 .vscode/
 .idea/
 .metals/
+.bloop/
 .continue/
 .qwen/
 .agents/

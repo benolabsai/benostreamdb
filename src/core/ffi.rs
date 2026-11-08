@@ -783,7 +783,15 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_rebui
     ef_construction: jint,
     target_shard_bytes: jlong,
 ) -> jboolean {
-    rebuild_cluster_index_impl(env, table_uri, column, k, m, ef_construction, target_shard_bytes)
+    rebuild_cluster_index_impl(
+        env,
+        table_uri,
+        column,
+        k,
+        m,
+        ef_construction,
+        target_shard_bytes,
+    )
 }
 
 /// Spark: pre-warm cluster index caches for the table.
@@ -2203,7 +2211,15 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_rebuild
     ef_construction: jint,
     target_shard_bytes: jlong,
 ) -> jboolean {
-    rebuild_cluster_index_impl(env, table_uri, column, k, m, ef_construction, target_shard_bytes)
+    rebuild_cluster_index_impl(
+        env,
+        table_uri,
+        column,
+        k,
+        m,
+        ef_construction,
+        target_shard_bytes,
+    )
 }
 
 #[no_mangle]

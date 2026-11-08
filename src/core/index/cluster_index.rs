@@ -61,7 +61,6 @@ use crate::core::index::hnsw_ivf::{
     assign_to_centroids, DistHamming, DistJaccard, DistL1, HnswGraph,
 };
 use crate::core::index::hnsw_rs::prelude::*;
-use parquet::file::reader::FileReader;
 use crate::core::index::{global_centroids, Quantizer, QuantizerImpl, VectorMetric, VectorValue};
 use crate::core::manifest::{IndexAlgorithm, ManifestEntry, TableIndexFile};
 use crate::core::puffin::{
@@ -70,6 +69,7 @@ use crate::core::puffin::{
     PUFFIN_BLOB_VECTOR_CLUSTER_SHARDS, PUFFIN_BLOB_VECTOR_HNSW_GRAPH,
 };
 use crate::core::search::ScoredResult;
+use parquet::file::reader::FileReader;
 
 /// Default number of global clusters when the caller does not choose one.
 pub const DEFAULT_CLUSTER_COUNT: usize = 1024;
@@ -228,7 +228,7 @@ pub async fn sample_table_vectors(
     for entry in entries {
         let mut on_batch = |_offset: usize, vectors: &[Vec<f32>]| -> Result<()> {
             for v in vectors {
-                if global_row % stride == 0 {
+                if global_row.is_multiple_of(stride) {
                     sample.push(v.clone());
                 }
                 global_row += 1;
@@ -334,7 +334,7 @@ impl ClusterIndex {
                     }
                 }
                 for v in vectors {
-                    if global_row % stride == 0 {
+                    if global_row.is_multiple_of(stride) {
                         sample.push(v.clone());
                     }
                     global_row += 1;
@@ -370,10 +370,10 @@ impl ClusterIndex {
             );
         }
 
-        let clusters_per_bucket = (centroids.len() + buckets - 1) / buckets;
-        let mut seg_idx = 0u32;
+        let clusters_per_bucket = centroids.len().div_ceil(buckets);
         let mut assign_result: Result<()> = Ok(());
-        for entry in entries {
+        for (seg_idx, entry) in entries.iter().enumerate() {
+            let seg_idx = seg_idx as u32;
             let mut on_batch = |offset: usize, vectors: &[Vec<f32>]| -> Result<()> {
                 let labels = assign_to_centroids(vectors, &centroids, metric)?;
                 for (i, (label, v)) in labels.iter().zip(vectors.iter()).enumerate() {
@@ -383,12 +383,12 @@ impl ClusterIndex {
                 }
                 Ok(())
             };
-            if let Err(e) = stream_vector_batches(&store, &entry.file_path, column, &mut on_batch).await
+            if let Err(e) =
+                stream_vector_batches(&store, &entry.file_path, column, &mut on_batch).await
             {
                 assign_result = Err(e);
                 break;
             }
-            seg_idx += 1;
         }
         drop(bucket_files);
 
@@ -418,7 +418,11 @@ impl ClusterIndex {
             let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
             let container = Bytes::from_owner(MmapOwner(Arc::new(mmap)));
             let slices = cluster_slices_from_container(&container)?;
-            let c_start = if shard.cluster_start == usize::MAX { 0 } else { shard.cluster_start };
+            let c_start = if shard.cluster_start == usize::MAX {
+                0
+            } else {
+                shard.cluster_start
+            };
             Ok(ClusterShard {
                 shard_idx: shard.shard_idx,
                 file_path: None,
@@ -439,7 +443,13 @@ impl ClusterIndex {
             writer: PuffinWriter::new(std::io::BufWriter::new(shard0_file))?,
             cluster_count: 0,
         };
-        write_header_blobs(&mut current_shard.writer, &centroids, metric, quantizer.as_ref(), &segment_table)?;
+        write_header_blobs(
+            &mut current_shard.writer,
+            &centroids,
+            metric,
+            quantizer.as_ref(),
+            &segment_table,
+        )?;
 
         let mut build_result: Result<()> = Ok(());
         for b in 0..buckets {
@@ -496,13 +506,16 @@ impl ClusterIndex {
                 let cluster_id = blobs.cluster_id;
 
                 // If current shard has reached target size, seal it and roll to the next sequential shard
-                if current_shard.cluster_count > 0 && current_shard.writer.current_offset() as usize >= target_bytes {
+                if current_shard.cluster_count > 0
+                    && current_shard.writer.current_offset() as usize >= target_bytes
+                {
                     let next_idx = current_shard.shard_idx + 1;
                     let next_path = tmp_dir.join(format!("shard_{next_idx}.puffin"));
                     let next_file = match std::fs::File::create(&next_path) {
                         Ok(f) => f,
                         Err(e) => {
-                            build_result = Err(anyhow::Error::from(e).context(format!("creating shard file {}", next_path.display())));
+                            build_result = Err(anyhow::Error::from(e)
+                                .context(format!("creating shard file {}", next_path.display())));
                             break;
                         }
                     };
@@ -647,7 +660,13 @@ impl ClusterIndex {
             writer: PuffinWriter::new(Cursor::new(Vec::new()))?,
             cluster_count: 0,
         };
-        write_header_blobs(&mut current_shard.writer, &centroids, metric, quantizer.as_ref(), &segment_table)?;
+        write_header_blobs(
+            &mut current_shard.writer,
+            &centroids,
+            metric,
+            quantizer.as_ref(),
+            &segment_table,
+        )?;
 
         for cluster_id in sorted_cluster_ids {
             let members = &grouped[&cluster_id];
@@ -655,7 +674,9 @@ impl ClusterIndex {
                 continue;
             }
 
-            if current_shard.cluster_count > 0 && current_shard.writer.current_offset() as usize >= target_bytes {
+            if current_shard.cluster_count > 0
+                && current_shard.writer.current_offset() as usize >= target_bytes
+            {
                 let next_idx = current_shard.shard_idx + 1;
                 let new_writer = PuffinWriter::new(Cursor::new(Vec::new()))?;
                 let old_shard = std::mem::replace(
@@ -697,7 +718,11 @@ impl ClusterIndex {
 
         let container = Bytes::from(current_shard.writer.finish()?.into_inner());
         let slices = cluster_slices_from_container(&container)?;
-        let c_start = if current_shard.cluster_start == usize::MAX { 0 } else { current_shard.cluster_start };
+        let c_start = if current_shard.cluster_start == usize::MAX {
+            0
+        } else {
+            current_shard.cluster_start
+        };
         shards_out.push(ClusterShard {
             shard_idx: current_shard.shard_idx,
             file_path: None,
@@ -957,7 +982,10 @@ impl ClusterIndex {
                         0,
                         1,
                         &shard_json,
-                        HashMap::from([("filename".to_string(), "cluster_shards.json".to_string())]),
+                        HashMap::from([(
+                            "filename".to_string(),
+                            "cluster_shards.json".to_string(),
+                        )]),
                     )?;
                     Bytes::from(writer.finish()?.into_inner())
                 } else {
@@ -1044,7 +1072,8 @@ impl ClusterIndex {
             .enumerate()
             .map(|(i, c)| (i, metric_distance(self.metric, query, c)))
             .collect();
-        cluster_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        cluster_distances
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let probes = n_probe.clamp(1, cluster_distances.len());
         let effective_query = self.quantize_query(query);
@@ -1132,7 +1161,8 @@ impl ClusterIndex {
             Some(QuantizerImpl::Sq(ref q)) => VectorValue::Binary(q.encode(query)),
             Some(QuantizerImpl::Pq(ref q)) => {
                 let mut q_vec = query.to_vec();
-                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine {
+                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
+                {
                     normalize(&mut q_vec);
                 }
                 VectorValue::Binary(q.encode(&q_vec))
@@ -1181,7 +1211,9 @@ fn train_quantizer(
         IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::BenoQuant(BenoQuantEncoder::train(
             sample, 8, metric,
         )?)),
-        IndexAlgorithm::HnswSq8 { .. } => Some(QuantizerImpl::Sq(SqEncoder::train(sample, 8, metric)?)),
+        IndexAlgorithm::HnswSq8 { .. } => {
+            Some(QuantizerImpl::Sq(SqEncoder::train(sample, 8, metric)?))
+        }
         IndexAlgorithm::HnswTq4 { .. } => Some(QuantizerImpl::BenoQuant(BenoQuantEncoder::train(
             sample, 4, metric,
         )?)),
@@ -1272,8 +1304,8 @@ fn build_cluster_blobs(
         .file_dump(&tmp_str)
         .map_err(|e| anyhow::anyhow!("cluster {cluster_id}: HNSW dump failed: {e}"))?;
     let graph_path = format!("{tmp_str}.hnsw.graph");
-    let graph_bytes = std::fs::read(&graph_path)
-        .with_context(|| format!("reading dumped graph {graph_path}"))?;
+    let graph_bytes =
+        std::fs::read(&graph_path).with_context(|| format!("reading dumped graph {graph_path}"))?;
     let _ = std::fs::remove_file(&graph_path);
 
     let node_meta: Vec<NodeMeta> = members
@@ -1342,7 +1374,9 @@ fn write_cluster_blobs<W: std::io::Write + std::io::Seek>(
     m: usize,
     ef_construction: usize,
 ) -> Result<()> {
-    if let Some(blobs) = build_cluster_blobs(cluster_id, members, quantizer, metric, m, ef_construction)? {
+    if let Some(blobs) =
+        build_cluster_blobs(cluster_id, members, quantizer, metric, m, ef_construction)?
+    {
         write_cluster_blobs_to_puffin(writer, &blobs)?;
     }
     Ok(())
@@ -1389,7 +1423,13 @@ fn build_graph(
                 let dist = crate::core::index::pq::DistPqSdc {
                     pq: Arc::new(pq.clone()),
                 };
-                HnswGraph::Pq(Hnsw::new(m, vectors.len(), max_layers, ef_construction, dist))
+                HnswGraph::Pq(Hnsw::new(
+                    m,
+                    vectors.len(),
+                    max_layers,
+                    ef_construction,
+                    dist,
+                ))
             }
         }
     } else {
@@ -1550,13 +1590,10 @@ fn write_record(
 }
 
 /// Group a bucket's records by cluster id.
-fn group_bucket(
-    bytes: &[u8],
-    dim: usize,
-) -> Result<HashMap<usize, Vec<(u32, u32, Vec<f32>)>>> {
+fn group_bucket(bytes: &[u8], dim: usize) -> Result<HashMap<usize, Vec<(u32, u32, Vec<f32>)>>> {
     let header = 12usize;
     let record = header + dim * 4;
-    if record == 0 || bytes.len() % record != 0 {
+    if record == 0 || !bytes.len().is_multiple_of(record) {
         anyhow::bail!(
             "cluster build bucket is not a whole number of {record}-byte records ({} bytes)",
             bytes.len()
@@ -1839,7 +1876,10 @@ fn find_blob(container: &Bytes, blob_type: &str) -> Result<Option<(usize, usize)
                 .map_err(|_| anyhow::anyhow!("negative blob offset"))?;
             let length = usize::try_from(blob.length)
                 .map_err(|_| anyhow::anyhow!("negative blob length"))?;
-            if offset.checked_add(length).map_or(true, |end| end > container.len()) {
+            if offset
+                .checked_add(length)
+                .is_none_or(|end| end > container.len())
+            {
                 anyhow::bail!("blob '{blob_type}' exceeds container size");
             }
             return Ok(Some((offset, length)));
@@ -1862,11 +1902,14 @@ fn cluster_slices_from_container(container: &Bytes) -> Result<HashMap<usize, Clu
         else {
             continue;
         };
-        let offset = usize::try_from(blob.offset)
-            .map_err(|_| anyhow::anyhow!("negative blob offset"))?;
-        let length = usize::try_from(blob.length)
-            .map_err(|_| anyhow::anyhow!("negative blob length"))?;
-        if offset.checked_add(length).map_or(true, |end| end > container.len()) {
+        let offset =
+            usize::try_from(blob.offset).map_err(|_| anyhow::anyhow!("negative blob offset"))?;
+        let length =
+            usize::try_from(blob.length).map_err(|_| anyhow::anyhow!("negative blob length"))?;
+        if offset
+            .checked_add(length)
+            .is_none_or(|end| end > container.len())
+        {
             anyhow::bail!("cluster {cluster_id} blob exceeds container size");
         }
         if blob.r#type == PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META {
@@ -1934,7 +1977,11 @@ mod tests {
     }
 
     fn segments() -> Vec<String> {
-        vec!["seg_0".to_string(), "seg_1".to_string(), "seg_2".to_string()]
+        vec![
+            "seg_0".to_string(),
+            "seg_1".to_string(),
+            "seg_2".to_string(),
+        ]
     }
 
     #[test]
@@ -1944,9 +1991,7 @@ mod tests {
             records,
             segments(),
             "embedding",
-            &IndexAlgorithm::hnsw()
-                .with_complexity(16)
-                .with_quality(200),
+            &IndexAlgorithm::hnsw().with_complexity(16).with_quality(200),
             8,
             16,
             100,
@@ -1977,9 +2022,7 @@ mod tests {
             blob(50, 4, 0.0),
             segments(),
             "embedding",
-            &IndexAlgorithm::hnsw()
-                .with_complexity(16)
-                .with_quality(100),
+            &IndexAlgorithm::hnsw().with_complexity(16).with_quality(100),
             4,
             8,
             50,
@@ -2039,9 +2082,7 @@ mod tests {
             blob(30, 4, 0.0),
             segments(),
             "embedding",
-            &IndexAlgorithm::hnsw()
-                .with_complexity(16)
-                .with_quality(50),
+            &IndexAlgorithm::hnsw().with_complexity(16).with_quality(50),
             4,
             8,
             50,

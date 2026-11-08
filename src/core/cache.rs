@@ -198,7 +198,10 @@ async fn read_cached_entry(cache_path: &Path, expected_size: Option<u64>) -> Opt
     if !cached_entry_is_valid(cache_path, expected_size).await {
         return None;
     }
-    tokio::fs::read(cache_path).await.ok().map(bytes::Bytes::from)
+    tokio::fs::read(cache_path)
+        .await
+        .ok()
+        .map(bytes::Bytes::from)
 }
 
 /// Write `data` into the cache atomically (unique temp file, then rename).
@@ -1099,7 +1102,10 @@ mod tests {
 
         let used = sweep_disk_cache(dir.path(), 8192, true);
 
-        assert_eq!(used, 8192, "sweep must trim the directory down to the budget");
+        assert_eq!(
+            used, 8192,
+            "sweep must trim the directory down to the budget"
+        );
         assert!(
             !dir.path().join("old").exists(),
             "the oldest entry is evicted first"

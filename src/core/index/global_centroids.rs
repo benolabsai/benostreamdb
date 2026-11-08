@@ -36,11 +36,7 @@ pub const DEFAULT_GLOBAL_ITERS: usize = 10;
 ///
 /// `samples` should span all segments (see [`sample_vectors`]); training on one
 /// segment's rows reproduces the per-segment behaviour this exists to replace.
-pub fn train_global(
-    samples: &[Vec<f32>],
-    k: usize,
-    seed: Option<u64>,
-) -> Result<Vec<Vec<f32>>> {
+pub fn train_global(samples: &[Vec<f32>], k: usize, seed: Option<u64>) -> Result<Vec<Vec<f32>>> {
     if samples.is_empty() {
         anyhow::bail!("train_global requires at least one sample vector");
     }

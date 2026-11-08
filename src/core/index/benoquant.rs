@@ -13,7 +13,11 @@ pub fn rademacher_sign(i: usize) -> f32 {
     x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
     x ^= x >> 31;
-    if (x & 1) == 0 { 1.0 } else { -1.0 }
+    if (x & 1) == 0 {
+        1.0
+    } else {
+        -1.0
+    }
 }
 
 /// Converts an f32 scalar into a 2-byte IEEE 754-2008 binary16 (f16) in little-endian order.
@@ -321,7 +325,8 @@ impl Quantizer for BenoQuantEncoder {
         let inv_scale = 1.0 / self.scale;
 
         if self.bits == 4 {
-            let (nibble_bytes, alpha) = if encoded.len() >= 2 && (encoded.len() - 2) * 2 >= self.dim {
+            let (nibble_bytes, alpha) = if encoded.len() >= 2 && (encoded.len() - 2) * 2 >= self.dim
+            {
                 let alpha_bytes = [encoded[encoded.len() - 2], encoded[encoded.len() - 1]];
                 (&encoded[..encoded.len() - 2], f16_bytes_to_f32(alpha_bytes))
             } else {
@@ -523,7 +528,10 @@ mod tests {
 
         let dist_fn = crate::core::index::distance::DistL2u4;
         let self_dist = dist_fn.distance(&q_encoded, &q_encoded);
-        assert!(self_dist.abs() < 1e-4, "Self distance should be ~0, got {self_dist}");
+        assert!(
+            self_dist.abs() < 1e-4,
+            "Self distance should be ~0, got {self_dist}"
+        );
 
         let mut bq_dists: Vec<(usize, f32)> = encoded
             .iter()

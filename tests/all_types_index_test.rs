@@ -127,11 +127,7 @@ fn test_all_types_indexing() -> anyhow::Result<()> {
             )
             .await?;
         // 'foo' is row 1
-        assert_eq!(
-            collect_ids(&res),
-            vec![1],
-            "blob = 'foo' must return id 1"
-        );
+        assert_eq!(collect_ids(&res), vec![1], "blob = 'foo' must return id 1");
 
         // D. Decimal Index: money > 3.00
         // DataFusion Decimal > Float requires cast.

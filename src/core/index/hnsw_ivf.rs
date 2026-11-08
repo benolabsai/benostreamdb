@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing;
 
-use super::ivf::simple_kmeans_with_seed;
 use super::benoquant::BenoQuantEncoder;
+use super::ivf::simple_kmeans_with_seed;
 use super::pq::{PqConfig, PqEncoder};
 use super::{Quantizer, QuantizerImpl, VectorMetric, VectorValue};
 use crate::core::index::hnsw_rs::prelude::*;
@@ -474,10 +474,10 @@ pub struct LazyPuffinBlobs {
 
 impl LazyPuffinBlobs {
     pub fn load_cluster(&self, cluster_id: usize) -> Result<(HnswGraph, Vec<usize>)> {
-        let (graph_slice, mapping_slice) = self
-            .cluster_slices
-            .get(&cluster_id)
-            .ok_or_else(|| anyhow::anyhow!("Cluster {} not found in puffin container", cluster_id))?;
+        let (graph_slice, mapping_slice) =
+            self.cluster_slices.get(&cluster_id).ok_or_else(|| {
+                anyhow::anyhow!("Cluster {} not found in puffin container", cluster_id)
+            })?;
 
         let graph_bytes = self
             .container
@@ -557,9 +557,10 @@ fn rescore_inner_product(
     let mut scored: Vec<(usize, f32)> = candidates
         .into_iter()
         .map(|(row_id, approx, raw)| match raw {
-            Some(v) if v.len() == query.len() => {
-                (row_id, -crate::core::index::distance::dot_product(query, &v))
-            }
+            Some(v) if v.len() == query.len() => (
+                row_id,
+                -crate::core::index::distance::dot_product(query, &v),
+            ),
             _ => (row_id, approx),
         })
         .collect();
@@ -720,15 +721,13 @@ fn build_bucket_graph(
                     ))
                 }
             }
-            QuantizerImpl::Sq(_) => {
-                HnswGraph::TurboQuant8(Hnsw::new(
-                    hnsw_m,
-                    c_vectors.len(),
-                    max_layers,
-                    ef_construction,
-                    crate::core::index::distance::DistL2u8,
-                ))
-            }
+            QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8(Hnsw::new(
+                hnsw_m,
+                c_vectors.len(),
+                max_layers,
+                ef_construction,
+                crate::core::index::distance::DistL2u8,
+            )),
             QuantizerImpl::Pq(pq) => {
                 let dist = crate::core::index::pq::DistPqSdc {
                     pq: std::sync::Arc::new(pq.clone()),
@@ -1044,7 +1043,7 @@ impl HnswIvfIndex {
             .max(1);
 
         let hnsw_m = hnsw_m
-            .or_else(|| match algo {
+            .or(match algo {
                 IndexAlgorithm::Hnsw { complexity, .. }
                 | IndexAlgorithm::HnswTq8 { complexity, .. }
                 | IndexAlgorithm::HnswSq8 { complexity, .. }
@@ -1400,7 +1399,7 @@ impl HnswIvfIndex {
             .max(1);
 
         let hnsw_m = hnsw_m
-            .or_else(|| match algo {
+            .or(match algo {
                 IndexAlgorithm::Hnsw { complexity, .. }
                 | IndexAlgorithm::HnswTq8 { complexity, .. }
                 | IndexAlgorithm::HnswSq8 { complexity, .. }
@@ -1697,7 +1696,7 @@ impl HnswIvfIndex {
             .max(1);
 
         let hnsw_m = hnsw_m
-            .or_else(|| match algo {
+            .or(match algo {
                 IndexAlgorithm::Hnsw { complexity, .. }
                 | IndexAlgorithm::HnswTq8 { complexity, .. }
                 | IndexAlgorithm::HnswSq8 { complexity, .. }
@@ -1832,15 +1831,13 @@ impl HnswIvfIndex {
                                 ))
                             }
                         }
-                        QuantizerImpl::Sq(_) => {
-                            HnswGraph::TurboQuant8(Hnsw::new(
-                                hnsw_m,
-                                vecs.len(),
-                                max_layers,
-                                ef_construction,
-                                crate::core::index::distance::DistL2u8,
-                            ))
-                        }
+                        QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8(Hnsw::new(
+                            hnsw_m,
+                            vecs.len(),
+                            max_layers,
+                            ef_construction,
+                            crate::core::index::distance::DistL2u8,
+                        )),
                         QuantizerImpl::Pq(pq) => {
                             let dist = crate::core::index::pq::DistPqSdc {
                                 pq: std::sync::Arc::new(pq.clone()),
@@ -2030,15 +2027,13 @@ impl HnswIvfIndex {
                         )
                     }
                 }
-                QuantizerImpl::Sq(_) => {
-                    HnswGraph::TurboQuant8Arrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
-                            graph_bytes,
-                            crate::core::index::distance::DistL2u8,
-                        )
-                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8Arrow(
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes_owned(
+                        graph_bytes,
+                        crate::core::index::distance::DistL2u8,
                     )
-                }
+                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                ),
                 QuantizerImpl::Pq(pq) => {
                     let dist = crate::core::index::pq::DistPqSdc {
                         pq: std::sync::Arc::new(pq.clone()),
@@ -2109,7 +2104,10 @@ impl HnswIvfIndex {
             .map(|r| r.map_err(anyhow::Error::from))
             .collect::<Result<Vec<_>>>()?;
         if batches.is_empty() {
-            return Err(anyhow::anyhow!("No data in mapping file for cluster {}", cluster_id));
+            return Err(anyhow::anyhow!(
+                "No data in mapping file for cluster {}",
+                cluster_id
+            ));
         }
         let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
         let row_id_mapping = Self::extract_row_id_mapping_from_col(batch.column(0));
@@ -2126,7 +2124,8 @@ impl HnswIvfIndex {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let entries: Vec<(String, usize, usize)> = {
-            let reader = crate::core::puffin::PuffinReader::new(std::io::Cursor::new(container.as_ref()))?;
+            let reader =
+                crate::core::puffin::PuffinReader::new(std::io::Cursor::new(container.as_ref()))?;
             let mut list = Vec::new();
             for (i, b) in reader.footer().blobs.iter().enumerate() {
                 let name = b
@@ -2138,7 +2137,10 @@ impl HnswIvfIndex {
                     .map_err(|_| anyhow::anyhow!("negative blob offset in {}", puffin_path))?;
                 let length = usize::try_from(b.length)
                     .map_err(|_| anyhow::anyhow!("negative blob length in {}", puffin_path))?;
-                if offset.checked_add(length).map_or(true, |end| end > container.len()) {
+                if offset
+                    .checked_add(length)
+                    .is_none_or(|end| end > container.len())
+                {
                     anyhow::bail!(
                         "blob '{}' [{offset}..{offset}+{length}] exceeds container size {}",
                         name,
@@ -2179,7 +2181,8 @@ impl HnswIvfIndex {
                 )
             })?;
 
-        let centroids_bytes = container.slice(centroids_offset..centroids_offset + centroids_length);
+        let centroids_bytes =
+            container.slice(centroids_offset..centroids_offset + centroids_length);
         let builder = ParquetRecordBatchReaderBuilder::try_new(centroids_bytes.clone())?;
         let reader = builder.build()?;
         let batches: Vec<RecordBatch> = reader
@@ -2269,9 +2272,7 @@ impl HnswIvfIndex {
             augment_m,
         });
 
-        let cluster_cache = moka::sync::Cache::builder()
-            .max_capacity(64)
-            .build();
+        let cluster_cache = moka::sync::Cache::builder().max_capacity(64).build();
 
         Ok(HnswIvfIndex {
             centroids,
@@ -2319,12 +2320,11 @@ impl HnswIvfIndex {
                 }
                 VectorValue::Binary(q.encode(&q_vec))
             }
-            Some(QuantizerImpl::Sq(ref q)) => {
-                VectorValue::Binary(q.encode(query_f32))
-            }
+            Some(QuantizerImpl::Sq(ref q)) => VectorValue::Binary(q.encode(query_f32)),
             Some(QuantizerImpl::Pq(ref q)) => {
                 let mut q_vec = query_f32.to_vec();
-                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine {
+                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
+                {
                     let norm = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
                     if norm > 1e-6 {
                         let inv = 1.0 / norm;
@@ -3004,25 +3004,25 @@ impl HnswIvfIndex {
         let deser_results: Vec<Result<(usize, (HnswGraph, Vec<usize>))>> =
             crate::core::run_blocking(|| {
                 cluster_bytes
-                .into_par_iter()
-                .map(|cb_res| {
-                    let cb = cb_res?;
-                    let cluster_id = cb.cluster_id;
-                    let graph_bytes = match cb.graph {
-                        GraphData::Mmap(m) => bytes::Bytes::from_owner(MmapOwner(m)),
-                        GraphData::Bytes(b) => b,
-                    };
-                    let (hnsw, row_id_mapping) = Self::deserialize_single_cluster(
-                        cluster_id,
-                        graph_bytes,
-                        cb.mapping,
-                        quantizer_for_deser.as_ref(),
-                        metric,
-                        augment_m,
-                    )?;
-                    Ok((cluster_id, (hnsw, row_id_mapping)))
-                })
-                .collect()
+                    .into_par_iter()
+                    .map(|cb_res| {
+                        let cb = cb_res?;
+                        let cluster_id = cb.cluster_id;
+                        let graph_bytes = match cb.graph {
+                            GraphData::Mmap(m) => bytes::Bytes::from_owner(MmapOwner(m)),
+                            GraphData::Bytes(b) => b,
+                        };
+                        let (hnsw, row_id_mapping) = Self::deserialize_single_cluster(
+                            cluster_id,
+                            graph_bytes,
+                            cb.mapping,
+                            quantizer_for_deser.as_ref(),
+                            metric,
+                            augment_m,
+                        )?;
+                        Ok((cluster_id, (hnsw, row_id_mapping)))
+                    })
+                    .collect()
             });
 
         let mut cluster_graphs = HashMap::new();
@@ -3137,7 +3137,9 @@ impl HnswIvfIndex {
         match Self::load_lazy_from_container(container, puffin_path, column_name, use_mmap) {
             Ok(index) => {
                 let arc_index = Arc::new(index);
-                HNSW_IVF_CACHE.insert(cache_key_str, arc_index.clone()).await;
+                HNSW_IVF_CACHE
+                    .insert(cache_key_str, arc_index.clone())
+                    .await;
                 Ok(arc_index)
             }
             Err(e) => {
@@ -3365,15 +3367,13 @@ impl HnswIvfIndex {
                             )
                         }
                     }
-                    crate::core::index::QuantizerImpl::Sq(_) => {
-                        HnswGraph::TurboQuant8Arrow(
-                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                &graph_bytes,
-                                crate::core::index::distance::DistL2u8,
-                            )
-                            .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
+                    crate::core::index::QuantizerImpl::Sq(_) => HnswGraph::TurboQuant8Arrow(
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                            &graph_bytes,
+                            crate::core::index::distance::DistL2u8,
                         )
-                    }
+                        .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
+                    ),
                     _ => anyhow::bail!("Unsupported quantizer variant for legacy load"),
                 }
             } else {
@@ -3534,7 +3534,10 @@ mod tests {
         let out = rescore_inner_product(&query, candidates, 2);
         assert_eq!(out.len(), 2);
         // -1.0 < 0.0 < 0.9, so ids 2 and 3 survive the truncation.
-        assert_eq!(out.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(
+            out.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
     }
 
     #[test]

@@ -358,7 +358,9 @@ pub(crate) async fn rebuild_cluster_core(
     table
         .rebuild_cluster_index_with_target(col.to_string(), k, m, ef_c, shard_bytes)
         .await
-        .map_err(|e| BenoStreamError::internal(format!("rebuild_cluster failed for '{index}': {e}")))?;
+        .map_err(|e| {
+            BenoStreamError::internal(format!("rebuild_cluster failed for '{index}': {e}"))
+        })?;
 
     Ok(serde_json::json!({
         "acknowledged": true,

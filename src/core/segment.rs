@@ -166,10 +166,7 @@ impl HybridSegmentWriter {
     }
 
     /// Assign this writer's vector builds against a table-level centroid set.
-    pub fn with_global_centroids(
-        mut self,
-        centroids: HashMap<String, Vec<Vec<f32>>>,
-    ) -> Self {
+    pub fn with_global_centroids(mut self, centroids: HashMap<String, Vec<Vec<f32>>>) -> Self {
         self.global_centroids = parking_lot::Mutex::new(centroids);
         self
     }
@@ -536,21 +533,22 @@ impl HybridSegmentWriter {
         let local_puffin_target = puffin_path_str
             .strip_prefix("file://")
             .unwrap_or(&puffin_path_str);
-        let staging_puffin_path = if let Some(parent) = std::path::Path::new(local_puffin_target).parent() {
-            if parent.exists() {
-                format!("{}.tmp.puffin", local_puffin_target)
+        let staging_puffin_path =
+            if let Some(parent) = std::path::Path::new(local_puffin_target).parent() {
+                if parent.exists() {
+                    format!("{}.tmp.puffin", local_puffin_target)
+                } else {
+                    std::env::temp_dir()
+                        .join(format!("{}.tmp.puffin", self.config.segment_id))
+                        .to_string_lossy()
+                        .to_string()
+                }
             } else {
                 std::env::temp_dir()
                     .join(format!("{}.tmp.puffin", self.config.segment_id))
                     .to_string_lossy()
                     .to_string()
-            }
-        } else {
-            std::env::temp_dir()
-                .join(format!("{}.tmp.puffin", self.config.segment_id))
-                .to_string_lossy()
-                .to_string()
-        };
+            };
 
         let staging_file = std::fs::File::create(&staging_puffin_path)?;
         let mut puffin_writer = crate::core::puffin::PuffinIndexWriter::new(
@@ -1035,7 +1033,8 @@ impl HybridSegmentWriter {
         buf_writer.flush()?;
         drop(buf_writer);
 
-        let is_local_file = !puffin_path_str.contains("://") || puffin_path_str.starts_with("file://");
+        let is_local_file =
+            !puffin_path_str.contains("://") || puffin_path_str.starts_with("file://");
         let local_dest = puffin_path_str
             .strip_prefix("file://")
             .unwrap_or(&puffin_path_str);
@@ -1056,12 +1055,7 @@ impl HybridSegmentWriter {
                 object_store::path::Path::from(puffin_path_str.clone())
             };
             let puffin_bytes = std::fs::read(&staging_puffin_path)?;
-            store
-                .put(
-                    &store_path,
-                    puffin_bytes.into(),
-                )
-                .await?;
+            store.put(&store_path, puffin_bytes.into()).await?;
             let _ = std::fs::remove_file(&staging_puffin_path);
         }
         {

@@ -103,13 +103,19 @@ async fn test_multi_segment_vector_router_pruning() -> anyhow::Result<()> {
         })
         .await?;
 
-    assert!(preload_stats.indexes_warmed >= 3, "All 3 segment vector indexes should be warmed");
+    assert!(
+        preload_stats.indexes_warmed >= 3,
+        "All 3 segment vector indexes should be warmed"
+    );
 
     // Verify router exists and has registered all segment centroids
     let router_opt = table.ensure_vector_router("embedding").await?;
     assert!(router_opt.is_some(), "Vector router must be initialized");
     let router = router_opt.unwrap();
-    assert!(router.len() >= 3, "Router must contain centroids from all segments");
+    assert!(
+        router.len() >= 3,
+        "Router must contain centroids from all segments"
+    );
 
     // Query 1: Vector near Segment 0 center (10.0)
     let q1 = vec![10.01; dim];
@@ -125,7 +131,10 @@ async fn test_multi_segment_vector_router_pruning() -> anyhow::Result<()> {
     for e in &manifest.entries {
         eprintln!("ManifestEntry file_path: {}", e.file_path);
         for idx in &e.index_files {
-            eprintln!("  idx file_path: {}, blob_type: {:?}", idx.file_path, idx.blob_type);
+            eprintln!(
+                "  idx file_path: {}, blob_type: {:?}",
+                idx.file_path, idx.blob_type
+            );
         }
     }
 
@@ -153,7 +162,11 @@ async fn test_multi_segment_vector_router_pruning() -> anyhow::Result<()> {
         })
         .collect();
 
-    assert!(ids1.iter().all(|&id| id < 50), "All top-k hits for query 1 must come from Segment 0 (id < 50), got: {:?}", ids1);
+    assert!(
+        ids1.iter().all(|&id| id < 50),
+        "All top-k hits for query 1 must come from Segment 0 (id < 50), got: {:?}",
+        ids1
+    );
 
     // Query 2: Vector near Segment 2 center (100.0)
     let q2 = vec![100.01; dim];
@@ -185,7 +198,11 @@ async fn test_multi_segment_vector_router_pruning() -> anyhow::Result<()> {
         })
         .collect();
 
-    assert!(ids2.iter().all(|&id| id >= 100), "All top-k hits for query 2 must come from Segment 2 (id >= 100), got: {:?}", ids2);
+    assert!(
+        ids2.iter().all(|&id| id >= 100),
+        "All top-k hits for query 2 must come from Segment 2 (id >= 100), got: {:?}",
+        ids2
+    );
 
     Ok(())
 }

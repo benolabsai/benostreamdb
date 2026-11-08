@@ -546,8 +546,10 @@ impl Table {
                                     candidates = plan.candidate_segments.len(),
                                     "vector_router: routed query across global centroids"
                                 );
-                                vp.candidate_segments = Some(std::sync::Arc::new(plan.candidate_segments));
-                                vp.targeted_clusters = Some(std::sync::Arc::new(plan.segment_clusters));
+                                vp.candidate_segments =
+                                    Some(std::sync::Arc::new(plan.candidate_segments));
+                                vp.targeted_clusters =
+                                    Some(std::sync::Arc::new(plan.segment_clusters));
                             }
                         }
                     }

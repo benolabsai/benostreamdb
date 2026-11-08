@@ -125,11 +125,9 @@ impl QueryConfig {
         let bytes_per_vector = embedding_dim + 64;
         let memory_per_segment = num_vectors_per_segment * bytes_per_vector;
 
-        let ram_ceiling = if memory_per_segment > 0 {
-            (ram_for_hnsw / memory_per_segment).max(1)
-        } else {
-            cpu_target
-        };
+        let ram_ceiling = ram_for_hnsw
+            .checked_div(memory_per_segment)
+            .map_or(cpu_target, |v| v.max(1));
 
         cpu_target.min(ram_ceiling)
     }
@@ -625,12 +623,8 @@ pub async fn execute_vector_search_with_config(
             .iter()
             .enumerate()
             .map(|(entry_idx, entry)| {
-                let (segment_id, reader) = build_segment_reader(
-                    entry,
-                    base_uri,
-                    store.clone(),
-                    data_store.clone(),
-                );
+                let (segment_id, reader) =
+                    build_segment_reader(entry, base_uri, store.clone(), data_store.clone());
                 let column = request.column.clone();
                 let query = request.query.clone();
                 let metric = request.metric;
@@ -638,13 +632,11 @@ pub async fn execute_vector_search_with_config(
                 let use_mmap = request.use_mmap;
                 let semaphore = semaphore.clone();
                 let file_path_str = entry.file_path.clone();
-                let target_clusters = targeted_clusters_clone
-                    .as_ref()
-                    .and_then(|m| {
-                        m.get(&segment_id)
-                            .or_else(|| m.get(&file_path_str))
-                            .map(|v| v.clone())
-                    });
+                let target_clusters = targeted_clusters_clone.as_ref().and_then(|m| {
+                    m.get(&segment_id)
+                        .or_else(|| m.get(&file_path_str))
+                        .cloned()
+                });
 
                 async move {
                     let _permit = semaphore
@@ -700,29 +692,30 @@ pub async fn execute_vector_search_with_config(
         }
 
         // Stage 2: Rescore exact vectors in parallel across all candidate segments
-        let rescore_futures = candidates_by_entry
-            .into_iter()
-            .map(|(entry_idx, (segment_id, seg_matches))| {
-                let (_, reader) = build_segment_reader(
-                    &entries[entry_idx],
-                    base_uri,
-                    store.clone(),
-                    data_store.clone(),
-                );
-                let col = request.column.clone();
-                let q = request.query.clone();
-                let metric = request.metric;
-                async move {
-                    let rescored = reader
-                        .rescore_candidates(&col, seg_matches, &q, metric)
-                        .await?;
-                    let mut items = Vec::with_capacity(rescored.len());
-                    for (row_id, exact_dist) in rescored {
-                        items.push((entry_idx, segment_id.clone(), row_id, exact_dist));
+        let rescore_futures =
+            candidates_by_entry
+                .into_iter()
+                .map(|(entry_idx, (segment_id, seg_matches))| {
+                    let (_, reader) = build_segment_reader(
+                        &entries[entry_idx],
+                        base_uri,
+                        store.clone(),
+                        data_store.clone(),
+                    );
+                    let col = request.column.clone();
+                    let q = request.query.clone();
+                    let metric = request.metric;
+                    async move {
+                        let rescored = reader
+                            .rescore_candidates(&col, seg_matches, &q, metric)
+                            .await?;
+                        let mut items = Vec::with_capacity(rescored.len());
+                        for (row_id, exact_dist) in rescored {
+                            items.push((entry_idx, segment_id.clone(), row_id, exact_dist));
+                        }
+                        Ok::<_, anyhow::Error>(items)
                     }
-                    Ok::<_, anyhow::Error>(items)
-                }
-            });
+                });
         let rescore_results = futures::future::try_join_all(rescore_futures).await?;
         let mut rescored_all: Vec<(usize, String, usize, f32)> =
             rescore_results.into_iter().flatten().collect();
@@ -742,48 +735,51 @@ pub async fn execute_vector_search_with_config(
                 .push((row_id, exact_dist));
         }
 
-        let hydrate_futures = final_by_entry
-            .into_iter()
-            .map(|(entry_idx, (segment_id, final_matches))| {
-                let (_, reader) = build_segment_reader(
-                    &entries[entry_idx],
-                    base_uri,
-                    store.clone(),
-                    data_store.clone(),
-                );
-                let cols_opt = request.columns.clone();
-                let filter_opt = request.filter.clone();
-                async move {
-                    let target_schema = if let Some(cols) = &cols_opt {
-                        let full_schema = reader.get_arrow_schema().await.unwrap_or_else(|_| {
-                            Arc::new(arrow::datatypes::Schema::new(
-                                Vec::<arrow::datatypes::Field>::new(),
-                            ))
-                        });
-                        let fields: Vec<arrow::datatypes::Field> = cols
-                            .iter()
-                            .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
-                            .collect();
-                        Some(Arc::new(arrow::datatypes::Schema::new(fields)))
-                    } else {
-                        None
-                    };
+        let hydrate_futures =
+            final_by_entry
+                .into_iter()
+                .map(|(entry_idx, (segment_id, final_matches))| {
+                    let (_, reader) = build_segment_reader(
+                        &entries[entry_idx],
+                        base_uri,
+                        store.clone(),
+                        data_store.clone(),
+                    );
+                    let cols_opt = request.columns.clone();
+                    let filter_opt = request.filter.clone();
+                    async move {
+                        let target_schema = if let Some(cols) = &cols_opt {
+                            let full_schema =
+                                reader.get_arrow_schema().await.unwrap_or_else(|_| {
+                                    Arc::new(arrow::datatypes::Schema::new(Vec::<
+                                        arrow::datatypes::Field,
+                                    >::new(
+                                    )))
+                                });
+                            let fields: Vec<arrow::datatypes::Field> = cols
+                                .iter()
+                                .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                                .collect();
+                            Some(Arc::new(arrow::datatypes::Schema::new(fields)))
+                        } else {
+                            None
+                        };
 
-                    let batches_with_dist = reader
-                        .fetch_rows_with_distances(
-                            final_matches,
-                            target_schema,
-                            filter_opt.as_ref(),
-                        )
-                        .await?;
+                        let batches_with_dist = reader
+                            .fetch_rows_with_distances(
+                                final_matches,
+                                target_schema,
+                                filter_opt.as_ref(),
+                            )
+                            .await?;
 
-                    let mut items = Vec::new();
-                    for (batch, dists) in batches_with_dist {
-                        items.push((segment_id.clone(), batch, dists));
+                        let mut items = Vec::new();
+                        for (batch, dists) in batches_with_dist {
+                            items.push((segment_id.clone(), batch, dists));
+                        }
+                        Ok::<_, anyhow::Error>(items)
                     }
-                    Ok::<_, anyhow::Error>(items)
-                }
-            });
+                });
         let hydrate_results = futures::future::try_join_all(hydrate_futures).await?;
         let mut all_results_with_distances = Vec::new();
         for batches in hydrate_results {
@@ -821,12 +817,8 @@ pub async fn execute_vector_search_with_config(
                     .await
                     .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
 
-                let (segment_id, reader) = build_segment_reader(
-                    &entry,
-                    &base_uri,
-                    store.clone(),
-                    data_store_clone,
-                );
+                let (segment_id, reader) =
+                    build_segment_reader(&entry, &base_uri, store.clone(), data_store_clone);
 
                 tracing::info!(
                     "Query execution: Entry {} has index files: {:?}",
@@ -856,13 +848,11 @@ pub async fn execute_vector_search_with_config(
                 };
 
                 let file_path_str = entry.file_path.clone();
-                let target_clusters = targeted_clusters_clone
-                    .as_ref()
-                    .and_then(|m| {
-                        m.get(&segment_id)
-                            .or_else(|| m.get(&file_path_str))
-                            .map(|v| v.as_slice())
-                    });
+                let target_clusters = targeted_clusters_clone.as_ref().and_then(|m| {
+                    m.get(&segment_id)
+                        .or_else(|| m.get(&file_path_str))
+                        .map(|v| v.as_slice())
+                });
 
                 let results = reader
                     .vector_search_index(
@@ -1000,13 +990,11 @@ pub async fn execute_vector_search_raw_with_config(
                     .with_file_checksum(entry.file_checksum.clone());
                 let reader =
                     crate::core::reader::HybridReader::new(config, store.clone(), &base_uri);
-                let target_clusters = targeted_clusters_clone
-                    .as_ref()
-                    .and_then(|m| {
-                        m.get(&segment_id)
-                            .or_else(|| m.get(&file_path_str))
-                            .map(|v| v.as_slice())
-                    });
+                let target_clusters = targeted_clusters_clone.as_ref().and_then(|m| {
+                    m.get(&segment_id)
+                        .or_else(|| m.get(&file_path_str))
+                        .map(|v| v.as_slice())
+                });
 
                 let results = reader
                     .vector_search_index_raw(

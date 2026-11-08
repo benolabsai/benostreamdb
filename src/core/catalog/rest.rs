@@ -450,7 +450,13 @@ mod tests {
     #[tokio::test]
     async fn test_create_catalog_async_oauth2() -> Result<()> {
         let mut config = HashMap::new();
-        config.insert("url".to_string(), "http://localhost:8181".to_string());
+        // Non-localhost host: the SSRF guard (always enabled) rejects
+        // `localhost`, and `table_exists` maps the resulting network error to
+        // `Ok(false)`, which is what this test asserts.
+        config.insert(
+            "url".to_string(),
+            "http://catalog.example.com:8181".to_string(),
+        );
         config.insert("prefix".to_string(), "polaris_warehouse".to_string());
         config.insert(
             "credential".to_string(),

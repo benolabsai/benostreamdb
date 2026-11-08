@@ -629,14 +629,15 @@ pub fn l2_distance_adc(query: &[f32], encoded: &[u8], offset: f32, scale: f32) -
 /// supporting trailing 2-byte float16 scalar length factor (alpha).
 #[inline(always)]
 pub fn l2_distance_u4(a: &[u8], b: &[u8]) -> f32 {
-    let (slice_a, slice_b, alpha_a, alpha_b) = if a.len() == b.len() && a.len() >= 4 && (a.len() - 2) % 2 == 0 {
-        let n = a.len() - 2;
-        let aa = crate::core::index::benoquant::f16_bytes_to_f32([a[n], a[n + 1]]);
-        let ab = crate::core::index::benoquant::f16_bytes_to_f32([b[n], b[n + 1]]);
-        (&a[..n], &b[..n], aa, ab)
-    } else {
-        (a, b, 1.0f32, 1.0f32)
-    };
+    let (slice_a, slice_b, alpha_a, alpha_b) =
+        if a.len() == b.len() && a.len() >= 4 && (a.len() - 2).is_multiple_of(2) {
+            let n = a.len() - 2;
+            let aa = crate::core::index::benoquant::f16_bytes_to_f32([a[n], a[n + 1]]);
+            let ab = crate::core::index::benoquant::f16_bytes_to_f32([b[n], b[n + 1]]);
+            (&a[..n], &b[..n], aa, ab)
+        } else {
+            (a, b, 1.0f32, 1.0f32)
+        };
 
     let scale_diff = (alpha_a - alpha_b).abs();
     if scale_diff < 1e-4 && (alpha_a - 1.0).abs() < 1e-4 {

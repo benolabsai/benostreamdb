@@ -95,7 +95,9 @@ impl Table {
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let entries = manifest_manager.load_all_entries(&manifest).await?;
-        let loaded = self.load_graph_indices_from_entries(&entries, columns).await?;
+        let loaded = self
+            .load_graph_indices_from_entries(&entries, columns)
+            .await?;
         graph_index_cache().insert(cache_key, std::sync::Arc::new(loaded.clone()));
         Ok(loaded)
     }
@@ -564,9 +566,7 @@ impl Table {
         if let Some(forward) = indices.remove(col_to_check) {
             // The reverse CSR is what lets the search walk towards `end_node`
             // along incoming edges; without it only a forward walk is possible.
-            let reverse = indices
-                .remove(&rev_col)
-                .or_else(|| indices.remove(&ep_tgt));
+            let reverse = indices.remove(&rev_col).or_else(|| indices.remove(&ep_tgt));
 
             if let Some(reverse) = reverse {
                 let mut pred: HashMap<u64, u64> = HashMap::new();
@@ -590,8 +590,7 @@ impl Table {
                             neighbors.clear();
                             forward.get_neighbors_into(u, &mut neighbors);
                             for &v in neighbors.iter().take(MAX_BFS_DEGREE) {
-                                if let std::collections::hash_map::Entry::Vacant(e) =
-                                    pred.entry(v)
+                                if let std::collections::hash_map::Entry::Vacant(e) = pred.entry(v)
                                 {
                                     e.insert(u);
                                     next.push(v);

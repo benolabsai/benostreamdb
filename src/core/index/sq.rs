@@ -79,7 +79,11 @@ impl SqEncoder {
                 max_quant / span
             };
             scales.push(scale);
-            inv_scales.push(if scale.abs() < 1e-10 { 1.0 } else { 1.0 / scale });
+            inv_scales.push(if scale.abs() < 1e-10 {
+                1.0
+            } else {
+                1.0 / scale
+            });
         }
 
         Ok(Self {

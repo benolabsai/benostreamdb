@@ -478,6 +478,20 @@ impl Table {
             }
         }
 
+        // A published snapshot changes the set of live data files. Table-level
+        // vector artifacts (`cluster_indexes`, `vector_routers`) are keyed by
+        // that set — their lineage contract is "covers exactly the current data
+        // files" — so a compaction or any other commit invalidates them. Without
+        // this, a reader that cached the pre-compaction artifact keeps serving
+        // its `(segment_id, row_id)` nodes after the segments are replaced, and
+        // `fetch_results_by_id` resolves nothing: the query returns an empty
+        // result even though the compacted index is present and correct.
+        //
+        // Per-file caches are deliberately left alone: data files are immutable,
+        // so an index keyed by a file path stays valid across snapshots.
+        self.indexing.cluster_indexes.write().clear();
+        self.indexing.vector_routers.write().clear();
+
         Ok(())
     }
 
@@ -706,8 +720,11 @@ impl Table {
         // leave the config alone: the caller may have just set it (e.g. switching
         // the quantizer), and `add_index` would schedule a redundant backfill.
         if algorithms.is_empty() {
-            self.add_index(column.clone(), crate::core::manifest::IndexAlgorithm::default())
-                .await?;
+            self.add_index(
+                column.clone(),
+                crate::core::manifest::IndexAlgorithm::default(),
+            )
+            .await?;
         }
 
         // Drain anything the `add_index` above scheduled before forcing: two
@@ -796,7 +813,10 @@ impl Table {
             .collect();
 
         let input_segments = indexed_entries.len();
-        let total_records: usize = indexed_entries.iter().map(|e| e.record_count as usize).sum();
+        let total_records: usize = indexed_entries
+            .iter()
+            .map(|e| e.record_count as usize)
+            .sum();
 
         if input_segments <= 1 || total_records == 0 {
             return Ok(IndexCompactionStats {
@@ -947,15 +967,18 @@ impl Table {
         new_manifest
             .table_indexes
             .retain(|idx| idx.column_name != column);
-        new_manifest.table_indexes.push(index.to_table_index_file_with_shards(
-            &primary_path,
-            saved_paths,
-            new_version,
-            algo.name(),
-        ));
+        new_manifest
+            .table_indexes
+            .push(index.to_table_index_file_with_shards(
+                &primary_path,
+                saved_paths,
+                new_version,
+                algo.name(),
+            ));
 
         manager.commit_manifest(new_manifest.clone()).await?;
-        self.publish_snapshot_async(&new_manifest, "replace").await?;
+        self.publish_snapshot_async(&new_manifest, "replace")
+            .await?;
 
         // Delete superseded cluster index shard files from the replaced index
         for old_shard in old_shards_to_clean {
@@ -1075,7 +1098,12 @@ impl Table {
             .index_configs
             .read()
             .get(column)
-            .and_then(|c| c.algorithms.iter().find(|a| is_vector_algorithm(a)).cloned())
+            .and_then(|c| {
+                c.algorithms
+                    .iter()
+                    .find(|a| is_vector_algorithm(a))
+                    .cloned()
+            })
             .unwrap_or_else(crate::core::manifest::IndexAlgorithm::hnsw_tq8)
     }
 }

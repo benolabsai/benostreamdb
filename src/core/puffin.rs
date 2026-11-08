@@ -69,10 +69,8 @@ pub const PUFFIN_BLOB_HNSW_CLUSTER_MAPPING: &str = "org.apache.iceberg.vector.cl
 // ---------------------------------------------------------------------------
 pub const PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META: &str =
     "org.apache.iceberg.vector.cluster-node-meta";
-pub const PUFFIN_BLOB_VECTOR_CLUSTER_SEGMENTS: &str =
-    "org.apache.iceberg.vector.cluster-segments";
-pub const PUFFIN_BLOB_VECTOR_CLUSTER_SHARDS: &str =
-    "org.apache.iceberg.vector.cluster-shards";
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_SEGMENTS: &str = "org.apache.iceberg.vector.cluster-segments";
+pub const PUFFIN_BLOB_VECTOR_CLUSTER_SHARDS: &str = "org.apache.iceberg.vector.cluster-shards";
 
 use crate::core::manifest::IndexFile;
 use sha2::{Digest, Sha256};

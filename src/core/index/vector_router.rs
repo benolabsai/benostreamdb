@@ -350,8 +350,10 @@ impl TableVectorRouter {
             }
 
             RoutingPolicy::Adaptive { factor } => {
-                // Per-segment best distance and top-k clusters in one pass.
-                let mut per_segment: Vec<(&String, f32, Vec<usize>)> =
+                // Per-segment best distance, top-k clusters, and centroid count
+                // in one pass. The centroid count decides whether the segment
+                // has enough spatial structure to be pruned at all.
+                let mut per_segment: Vec<(&String, f32, Vec<usize>, usize)> =
                     Vec::with_capacity(self.segment_indices.len());
                 for (seg_id, indices) in &self.segment_indices {
                     let mut heap = BinaryHeap::with_capacity(k + 1);
@@ -372,7 +374,7 @@ impl TableVectorRouter {
                         .into_iter()
                         .map(|c| self.targets[c.idx].1)
                         .collect();
-                    per_segment.push((seg_id, seg_best, targeted));
+                    per_segment.push((seg_id, seg_best, targeted, indices.len()));
                 }
 
                 // Threshold calculation handling zero / negative inner-product metrics
@@ -398,11 +400,18 @@ impl TableVectorRouter {
                 // be measured deliberately rather than inherited by accident —
                 // see `adaptive_segment_cap_enabled`.
                 let max_segments = routing_max_segments(k, per_segment.len());
-                for (seg_id, seg_best, targeted) in per_segment.iter() {
+                for (seg_id, seg_best, targeted, centroid_count) in per_segment.iter() {
                     if candidate_segments.len() >= max_segments {
                         break;
                     }
-                    if *seg_best <= threshold {
+                    // A segment with a single centroid has no spatial structure
+                    // to route on: that centroid is the segment mean, and a
+                    // query's own row can be arbitrarily far from it. Pruning
+                    // such a segment by centroid distance can drop the very
+                    // segment that owns the query, so always admit it. Segments
+                    // with two or more centroids are spatially partitioned and
+                    // safe to prune by the threshold.
+                    if *centroid_count <= 1 || *seg_best <= threshold {
                         candidate_segments.insert((*seg_id).clone());
                         segment_clusters.insert((*seg_id).clone(), targeted.clone());
                     }
@@ -411,7 +420,7 @@ impl TableVectorRouter {
                 // Safety fallback: if the threshold was overly aggressive, admit
                 // the closest segments by rank.
                 if candidate_segments.is_empty() {
-                    for (seg_id, _, targeted) in per_segment.iter().take(max_segments) {
+                    for (seg_id, _, targeted, _) in per_segment.iter().take(max_segments) {
                         candidate_segments.insert((*seg_id).clone());
                         segment_clusters.insert((*seg_id).clone(), targeted.clone());
                     }

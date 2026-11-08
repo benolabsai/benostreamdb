@@ -1025,17 +1025,28 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         let lower = action_type.to_ascii_lowercase();
         if lower == "rebuild_cluster_index" || lower == "rebuildclusterindex" {
             let body_str = String::from_utf8_lossy(&request.get_ref().body);
-            let json: serde_json::Value = serde_json::from_str(&body_str)
-                .unwrap_or_else(|_| serde_json::json!({}));
+            let json: serde_json::Value =
+                serde_json::from_str(&body_str).unwrap_or_else(|_| serde_json::json!({}));
             let table = json.get("table").and_then(|v| v.as_str()).unwrap_or("");
             if table.is_empty() {
-                return Err(Status::invalid_argument("rebuild_cluster_index action requires 'table' in body"));
+                return Err(Status::invalid_argument(
+                    "rebuild_cluster_index action requires 'table' in body",
+                ));
             }
-            let col = json.get("column").and_then(|v| v.as_str()).unwrap_or("embedding");
+            let col = json
+                .get("column")
+                .and_then(|v| v.as_str())
+                .unwrap_or("embedding");
             let k = json.get("k").and_then(|v| v.as_i64()).unwrap_or(1024);
             let m = json.get("m").and_then(|v| v.as_i64()).unwrap_or(16);
-            let ef_c = json.get("ef_construction").and_then(|v| v.as_i64()).unwrap_or(200);
-            let shard_mb = json.get("target_shard_mb").and_then(|v| v.as_i64()).unwrap_or(512);
+            let ef_c = json
+                .get("ef_construction")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(200);
+            let shard_mb = json
+                .get("target_shard_mb")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(512);
             let sql = format!(
                 "ALTER TABLE {} EXECUTE rebuild_cluster_index(column => '{}', k => {}, m => {}, ef_c => {}, target_shard_mb => {})",
                 table, col, k, m, ef_c, shard_mb
@@ -1044,18 +1055,25 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             let res = arrow_flight::Result {
                 body: prost::bytes::Bytes::from_static(b"{\"acknowledged\":true}"),
             };
-            return Ok(Response::new(Box::pin(futures::stream::once(async move { Ok(res) }))));
+            return Ok(Response::new(Box::pin(futures::stream::once(async move {
+                Ok(res)
+            }))));
         }
         if lower == "warmup" {
             let body_str = String::from_utf8_lossy(&request.get_ref().body);
-            let json: serde_json::Value = serde_json::from_str(&body_str)
-                .unwrap_or_else(|_| serde_json::json!({}));
+            let json: serde_json::Value =
+                serde_json::from_str(&body_str).unwrap_or_else(|_| serde_json::json!({}));
             let table = json.get("table").and_then(|v| v.as_str()).unwrap_or("");
             if table.is_empty() {
-                return Err(Status::invalid_argument("warmup action requires 'table' in body"));
+                return Err(Status::invalid_argument(
+                    "warmup action requires 'table' in body",
+                ));
             }
             let n_probes = json.get("n_probes").and_then(|v| v.as_i64()).unwrap_or(100);
-            let max_mem = json.get("max_memory_gb").and_then(|v| v.as_f64()).unwrap_or(8.0);
+            let max_mem = json
+                .get("max_memory_gb")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(8.0);
             let sql = format!(
                 "ALTER TABLE {} EXECUTE warmup(n_probes => {}, max_memory_gb => {})",
                 table, n_probes, max_mem
@@ -1064,7 +1082,9 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             let res = arrow_flight::Result {
                 body: prost::bytes::Bytes::from_static(b"{\"acknowledged\":true}"),
             };
-            return Ok(Response::new(Box::pin(futures::stream::once(async move { Ok(res) }))));
+            return Ok(Response::new(Box::pin(futures::stream::once(async move {
+                Ok(res)
+            }))));
         }
         Err(Status::invalid_argument(format!(
             "do_action: unsupported action type: {}",

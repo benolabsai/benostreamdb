@@ -953,6 +953,7 @@ impl HybridReader {
     }
 
     #[tracing::instrument(skip(self, query, filter, target_schema))]
+    #[allow(clippy::too_many_arguments)]
     pub async fn vector_search_index(
         &self,
         column: &str,
@@ -1109,7 +1110,17 @@ impl HybridReader {
                     ..Default::default()
                 };
                 match self
-                    .search_hnsw_ivf(&idx_info, query, search_k, &None, metric, ef_search, use_mmap, target_clusters, probes)
+                    .search_hnsw_ivf(
+                        &idx_info,
+                        query,
+                        search_k,
+                        &None,
+                        metric,
+                        ef_search,
+                        use_mmap,
+                        target_clusters,
+                        probes,
+                    )
                     .await
                 {
                     Ok(m) => m,
@@ -1135,8 +1146,18 @@ impl HybridReader {
                         let q = query_c.clone();
                         let tc = tc_owned.clone();
                         async move {
-                            self.search_hnsw_ivf(&idx, &q, search_k_c, &None, metric_c, ef_c, use_mmap_c, tc.as_deref(), probes)
-                                .await
+                            self.search_hnsw_ivf(
+                                &idx,
+                                &q,
+                                search_k_c,
+                                &None,
+                                metric_c,
+                                ef_c,
+                                use_mmap_c,
+                                tc.as_deref(),
+                                probes,
+                            )
+                            .await
                         }
                     })
                     .collect();
@@ -1155,7 +1176,8 @@ impl HybridReader {
                     }
                 }
                 if !any_ok {
-                    self.vector_search_flat(column, query, k, &None, metric).await?
+                    self.vector_search_flat(column, query, k, &None, metric)
+                        .await?
                 } else {
                     merged
                 }
@@ -1164,7 +1186,10 @@ impl HybridReader {
             matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
             let idx_matches = if effective_refine > 1 && !matches.is_empty() {
                 matches.truncate(search_k);
-                match self.rescore_candidates(column, matches.clone(), query, metric).await {
+                match self
+                    .rescore_candidates(column, matches.clone(), query, metric)
+                    .await
+                {
                     Ok(mut rescored) => {
                         rescored.truncate(k);
                         rescored
@@ -1258,7 +1283,17 @@ impl HybridReader {
                 ..Default::default()
             };
             match self
-                .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap, target_clusters, probes)
+                .search_hnsw_ivf(
+                    &idx_info,
+                    query,
+                    k,
+                    &None,
+                    metric,
+                    ef_search,
+                    use_mmap,
+                    target_clusters,
+                    probes,
+                )
                 .await
             {
                 Ok(m) => Ok(m),
@@ -1281,8 +1316,18 @@ impl HybridReader {
                     let q = query_c.clone();
                     let tc = tc_owned.clone();
                     async move {
-                        self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c, tc.as_deref(), probes)
-                            .await
+                        self.search_hnsw_ivf(
+                            &idx,
+                            &q,
+                            k_c,
+                            &None,
+                            metric_c,
+                            ef_c,
+                            use_mmap_c,
+                            tc.as_deref(),
+                            probes,
+                        )
+                        .await
                     }
                 })
                 .collect();
@@ -2442,7 +2487,8 @@ impl HybridReader {
                 .await
                 .context("Failed to get segment metadata")?;
             let size = object_meta.size;
-            let mut reader = ParquetObjectReader::new(self.store.clone(), object_meta.location.clone());
+            let mut reader =
+                ParquetObjectReader::new(self.store.clone(), object_meta.location.clone());
             let options = ArrowReaderOptions::new().with_page_index(true);
             let arrow_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
             let meta = Arc::new(arrow_meta);
@@ -2695,9 +2741,16 @@ impl HybridReader {
         let mut rescored = Vec::with_capacity(sorted_row_ids.len());
 
         // Fast zero-copy SIMD path for FixedSizeListArray (standard BenoStreamDB vector column)
-        if let Some(list) = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
+        if let Some(list) = col
+            .as_any()
+            .downcast_ref::<arrow::array::FixedSizeListArray>()
+        {
             let dim = list.value_length() as usize;
-            if let Some(floats) = list.values().as_any().downcast_ref::<arrow::array::Float32Array>() {
+            if let Some(floats) = list
+                .values()
+                .as_any()
+                .downcast_ref::<arrow::array::Float32Array>()
+            {
                 let raw_floats = floats.values();
                 for (i, &row_id) in sorted_row_ids.iter().enumerate() {
                     let start = i * dim;
@@ -2705,17 +2758,23 @@ impl HybridReader {
                     if end <= raw_floats.len() {
                         let v_slice = &raw_floats[start..end];
                         let exact_dist = match metric {
-                            VectorMetric::L2 => crate::core::index::distance::l2_distance(v_slice, q_vec),
-                            VectorMetric::Cosine => crate::core::index::distance::cosine_distance(v_slice, q_vec),
-                            VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(v_slice, q_vec),
-                            VectorMetric::L1 => crate::core::index::distance::l1_distance(v_slice, q_vec),
-                            _ => {
-                                candidates
-                                    .iter()
-                                    .find(|(id, _)| *id == row_id as usize)
-                                    .map(|(_, d)| *d)
-                                    .unwrap_or(0.0)
+                            VectorMetric::L2 => {
+                                crate::core::index::distance::l2_distance(v_slice, q_vec)
                             }
+                            VectorMetric::Cosine => {
+                                crate::core::index::distance::cosine_distance(v_slice, q_vec)
+                            }
+                            VectorMetric::InnerProduct => {
+                                -crate::core::index::distance::dot_product(v_slice, q_vec)
+                            }
+                            VectorMetric::L1 => {
+                                crate::core::index::distance::l1_distance(v_slice, q_vec)
+                            }
+                            _ => candidates
+                                .iter()
+                                .find(|(id, _)| *id == row_id as usize)
+                                .map(|(_, d)| *d)
+                                .unwrap_or(0.0),
                         };
                         rescored.push((row_id as usize, exact_dist));
                     }
@@ -2790,13 +2849,11 @@ impl HybridReader {
                 VectorMetric::Cosine => crate::core::index::distance::cosine_distance(v, q_vec),
                 VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(v, q_vec),
                 VectorMetric::L1 => crate::core::index::distance::l1_distance(v, q_vec),
-                _ => {
-                    candidates
-                        .iter()
-                        .find(|(id, _)| *id == row_id)
-                        .map(|(_, d)| *d)
-                        .unwrap_or(0.0)
-                }
+                _ => candidates
+                    .iter()
+                    .find(|(id, _)| *id == row_id)
+                    .map(|(_, d)| *d)
+                    .unwrap_or(0.0),
             };
             rescored.push((row_id, exact_dist));
         }
@@ -2862,18 +2919,18 @@ impl HybridReader {
         let hnsw_ivf_clone = hnsw_ivf.clone();
 
         let n_probe = probes.unwrap_or_else(|| {
-                if allowed_bitmap.is_some() {
-                    20
-                } else if let Some(ef) = ef_search {
-                    if ef >= 100 {
-                        32
-                    } else {
-                        16
-                    }
+            if allowed_bitmap.is_some() {
+                20
+            } else if let Some(ef) = ef_search {
+                if ef >= 100 {
+                    32
                 } else {
-                    10
+                    16
                 }
-            });
+            } else {
+                10
+            }
+        });
         tracing::debug!(
             "search_hnsw_ivf allowed_bitmap is_some={}, n_probe={}",
             allowed_bitmap.is_some(),
@@ -2910,7 +2967,11 @@ impl HybridReader {
                 idx_info.blob_offset,
                 idx_info.algorithm,
                 cache_key,
-                matches.iter().take(5).map(|(id, d)| (*id, *d)).collect::<Vec<_>>(),
+                matches
+                    .iter()
+                    .take(5)
+                    .map(|(id, d)| (*id, *d))
+                    .collect::<Vec<_>>(),
             );
         }
 

@@ -468,11 +468,7 @@ impl Table {
         self.backfill_indexes_inner(target_columns, true).await
     }
 
-    async fn backfill_indexes_inner(
-        &self,
-        target_columns: Vec<String>,
-        force: bool,
-    ) -> Result<()> {
+    async fn backfill_indexes_inner(&self, target_columns: Vec<String>, force: bool) -> Result<()> {
         use futures::StreamExt;
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, all_entries, _) = manager.load_latest_full().await?;

@@ -17,7 +17,9 @@ use arrow::datatypes::{DataType, Field, Float32Type, Schema};
 use arrow::record_batch::RecordBatch;
 use benostreamdb::core::index::VectorValue;
 use benostreamdb::core::manifest::{IndexAlgorithm, ManifestManager};
-use benostreamdb::core::puffin::{PuffinReader, PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META};
+use benostreamdb::core::puffin::{
+    PuffinReader, PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META, PUFFIN_BLOB_VECTOR_HNSW_GRAPH,
+};
 use benostreamdb::core::storage::create_object_store;
 use benostreamdb::core::table::{PreloadOptions, Table, VectorSearchParams};
 use bytes::Bytes;
@@ -93,9 +95,9 @@ fn mixed_cluster_batch(
         vec![
             Arc::new(Int32Array::from(ids)),
             Arc::new(StringArray::from(titles)),
-            Arc::new(FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-                vectors, dim as i32,
-            )),
+            Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(vectors, dim as i32),
+            ),
         ],
     )?)
 }
@@ -148,7 +150,10 @@ async fn test_manual_index_compaction_sidecars_only() -> anyhow::Result<()> {
         })
         .await?;
 
-    assert!(preload_stats.indexes_warmed >= 3, "All 3 segment vector indexes should be warmed");
+    assert!(
+        preload_stats.indexes_warmed >= 3,
+        "All 3 segment vector indexes should be warmed"
+    );
 
     // Record initial Parquet data file paths and sizes
     let mut data_files_before = table.list_data_files_async().await?;
@@ -161,8 +166,14 @@ async fn test_manual_index_compaction_sidecars_only() -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(stats.column, "embedding");
-    assert_eq!(stats.input_segments, 3, "Should have processed 3 input segments");
-    assert!(stats.output_shards >= 1, "Should have generated consolidated shards");
+    assert_eq!(
+        stats.input_segments, 3,
+        "Should have processed 3 input segments"
+    );
+    assert!(
+        stats.output_shards >= 1,
+        "Should have generated consolidated shards"
+    );
     assert_eq!(stats.total_records, 150, "Should reflect all 150 records");
     assert_eq!(stats.target_shard_bytes, 50_000_000);
 
@@ -325,7 +336,11 @@ async fn test_contiguous_clusters_in_index_after_compaction() -> anyhow::Result<
     // 1. Verify initial layout: Data rows are physically split across 3 separate Parquet files
     let mut data_files_before = table.list_data_files_async().await?;
     data_files_before.sort_by(|a, b| a.file_path.cmp(&b.file_path));
-    assert_eq!(data_files_before.len(), 3, "Expected 3 independent data files");
+    assert_eq!(
+        data_files_before.len(),
+        3,
+        "Expected 3 independent data files"
+    );
 
     // 2. Execute table-level index compaction for k=2 global clusters
     table
@@ -369,28 +384,41 @@ async fn test_contiguous_clusters_in_index_after_compaction() -> anyhow::Result<
     // 5. Invariant: SHOW CONTIGUOUS CLUSTERS ARE IN THE INDEX ARTIFACT
     // Read the Puffin container directly from disk
     let artifact_path = dir.path().join(&table_idx.file_path);
-    assert!(artifact_path.exists(), "Cluster index artifact file must exist on disk");
+    assert!(
+        artifact_path.exists(),
+        "Cluster index artifact file must exist on disk"
+    );
     let file_bytes = std::fs::read(&artifact_path)?;
     let puffin_reader = PuffinReader::new(Cursor::new(&file_bytes))?;
     let blobs = &puffin_reader.footer().blobs;
 
     // Collect cluster graph and node metadata blobs
-    let mut cluster_graphs: std::collections::HashMap<usize, (u64, u64)> = std::collections::HashMap::new();
-    let mut cluster_metas: std::collections::HashMap<usize, (u64, u64)> = std::collections::HashMap::new();
+    let mut cluster_graphs: std::collections::HashMap<usize, (u64, u64)> =
+        std::collections::HashMap::new();
+    let mut cluster_metas: std::collections::HashMap<usize, (u64, u64)> =
+        std::collections::HashMap::new();
 
     for blob in blobs {
         if let Some(cid_str) = blob.properties.get("cluster_id") {
             let cid: usize = cid_str.parse()?;
             if blob.r#type == PUFFIN_BLOB_VECTOR_CLUSTER_NODE_META {
                 cluster_metas.insert(cid, (blob.offset as u64, blob.length as u64));
-            } else if blob.r#type.starts_with("org.apache.iceberg.vector.cluster-hnsw") {
+            } else if blob.r#type == PUFFIN_BLOB_VECTOR_HNSW_GRAPH {
                 cluster_graphs.insert(cid, (blob.offset as u64, blob.length as u64));
             }
         }
     }
 
-    assert_eq!(cluster_graphs.len(), 2, "Expected 2 contiguous cluster graph blobs");
-    assert_eq!(cluster_metas.len(), 2, "Expected 2 contiguous cluster node_meta blobs");
+    assert_eq!(
+        cluster_graphs.len(),
+        2,
+        "Expected 2 contiguous cluster graph blobs"
+    );
+    assert_eq!(
+        cluster_metas.len(),
+        2,
+        "Expected 2 contiguous cluster node_meta blobs"
+    );
 
     // Inspect each cluster's contiguous layout and member provenance
     for cid in 0..2 {
@@ -410,7 +438,8 @@ async fn test_contiguous_clusters_in_index_after_compaction() -> anyhow::Result<
         );
 
         // B. Assert node_meta unifies rows across ALL THREE distinct segments into this single contiguous cluster partition
-        let meta_slice = Bytes::copy_from_slice(&file_bytes[m_off as usize..(m_off + m_len) as usize]);
+        let meta_slice =
+            Bytes::copy_from_slice(&file_bytes[m_off as usize..(m_off + m_len) as usize]);
         let meta_reader = ParquetRecordBatchReaderBuilder::try_new(meta_slice)?.build()?;
         let mut segments_in_cluster = HashSet::new();
         let mut total_cluster_members = 0usize;
@@ -475,7 +504,8 @@ async fn test_contiguous_clusters_in_index_after_compaction() -> anyhow::Result<
 
     // Verify all returned IDs belong to cluster 10.0: IDs in [0..25), [50..75), or [100..125)
     for id in &ids {
-        let is_cluster_10 = (*id >= 0 && *id < 25) || (*id >= 50 && *id < 75) || (*id >= 100 && *id < 125);
+        let is_cluster_10 =
+            (*id >= 0 && *id < 25) || (*id >= 50 && *id < 75) || (*id >= 100 && *id < 125);
         assert!(
             is_cluster_10,
             "Returned ID {id} should belong to cluster center 10.0"
@@ -483,12 +513,11 @@ async fn test_contiguous_clusters_in_index_after_compaction() -> anyhow::Result<
     }
 
     // Verify that the query hydrated results across multiple distinct segments
-    let seg0_hits = ids.iter().filter(|&&id| id >= 0 && id < 25).count();
-    let seg1_hits = ids.iter().filter(|&&id| id >= 50 && id < 75).count();
-    let seg2_hits = ids.iter().filter(|&&id| id >= 100 && id < 125).count();
-    let segments_represented = (seg0_hits > 0) as u32
-        + (seg1_hits > 0) as u32
-        + (seg2_hits > 0) as u32;
+    let seg0_hits = ids.iter().filter(|&&id| (0..25).contains(&id)).count();
+    let seg1_hits = ids.iter().filter(|&&id| (50..75).contains(&id)).count();
+    let seg2_hits = ids.iter().filter(|&&id| (100..125).contains(&id)).count();
+    let segments_represented =
+        (seg0_hits > 0) as u32 + (seg1_hits > 0) as u32 + (seg2_hits > 0) as u32;
 
     assert!(
         segments_represented >= 2,
@@ -564,7 +593,10 @@ async fn test_sequential_sharded_cluster_index_traversal() -> anyhow::Result<()>
     let mut last_max_cluster = None;
     for (shard_idx, shard_rel_path) in table_idx.shard_files.iter().enumerate() {
         let shard_abs_path = dir.path().join(shard_rel_path);
-        assert!(shard_abs_path.exists(), "Shard file {shard_rel_path} must exist on disk");
+        assert!(
+            shard_abs_path.exists(),
+            "Shard file {shard_rel_path} must exist on disk"
+        );
 
         let shard_bytes = std::fs::read(&shard_abs_path)?;
         let reader = PuffinReader::new(Cursor::new(&shard_bytes))?;
@@ -572,7 +604,7 @@ async fn test_sequential_sharded_cluster_index_traversal() -> anyhow::Result<()>
         let mut shard_clusters = Vec::new();
         for blob in &reader.footer().blobs {
             if let Some(cid_str) = blob.properties.get("cluster_id") {
-                if blob.r#type.starts_with("org.apache.iceberg.vector.cluster-hnsw") {
+                if blob.r#type == PUFFIN_BLOB_VECTOR_HNSW_GRAPH {
                     shard_clusters.push(cid_str.parse::<usize>()?);
                 }
             }
@@ -607,7 +639,13 @@ async fn test_sequential_sharded_cluster_index_traversal() -> anyhow::Result<()>
         .with_probes(2);
 
     let res1 = table
-        .read_expr_with_config_async(None, Some(vec![vp1]), Some(&["id"]), table.query_config().clone(), None)
+        .read_expr_with_config_async(
+            None,
+            Some(vec![vp1]),
+            Some(&["id"]),
+            table.query_config().clone(),
+            None,
+        )
         .await?;
     assert!(!res1.is_empty(), "Query 1 must return hits");
     let ids1: Vec<i32> = res1
@@ -623,7 +661,8 @@ async fn test_sequential_sharded_cluster_index_traversal() -> anyhow::Result<()>
         })
         .collect();
     for id in &ids1 {
-        let in_c10 = (*id >= 0 && *id < 15) || (*id >= 100 && *id < 115) || (*id >= 200 && *id < 215);
+        let in_c10 =
+            (*id >= 0 && *id < 15) || (*id >= 100 && *id < 115) || (*id >= 200 && *id < 215);
         assert!(in_c10, "Hit {id} must belong to cluster 10.0");
     }
 
@@ -634,7 +673,13 @@ async fn test_sequential_sharded_cluster_index_traversal() -> anyhow::Result<()>
         .with_probes(2);
 
     let res2 = table
-        .read_expr_with_config_async(None, Some(vec![vp2]), Some(&["id"]), table.query_config().clone(), None)
+        .read_expr_with_config_async(
+            None,
+            Some(vec![vp2]),
+            Some(&["id"]),
+            table.query_config().clone(),
+            None,
+        )
         .await?;
     assert!(!res2.is_empty(), "Query 2 must return hits");
     let ids2: Vec<i32> = res2
@@ -650,7 +695,8 @@ async fn test_sequential_sharded_cluster_index_traversal() -> anyhow::Result<()>
         })
         .collect();
     for id in &ids2 {
-        let in_c70 = (*id >= 45 && *id < 60) || (*id >= 145 && *id < 160) || (*id >= 245 && *id < 260);
+        let in_c70 =
+            (*id >= 45 && *id < 60) || (*id >= 145 && *id < 160) || (*id >= 245 && *id < 260);
         assert!(in_c70, "Hit {id} must belong to cluster 70.0");
     }
 
@@ -697,4 +743,3 @@ async fn test_sql_execute_cluster_index_and_warmup() -> anyhow::Result<()> {
 
     Ok(())
 }
-

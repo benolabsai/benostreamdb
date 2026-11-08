@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 pub mod analyzer;
+pub mod benoquant;
 pub mod bm25;
 pub mod build_graph;
 pub mod build_inverted;
@@ -15,7 +16,6 @@ pub mod hnsw_rs;
 pub mod ivf;
 pub mod json_path;
 pub mod memory;
-pub mod benoquant;
 #[cfg(all(
     not(target_os = "macos"),
     not(all(target_os = "windows", target_arch = "aarch64")),

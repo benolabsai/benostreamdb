@@ -1,4 +1,4 @@
-## [0.15.0] - Target: 2026-11-05
+## [0.15.0] - Target: 2026-11-07
 
 Major release consolidating vector search, out-of-core indexing, and performance optimizations developed since crates.io v0.14.1 and re-synchronizing PyPI (which last tracked v0.13.1) with crates.io. This release introduces table-level cluster indexing (`ClusterIndex`) across sequential 512 MiB rolling Puffin shards, zero-copy memory mapping (`memmap2`), Rayon multi-threaded compaction concurrency, BenoQuant isotropic quantization (BQ8/BQ4), native SQ8 scalar quantization, memory-budgeted out-of-core index preloading, and the official NeurIPS BigANN evaluation suite.
 
@@ -93,6 +93,21 @@ Major release consolidating vector search, out-of-core indexing, and performance
     (defaulting to `0x00C0_FFEE_1337`).
 
 ### Fixed
+- **Table Vector Router Pruned the Segment That Owned the Query**: Two independent defects in
+  the table-level vector router caused `randomized_differential_workload_matches_model` to miss
+  the exactly-nearest row (distance 0) after a commit added a segment. First,
+  `ensure_vector_router` returned a cached router without checking that it still covered the
+  current data files, so a router built when the table had one segment kept routing every later
+  query against that one segment — `might_match_vector` drops any segment absent from
+  `candidate_segments`, so the new segments were invisible. The cache is now validated against
+  the manifest's indexed-segment set and rebuilt when the lineage no longer matches, mirroring
+  the `ensure_cluster_index` contract. Second, the `Adaptive` routing policy pruned segments by
+  centroid distance even when a segment had a **single** centroid. That centroid is the segment
+  mean, not a spatial partition, so a query's own row can be arbitrarily far from it: in the
+  failing workload the owning segment's centroid was 19.5 away against a 4.2 global minimum
+  (4.6×), which no threshold factor would admit. Single-centroid segments are now always
+  admitted; segments with two or more centroids are still pruned by the threshold, so the
+  well-separated-cluster pruning path is unchanged.
 - **`shortest_path` Returned Wrong Results and Ran Unidirectionally**: The CSR-graph fast path
   used a `MAX_SHORTEST_PATH_NODES` guard of 100k, which a
   13-hop query on an 876k-node / 5.1M-edge graph legitimately exceeds — the search aborted
@@ -167,17 +182,17 @@ Major release consolidating vector search, out-of-core indexing, and performance
   MIPS ordering without feeding negative distances into the HNSW core. Arrow-backed graphs
   store rows in layer-indexed order, so the rescore fetches the stored vector by the Arrow row
   index (`p_id.1`), not the original row id (`d_id`); using `d_id` paired the correct score
-  with the wrong row and dropped `lastfm-64-dot` f32 recall from 0.90 to 0.32. Measured after
-  the fix (`lastfm-64-dot`, 20k train / 500 queries, 8 vCPU): f32 **0.8998**, `hnsw_sq8`
-  **0.8950**, `hnsw_tq8` **0.8886** — the quantized tiers recover from 0.42/0.61 to ~0.89.
+  with the wrong row and dropped `lastfm-64-dot` f32 recall from 0.90 to 0.32. The rescore is
+  what recovers the quantized tiers, which the probe-count fix cannot help. Current numbers
+  live in `benchmarks/results/BENCHMARK_REPORT.md`.
 - **Default IVF Probe Count Was the Real Recall Ceiling**: The table-level vector fast path
   defaulted `probes` to a fixed **16** regardless of cluster count. A 20k-vector index has ~44
   clusters, so it probed only ~36% of them and capped `lastfm-64-dot` f32 recall at 0.90 while
   hnswlib/faiss (flat HNSW, no IVF) reached 0.99. The default now scales with the cluster count
   (`sqrt(n_lists) * 5`, clamped to `[16, n_lists]`), so small indexes probe most clusters and
-  large indexes stay bounded. Measured: `lastfm-64-dot` f32 recall@10 **0.9706** (was 0.8986),
-  with QPS 962. This is the single largest recall win; the rescore below is what fixes the
-  quantized tiers, and the augmentation is order-equivalent to `1 - cos` on this dataset.
+  large indexes stay bounded. This is the single largest recall win; current numbers live in
+  `benchmarks/results/BENCHMARK_REPORT.md`. The rescore below is what fixes the quantized
+  tiers, and the augmentation is order-equivalent to `1 - cos` on this dataset.
 - **Asymmetric MIPS Augmentation (`DistDot::augmented`)**: Added a third `DistDot` mode that
   computes `||va||² + m² - 2·va·vb` on the fly, which orders by `-dot` while staying
   non-negative whenever `m >= max||stored||`. The global `m` is computed at build time (sample

@@ -485,7 +485,9 @@ impl TableBuilder {
                 index_configs: Arc::new(parking_lot::RwLock::new(restored_index_configs)),
                 default_device: Arc::new(parking_lot::RwLock::new(self.default_device)),
                 memory_index: Arc::new(parking_lot::RwLock::new(initial_mem_index)),
-                vector_routers: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+                vector_routers: Arc::new(
+                    parking_lot::RwLock::new(std::collections::HashMap::new()),
+                ),
                 cluster_indexes: Arc::new(parking_lot::RwLock::new(
                     std::collections::HashMap::new(),
                 )),

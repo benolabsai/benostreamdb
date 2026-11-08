@@ -538,10 +538,13 @@ impl PyTable {
         target_shard_bytes: Option<usize>,
     ) -> PyResult<()> {
         py.allow_threads(|| {
-            TOKIO_RUNTIME.block_on(
-                self.table
-                    .rebuild_cluster_index_with_target(column, k, m, ef_construction, target_shard_bytes),
-            )
+            TOKIO_RUNTIME.block_on(self.table.rebuild_cluster_index_with_target(
+                column,
+                k,
+                m,
+                ef_construction,
+                target_shard_bytes,
+            ))
         })
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
@@ -561,10 +564,7 @@ impl PyTable {
         k: usize,
     ) -> PyResult<()> {
         py.allow_threads(|| {
-            TOKIO_RUNTIME.block_on(
-                self.table
-                    .rebuild_indexes_with_global_centroids(columns, k),
-            )
+            TOKIO_RUNTIME.block_on(self.table.rebuild_indexes_with_global_centroids(columns, k))
         })
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }

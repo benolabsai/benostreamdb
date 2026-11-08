@@ -145,6 +145,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
             false, // use_mmap
             None,
             None, // refine_factor
+            None, // probes
         )
         .await?;
 
@@ -184,10 +185,14 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
             false,
             None,
             Some(4), // refine_factor = 4
+            None,    // probes
         )
         .await?;
 
-    assert!(!rescored_results.is_empty(), "Reranked results should not be empty");
+    assert!(
+        !rescored_results.is_empty(),
+        "Reranked results should not be empty"
+    );
     let (r_batch, r_dists) = &rescored_results[0];
     assert!(r_batch.num_rows() > 0);
     assert_eq!(r_dists.len(), r_batch.num_rows());
@@ -201,7 +206,10 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     for (i, &dist) in r_dists.iter().enumerate() {
         if r_ids.value(i) == 50 {
             found_rescored = true;
-            assert!(dist.abs() < 1e-4, "Exact rescored distance for ID 50 must be 0.0");
+            assert!(
+                dist.abs() < 1e-4,
+                "Exact rescored distance for ID 50 must be 0.0"
+            );
         }
     }
     assert!(found_rescored, "ID 50 must be present in rescored results");
@@ -347,6 +355,7 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
             false,
             None,
             None, // refine_factor
+            None, // probes
         )
         .await?;
 

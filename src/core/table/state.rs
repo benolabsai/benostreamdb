@@ -52,7 +52,8 @@ pub(crate) struct TableIndexState {
     pub index_configs: Arc<parking_lot::RwLock<HashMap<String, ColumnIndexConfig>>>,
     pub default_device: Arc<parking_lot::RwLock<Option<String>>>,
     pub memory_index: Arc<parking_lot::RwLock<Option<InMemoryVectorIndex>>>,
-    pub vector_routers: Arc<parking_lot::RwLock<HashMap<String, Arc<crate::core::index::TableVectorRouter>>>>,
+    pub vector_routers:
+        Arc<parking_lot::RwLock<HashMap<String, Arc<crate::core::index::TableVectorRouter>>>>,
     /// Table-level, cluster-keyed vector indexes, keyed by column.
     ///
     /// Populated lazily by `ensure_cluster_index`; cleared whenever a rebuild or

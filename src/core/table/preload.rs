@@ -267,11 +267,13 @@ impl Table {
                             .or_insert_with(|| (cached.dim(), cached.metric(), Vec::new()));
 
                         for (c_id, centroid) in cached.centroids().iter().enumerate() {
-                            entry.2.push(crate::core::index::vector_router::CentroidRecord {
-                                segment_id: seg_id.clone(),
-                                cluster_id: c_id,
-                                centroid: centroid.clone(),
-                            });
+                            entry
+                                .2
+                                .push(crate::core::index::vector_router::CentroidRecord {
+                                    segment_id: seg_id.clone(),
+                                    cluster_id: c_id,
+                                    centroid: centroid.clone(),
+                                });
                         }
                     }
                 }
@@ -283,7 +285,9 @@ impl Table {
         // Populate table-level vector routers from loaded segment centroids
         for (col, (dim, metric, records)) in router_records {
             if !records.is_empty() {
-                let router = Arc::new(crate::core::index::TableVectorRouter::new(dim, metric, records));
+                let router = Arc::new(crate::core::index::TableVectorRouter::new(
+                    dim, metric, records,
+                ));
                 tracing::info!(
                     column = %col,
                     centroids = router.len(),
@@ -313,9 +317,9 @@ impl Table {
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, entries, _version) = manager.load_latest_full().await?;
         Ok(entries.iter().any(|e| {
-            e.index_files.iter().any(|idx| {
-                idx.index_category == "vector" || idx.index_category == "graph"
-            })
+            e.index_files
+                .iter()
+                .any(|idx| idx.index_category == "vector" || idx.index_category == "graph")
         }))
     }
 
@@ -426,12 +430,74 @@ impl Table {
         &self,
         column: &str,
     ) -> Result<Option<Arc<crate::core::index::TableVectorRouter>>> {
-        if let Some(router) = self.indexing.vector_routers.read().get(column).cloned() {
-            return Ok(Some(router));
-        }
-
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, entries, _version) = manager.load_latest_full().await?;
+
+        // The router is only valid for the exact set of segments that carry a
+        // vector index for `column` in the current manifest. A commit that adds
+        // or removes a segment changes that set, and a stale router silently
+        // prunes the new segments out of every query: `might_match_vector` drops
+        // any segment absent from `candidate_segments`, so a router built before
+        // the segment existed can never route to it. The in-process cache is
+        // cleared on this process's own commits, but `preload_indexes_async` can
+        // also populate it from a partially-warmed cache, so validate against the
+        // manifest before serving it.
+        let indexed_segments: std::collections::HashSet<String> = entries
+            .iter()
+            .flat_map(|entry| {
+                let seg_dir = entry
+                    .file_path
+                    .rsplit_once('/')
+                    .map(|(dir, _)| dir.to_string())
+                    .unwrap_or_default();
+                entry.index_files.iter().filter_map(move |idx| {
+                    if idx.column_name == column && idx.index_category == "vector" {
+                        let full_path = if idx.file_path.contains('/') || seg_dir.is_empty() {
+                            idx.file_path.clone()
+                        } else {
+                            format!("{}/{}", seg_dir, idx.file_path)
+                        };
+                        let name = full_path
+                            .rsplit_once('/')
+                            .map(|(_, name)| name)
+                            .unwrap_or(&full_path);
+                        let name = name.strip_suffix(".puffin").unwrap_or(name);
+                        let name = name.strip_suffix(".parquet").unwrap_or(name);
+                        Some(name.to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        // Bind the clone before the `if let`: a temporary read guard in the
+        // scrutinee would live for the whole block and deadlock the `write()`
+        // below.
+        let cached_router = self.indexing.vector_routers.read().get(column).cloned();
+        if let Some(router) = cached_router {
+            let covers = {
+                let router_segments: std::collections::HashSet<&str> = router
+                    .segment_indices
+                    .iter()
+                    .map(|(seg, _)| seg.as_str())
+                    .collect();
+                router_segments.len() == indexed_segments.len()
+                    && indexed_segments
+                        .iter()
+                        .all(|s| router_segments.contains(s.as_str()))
+            };
+            if covers {
+                return Ok(Some(router));
+            }
+            tracing::warn!(
+                column = %column,
+                router_segments = router.segment_indices.len(),
+                indexed_segments = indexed_segments.len(),
+                "ensure_vector_router: cached router does not cover the current indexed segments; dropping"
+            );
+            self.indexing.vector_routers.write().remove(column);
+        }
 
         let mut records = Vec::new();
         let mut dim = 0;
@@ -515,13 +581,11 @@ impl Table {
                             dim = index.dim();
                             metric = index.metric();
                             for (c_id, centroid) in index.centroids().iter().enumerate() {
-                                records.push(
-                                    crate::core::index::vector_router::CentroidRecord {
-                                        segment_id: seg_id.clone(),
-                                        cluster_id: c_id,
-                                        centroid: centroid.clone(),
-                                    },
-                                );
+                                records.push(crate::core::index::vector_router::CentroidRecord {
+                                    segment_id: seg_id.clone(),
+                                    cluster_id: c_id,
+                                    centroid: centroid.clone(),
+                                });
                             }
                         }
                     }
@@ -531,7 +595,9 @@ impl Table {
         }
 
         if !records.is_empty() {
-            let router = Arc::new(crate::core::index::TableVectorRouter::new(dim, metric, records));
+            let router = Arc::new(crate::core::index::TableVectorRouter::new(
+                dim, metric, records,
+            ));
             self.indexing
                 .vector_routers
                 .write()
@@ -555,12 +621,43 @@ impl Table {
         &self,
         column: &str,
     ) -> Result<Option<Arc<crate::core::index::ClusterIndex>>> {
-        if let Some(index) = self.indexing.cluster_indexes.read().get(column).cloned() {
-            return Ok(Some(index));
-        }
-
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (manifest, entries, version) = manager.load_latest_full().await?;
+
+        // The set of live data files, normalised to bare segment ids. Both the
+        // cached-artifact check and the manifest-artifact check compare against
+        // this same set.
+        let current_segments: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                let name = e.file_path.rsplit('/').next().unwrap_or(&e.file_path);
+                let name = name.strip_suffix(".puffin").unwrap_or(name);
+                name.strip_suffix(".parquet").unwrap_or(name).to_string()
+            })
+            .collect();
+
+        // Validate a cached artifact against the *current* segment set before
+        // serving it. The in-process cache is only invalidated by this process's
+        // own commits; another process may have compacted since. Loading the
+        // manifest is cheap (it is already cached) — only the artifact bytes are
+        // expensive, and those stay cached when the lineage still matches.
+        if let Some(index) = self.indexing.cluster_indexes.read().get(column).cloned() {
+            if index.segment_table.len() == current_segments.len()
+                && index
+                    .segment_table
+                    .iter()
+                    .all(|s| current_segments.iter().any(|c| c == s))
+            {
+                return Ok(Some(index));
+            }
+            tracing::warn!(
+                column = %column,
+                artifact_segments = index.segment_table.len(),
+                current_segments = current_segments.len(),
+                "ensure_cluster_index: cached artifact does not cover the current data files; dropping"
+            );
+            self.indexing.cluster_indexes.write().remove(column);
+        }
 
         let Some(entry) = manifest
             .table_indexes
@@ -571,14 +668,6 @@ impl Table {
         };
 
         // Reject an artifact that does not cover exactly the current data files.
-        let current_segments: Vec<String> = entries
-            .iter()
-            .map(|e| {
-                let name = e.file_path.rsplit('/').next().unwrap_or(&e.file_path);
-                let name = name.strip_suffix(".puffin").unwrap_or(name);
-                name.strip_suffix(".parquet").unwrap_or(name).to_string()
-            })
-            .collect();
         if !entry.covers_segments(&current_segments) {
             tracing::warn!(
                 column = %column,

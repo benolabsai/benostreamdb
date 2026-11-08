@@ -457,8 +457,7 @@ async fn execute_action(
             table.vacuum_async(retention).await?;
         }
         "rebuild_cluster_index" => {
-            let column = parse_named_str(args, "column")
-                .unwrap_or_else(|| "embedding".to_string());
+            let column = parse_named_str(args, "column").unwrap_or_else(|| "embedding".to_string());
             let k = parse_named_i64(args, "k").unwrap_or(1024) as usize;
             let m = parse_named_i64(args, "m").unwrap_or(16) as usize;
             let ef_construction = parse_named_i64(args, "ef_construction")
@@ -469,7 +468,13 @@ async fn execute_action(
                 .or_else(|| parse_named_i64(args, "target_shard_bytes").map(|b| b as usize))
                 .or(Some(536_870_912));
             table
-                .rebuild_cluster_index_with_target(column, k, m, ef_construction, target_shard_bytes)
+                .rebuild_cluster_index_with_target(
+                    column,
+                    k,
+                    m,
+                    ef_construction,
+                    target_shard_bytes,
+                )
                 .await?;
         }
         "warmup" => {
@@ -511,12 +516,12 @@ fn parse_named_str(args: &str, key: &str) -> Option<String> {
         .trim_start_matches("=>")
         .trim_start_matches('=');
     let trimmed = after.trim();
-    if trimmed.starts_with('\'') {
-        let end = trimmed[1..].find('\'')?;
-        Some(trimmed[1..=end].to_string())
-    } else if trimmed.starts_with('"') {
-        let end = trimmed[1..].find('"')?;
-        Some(trimmed[1..=end].to_string())
+    if let Some(stripped) = trimmed.strip_prefix('\'') {
+        let end = stripped.find('\'')?;
+        Some(stripped[..end].to_string())
+    } else if let Some(stripped) = trimmed.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        Some(stripped[..end].to_string())
     } else {
         let val: String = trimmed
             .chars()

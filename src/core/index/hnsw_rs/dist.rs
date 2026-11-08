@@ -143,8 +143,7 @@ impl Distance<f32> for DistDot {
     fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
         if self.augment_m > 0.0 {
             let na2 = va.iter().map(|x| x * x).sum::<f32>();
-            let d = na2 + self.augment_m * self.augment_m
-                - 2.0 * distance::dot_product(va, vb);
+            let d = na2 + self.augment_m * self.augment_m - 2.0 * distance::dot_product(va, vb);
             return d.max(0.0);
         }
         if !self.normalized {
@@ -398,12 +397,7 @@ mod tests {
 
     #[test]
     fn dist_dot_augmented_orders_by_inner_product_and_is_non_negative() {
-        let stored = [
-            [0.5f32, 0.0],
-            [1.0f32, 0.0],
-            [0.0f32, 1.0],
-            [0.3f32, 0.4],
-        ];
+        let stored = [[0.5f32, 0.0], [1.0f32, 0.0], [0.0f32, 1.0], [0.3f32, 0.4]];
         let m = stored
             .iter()
             .map(|v| v.iter().map(|x| x * x).sum::<f32>().sqrt())

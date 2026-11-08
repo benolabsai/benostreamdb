@@ -50,7 +50,7 @@ fn test_puffin_write_read() -> Result<(), Box<dyn std::error::Error>> {
 fn test_puffin_compound_index_writer_reader() -> Result<(), Box<dyn std::error::Error>> {
     use benostreamdb::core::puffin::{
         PuffinIndexReader, PuffinIndexWriter, PUFFIN_BLOB_INDEX_ROARING, PUFFIN_BLOB_LEXICAL_BM25,
-        PUFFIN_BLOB_VECTOR_HNSW_TQ8,
+        PUFFIN_BLOB_VECTOR_HNSW_GRAPH,
     };
     use sha2::{Digest, Sha256};
 
@@ -73,7 +73,7 @@ fn test_puffin_compound_index_writer_reader() -> Result<(), Box<dyn std::error::
         "vector",
         "hnsw_tq8",
         "embedding",
-        PUFFIN_BLOB_VECTOR_HNSW_TQ8,
+        PUFFIN_BLOB_VECTOR_HNSW_GRAPH,
         vector_payload,
         vec![1],
         HashMap::new(),
@@ -145,7 +145,7 @@ fn test_puffin_compound_index_writer_reader() -> Result<(), Box<dyn std::error::
     assert_eq!(reader.blobs().len(), 3);
 
     let read_vector = reader
-        .read_blob_by_type(PUFFIN_BLOB_VECTOR_HNSW_TQ8)?
+        .read_blob_by_type(PUFFIN_BLOB_VECTOR_HNSW_GRAPH)?
         .unwrap();
     assert_eq!(read_vector, vector_payload);
 
@@ -429,9 +429,15 @@ async fn test_puffin_hnsw_ivf_lazy_loading_and_fuzz() -> Result<(), Box<dyn std:
 
         let fuzz_query = VectorValue::Float32(random_vec);
         let search_res = loaded.search(&fuzz_query, rand_k, rand_n_probe, None, None);
-        assert!(search_res.is_ok(), "Search should not panic or fail on random vector");
+        assert!(
+            search_res.is_ok(),
+            "Search should not panic or fail on random vector"
+        );
         let results = search_res.unwrap();
-        assert!(results.len() <= rand_k, "Results length must be bounded by k");
+        assert!(
+            results.len() <= rand_k,
+            "Results length must be bounded by k"
+        );
 
         // Verify sorted ordering
         for w in results.windows(2) {
@@ -445,8 +451,14 @@ async fn test_puffin_hnsw_ivf_lazy_loading_and_fuzz() -> Result<(), Box<dyn std:
     }
 
     // 9. Edge-case test: Out-of-bounds cluster access returns None without crashing
-    assert!(loaded.get_cluster(999_999).is_none(), "Invalid cluster must return None");
-    assert!(loaded.get_cluster(usize::MAX).is_none(), "usize::MAX cluster must return None");
+    assert!(
+        loaded.get_cluster(999_999).is_none(),
+        "Invalid cluster must return None"
+    );
+    assert!(
+        loaded.get_cluster(usize::MAX).is_none(),
+        "usize::MAX cluster must return None"
+    );
 
     Ok(())
 }
