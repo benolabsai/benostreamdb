@@ -1,15 +1,15 @@
 # BenoStreamDB — Release Readiness Assessment
-Date: 2026-10-03 (core audit performed for v0.13.0; carried forward for v0.14.0–v0.15.0)
+Date: 2026-10-03 (core audit performed for v0.13.0; carried forward for v0.14.0–v0.15.1)
 Scope: Architectural audit of core storage invariants, differential oracles, crash recovery, and security against the **Developer Preview Release Bar**.
-Current Version: 0.15.0
+Current Version: 0.15.1
 
 Status: **Developer Preview Ready** (All core integrity gates passed; enterprise HA/clustering deferred).
 
 > **Release Scope Notice:**
-> For preview releases through v0.15.0, the same **Developer Preview** standard applies. The audit below covers the
-> engine's storage invariants, which 0.15.0 did not change: recent work is connector-side (Spark/Trino
-> parity, staged data-file writes in Spark, MCP HTTP + SSE transport, dbt remote access) plus CI and
-> dependency hygiene. The staged write path added in 0.14.0 (`stage_data_files` +
+> For preview releases through v0.15.1, the same **Developer Preview** standard applies. The audit below covers the
+> engine's storage invariants, which 0.15.1 did not change: recent work is connector-side (Spark/Trino
+> parity, staged data-file writes in Spark, MCP HTTP + SSE transport, dbt remote access), Arrow C FFI
+> string offset conformance in vector search, plus CI and dependency hygiene. The staged write path added in 0.14.0 (`stage_data_files` +
 > `commit_staged_entries`) is an alternate entry point into the audited primitives — it uses the same
 > segment writer, primary-key checks, and manifest commit — and the pre-release soak gate
 > (`release.yml`) exercises it along with the rest of the write path on every tag. Connector-specific

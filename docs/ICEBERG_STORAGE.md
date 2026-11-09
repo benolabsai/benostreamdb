@@ -125,17 +125,18 @@ Supported partition transforms:
 
 ### 2.4 Column Statistics & NDV (Number of Distinct Values)
 
-BenoStreamDB writes exact column statistics to manifest files to accelerate cost-based query planning:
+BenoStreamDB writes exact column statistics into data manifest files automatically during each commit to accelerate cost-based query planning and row-group pruning:
 
 ```python
-# Enable comprehensive column-level statistics
-table.enable_statistics(
-    columns=["id", "device_id", "category"],
-    compute_ndv=True  # HyperLogLog / exact distinct counts
-)
+# Inspect table metrics and index coverage
+stats = table.statistics
+print(f"Row count: {stats.row_count}")
+print(f"File count: {stats.file_count}")
+print(f"Total size: {stats.total_size_bytes} bytes")
+print(f"Index coverage: {stats.index_coverage}")
 ```
 
-Written per field ID in data manifests:
+Written automatically per field ID in data manifests:
 - `null_value_counts`: Null presence per column.
 - `lower_bounds` / `upper_bounds`: Min/max values for row-group pruning.
 - `distinct_value_counts`: Exact NDV for cost-based join and filter estimation.

@@ -569,7 +569,34 @@ impl Iterator for StreamRecordBatchReader {
     fn next(&mut self) -> Option<Self::Item> {
         TOKIO_RUNTIME
             .block_on(self.stream.next())
-            .map(|res| res.map_err(|e| arrow::error::ArrowError::ExternalError(e.into())))
+            .map(|res| match res {
+                Ok(batch) => {
+                    if batch.schema() == self.schema {
+                        Ok(batch)
+                    } else {
+                        let mut new_columns = Vec::with_capacity(self.schema.fields().len());
+                        for field in self.schema.fields() {
+                            if let Ok(col) = batch.column_by_name(field.name()).ok_or(()) {
+                                if col.data_type() != field.data_type() {
+                                    let casted = arrow::compute::cast(col, field.data_type())
+                                        .map_err(|e| arrow::error::ArrowError::CastError(e.to_string()))?;
+                                    new_columns.push(casted);
+                                } else {
+                                    new_columns.push(col.clone());
+                                }
+                            } else {
+                                let null_arr = arrow::array::new_null_array(
+                                    field.data_type(),
+                                    batch.num_rows(),
+                                );
+                                new_columns.push(null_arr);
+                            }
+                        }
+                        RecordBatch::try_new(self.schema.clone(), new_columns)
+                    }
+                }
+                Err(e) => Err(arrow::error::ArrowError::ExternalError(e.into())),
+            })
     }
 }
 

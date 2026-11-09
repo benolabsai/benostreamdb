@@ -5,7 +5,7 @@
 # BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
-> ⚠️ **Developer Preview (v0.15.0)**
+> ⚠️ **Developer Preview (v0.15.1)**
 > BenoStreamDB is an early-stage database engine intended for evaluation, benchmarking, and community feedback. 
 > - **API & Storage Mutability:** APIs, configuration schemas, and secondary index sidecar on-disk layouts may evolve between preview releases.
 > - **Workload Suitability:** Not yet recommended for irreplaceable production data or mission-critical workloads requiring enterprise high-availability SLAs. Always back up authoritative data and pin versions.
@@ -174,7 +174,7 @@ In Authoritative Mode, BenoStreamDB acts as the primary lakehouse database. It o
 │                      (Read + Write)                       │
 ├───────────────────────────────────────────────────────────┤
 │ • metadata/v1.metadata.json, snap-*.avro, *-m0.avro       │
-│ • data/00001.parquet + data/00001.bsdb_idx (HNSW / BM25)  │
+│ • data/00001.parquet + metadata/00001.puffin (HNSW / BM25)│
 │ • _wal/ (Write-Ahead Log for streaming durability)        │
 │ • _staging/ (Buffered memory chunks before commit)        │
 └───────────────────────────────────────────────────────────┘
@@ -246,8 +246,8 @@ If your data already lives in an Apache Iceberg table created by Spark, Flink, T
 ├─────────────────────────────────────────┤          ├─────────────────────────────────────────┤
 │ • metadata/v1.metadata.json             │          │ • detached_catalog.json (lineage/sync)  │
 │ • data/00001.parquet                    │◀─────────┤ • manifest.json (PK & index definitions)│
-│ • data/00002.parquet                    │          │ • data/00001.bsdb_idx (HNSW / BM25)     │
-│ (Managed & compacted by upstream Spark) │          │ • data/00002.bsdb_idx (HNSW / BM25)     │
+│ • data/00002.parquet                    │          │ • metadata/00001.puffin (HNSW / BM25)   │
+│ (Managed & compacted by upstream Spark) │          │ • metadata/00002.puffin (HNSW / BM25)   │
 └─────────────────────────────────────────┘          └─────────────────────────────────────────┘
 ```
 
@@ -290,7 +290,7 @@ table.add_index("document_text", "bm25")
 # Build scalar Roaring Bitmap index
 table.add_index("status", "bitmap")
 ```
-* **Where are the indexes stored?** The engine reads the external Parquet files, computes the graphs/postings, and writes `.bsdb_idx` sidecars exclusively into `s3://my-managed-indexes/events/`. Zero bytes are added to the customer's bucket.
+* **Where are the indexes stored?** The engine reads the external Parquet files, computes the graphs/postings, and writes compound `.puffin` bundles exclusively into `s3://my-managed-indexes/events/`. Zero bytes are added to the customer's bucket.
 
 #### Step 4: Keep Indexes in Sync with Upstream Mutations & Compactions
 When the upstream engine (Spark, Flink, or Databricks) writes new rows or runs table compaction (`rewriteDataFiles`):
@@ -314,13 +314,20 @@ Query the mounted table using standard SQL, vector search, or hybrid retrieval:
 results = table.vector_search("embedding", query_vector, k=10)
 
 # 2. Unified DataFusion SQL (with pgvector syntax and hybrid filters)
-df = table.sql("""
+# Register the table in an in-process Session to query by name:
+session = bsdb.Session()
+session.register("events", table)
+
+df = session.sql("""
     SELECT event_id, document_text, embedding <-> [0.1, 0.2, 0.3] AS distance
     FROM events
     WHERE status = 'active'
     ORDER BY distance ASC
     LIMIT 10
 """)
+
+# Or query directly on the table object (bound to default alias 't'):
+# df = table.sql("SELECT * FROM t WHERE status = 'active' LIMIT 10")
 ```
 
 #### Step 6: Declare Embedding Provenance (Core Guard)

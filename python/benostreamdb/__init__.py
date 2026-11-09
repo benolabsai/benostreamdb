@@ -2938,17 +2938,17 @@ class Table:
         rows_by_id = {}
 
         if not vec_df.empty and id_col in vec_df.columns:
-            for rank, (_, row) in enumerate(vec_df.iterrows()):
+            for rank, row in enumerate(vec_df.to_dict("records")):
                 key = row[id_col]
                 scores[key] = scores.get(key, 0.0) + (1.0 / (rrf_k + rank + 1.0))
-                rows_by_id[key] = row.to_dict()
+                rows_by_id[key] = row
 
         if not text_df.empty and id_col in text_df.columns:
-            for rank, (_, row) in enumerate(text_df.iterrows()):
+            for rank, row in enumerate(text_df.to_dict("records")):
                 key = row[id_col]
                 scores[key] = scores.get(key, 0.0) + (1.0 / (rrf_k + rank + 1.0))
                 if key not in rows_by_id:
-                    rows_by_id[key] = row.to_dict()
+                    rows_by_id[key] = row
 
         sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
 

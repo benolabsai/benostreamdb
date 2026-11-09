@@ -795,9 +795,58 @@ impl Table {
                 }
             }
 
-            return Ok(
-                futures::stream::iter(results.into_iter().map(|(_, batch)| Ok(batch))).boxed(),
-            );
+            let table_schema = self.arrow_schema();
+            let mut expected_fields: Vec<std::sync::Arc<arrow::datatypes::Field>> =
+                if let Some(cols) = columns {
+                    cols.iter()
+                        .filter_map(|name| {
+                            table_schema
+                                .column_with_name(name)
+                                .map(|(_, f)| std::sync::Arc::new(f.clone()))
+                        })
+                        .collect()
+                } else {
+                    table_schema
+                        .fields()
+                        .iter()
+                        .map(|f| std::sync::Arc::new(f.as_ref().clone()))
+                        .collect()
+                };
+            if !expected_fields.iter().any(|f| f.name() == "distance") {
+                expected_fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
+                    "distance",
+                    arrow::datatypes::DataType::Float32,
+                    false,
+                )));
+            }
+            let expected_schema =
+                std::sync::Arc::new(arrow::datatypes::Schema::new(expected_fields));
+
+            let conformed_results = results.into_iter().map(move |(_, batch)| {
+                if batch.schema() == expected_schema {
+                    Ok(batch)
+                } else {
+                    let mut new_columns = Vec::with_capacity(expected_schema.fields().len());
+                    for field in expected_schema.fields() {
+                        if let Ok(col) = batch.column_by_name(field.name()).ok_or(()) {
+                            if col.data_type() != field.data_type() {
+                                let casted = arrow::compute::cast(col, field.data_type())?;
+                                new_columns.push(casted);
+                            } else {
+                                new_columns.push(col.clone());
+                            }
+                        } else {
+                            let null_arr =
+                                arrow::array::new_null_array(field.data_type(), batch.num_rows());
+                            new_columns.push(null_arr);
+                        }
+                    }
+                    arrow::record_batch::RecordBatch::try_new(expected_schema.clone(), new_columns)
+                        .map_err(anyhow::Error::from)
+                }
+            });
+
+            return Ok(futures::stream::iter(conformed_results).boxed());
         }
 
         // Extract Iceberg schema from the already-loaded manifest to avoid

@@ -1,3 +1,19 @@
+## [0.15.1] - 2026-11-09
+
+Patch release fixing Arrow C Data Interface string offset conformance during vector search result projection and hybrid search rank fusion.
+
+### Fixed
+- **Arrow C Data Interface String Offset Conformance in Vector Search** (`src/core/table/read.rs`, `src/python/helpers.rs`):
+  Conformed vector search result `RecordBatch`es to the table's logical Arrow schema (`DataType::Utf8`, 32-bit offsets) before streaming across the PyArrow C FFI boundary. Previously, physical Parquet reader batches retained `DataType::LargeUtf8` (64-bit offsets) while `to_arrow_stream` registered the stream schema as 32-bit `Utf8`, causing PyArrow to misinterpret offset buffers and crash with `basic_string::_M_create` / `std::length_error`. Added defense-in-depth conformance in `StreamRecordBatchReader::next()`.
+- **Hybrid Search Rank Fusion DataFrame Iteration** (`python/benostreamdb/__init__.py`):
+  Replaced `vec_df.iterrows()` with `vec_df.to_dict("records")` in `Table.hybrid_search()` to eliminate fragile pandas NumPy block interleaving and avoid type coercion on Arrow string columns.
+- **Documentation Alignment** (`docs/ICEBERG_STORAGE.md`):
+  Updated `table.enable_statistics(...)` to the authoritative `table.statistics` property (`file_count`, `row_count`, `total_size_bytes`, `index_coverage`).
+
+### Added
+- **Vector Search String Offset Regression Test** (`tests/python/test_vector_string_conformance.py`):
+  Added automated test suite verifying vector search string column projection, unprojected reads, and Reciprocal Rank Fusion hybrid search without offset shifting.
+
 ## [0.15.0] - Target: 2026-11-07
 
 Major release consolidating vector search, out-of-core indexing, and performance optimizations developed since crates.io v0.14.1 and re-synchronizing PyPI (which last tracked v0.13.1) with crates.io. This release introduces table-level cluster indexing (`ClusterIndex`) across sequential 512 MiB rolling Puffin shards, zero-copy memory mapping (`memmap2`), Rayon multi-threaded compaction concurrency, BenoQuant isotropic quantization (BQ8/BQ4), native SQ8 scalar quantization, memory-budgeted out-of-core index preloading, and the official NeurIPS BigANN evaluation suite.
