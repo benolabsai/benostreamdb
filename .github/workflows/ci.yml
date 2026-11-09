@@ -180,12 +180,12 @@ jobs:
   #########################
   # macOS / Metal correctness
   #########################
-  # GitHub's macos-14 runners are Apple Silicon, so the native Metal backend is
+  # GitHub's macos-15 runners are Apple Silicon, so the native Metal backend is
   # testable for free. The cross-backend harness uses CPU as the gold source and
   # validates whatever backend is present (here: Metal).
   metal:
     name: Metal Correctness (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
 
