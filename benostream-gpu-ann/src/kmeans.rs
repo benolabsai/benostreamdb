@@ -4,7 +4,12 @@
 use crate::backend::{ComputeContext, GpuBackend};
 use anyhow::Result;
 use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::{Rng, SeedableRng};
+
+pub use crate::e_means::*;
+
+/// Canonical deterministic seed used throughout BenoStreamDB.
+pub const DEFAULT_KMEANS_SEED: u64 = 0x00C0_FFEE_1337;
 
 /// Compute L2 squared distance between two vectors.
 #[inline(always)]
@@ -26,6 +31,20 @@ pub fn train_kmeans(
     max_iters: usize,
     ctx: &ComputeContext,
 ) -> Result<Vec<f32>> {
+    train_kmeans_with_seed(vectors, dim, k, max_iters, ctx, None)
+}
+
+/// Train k-means centroids with hardware acceleration and deterministic seed.
+/// Automatically routes eligible problem sizes (n >= 10k, k >= 64, n/k >= 30, dim > 2)
+/// to high-throughput e-means.
+pub fn train_kmeans_with_seed(
+    vectors: &[f32],
+    dim: usize,
+    k: usize,
+    max_iters: usize,
+    ctx: &ComputeContext,
+    seed: Option<u64>,
+) -> Result<Vec<f32>> {
     let n = vectors.len() / dim;
     if n == 0 {
         anyhow::bail!("Cannot cluster empty vector set");
@@ -34,9 +53,24 @@ pub fn train_kmeans(
         anyhow::bail!("k must be > 0");
     }
     let k = k.min(n);
+    let seed_val = seed.unwrap_or(DEFAULT_KMEANS_SEED);
+
+    // Gated dispatch: route eligible configurations to high-throughput e-means
+    if is_emeans_eligible(n, k, dim) {
+        let config = EMeansConfig {
+            k,
+            nepochs: 3,
+            batch_law: BatchLaw::Auto,
+            fixed_alpha0: None,
+            unused_threshold: None,
+            seed: seed_val,
+        };
+        let (centroids, _labels) = train_emeans(vectors, dim, &config, ctx)?;
+        return Ok(centroids);
+    }
 
     let sample_size = (n / 10).max(1000).min(n);
-    let mut rng = thread_rng();
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed_val);
     let training_indices: Vec<usize> = (0..n)
         .collect::<Vec<_>>()
         .choose_multiple(&mut rng, sample_size)

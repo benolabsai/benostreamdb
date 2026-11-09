@@ -23,173 +23,21 @@
 
 use anyhow::Result;
 
-/// Minimum step factor for the cosine schedule relative to alpha0 (Equation 5).
-pub const ALPHA_MIN_FACTOR: f32 = 0.1;
-
-/// Batch update interval between dead-cluster revival checks (Algorithm 1, line 9).
-pub const CHECK_UNUSED_EVERY: usize = 5;
-
-/// Initial EMA mass N_j (Algorithm 1, line 1); c_j represents S_j / N_j.
-pub const INIT_USAGE: f32 = 1.0 / 65536.0; // 2.0^-16
-
-/// Coordinate perturbation delta for donor splits (Appendix J, Eq. 8).
-pub const SPLIT_EPSILON: f32 = 1e-4;
-
-/// Revival threshold tau: revive centroids with N_j < tau * mean(N).
-pub const UNUSED_THRESHOLD: f32 = 0.1;
-
-/// Minimum dimension threshold below which dead-cluster revival is disabled
-/// to prevent dimensional collapse.
-pub const NO_REVIVAL_MAX_D: usize = 2;
-
-/// Dimension threshold below which the quality batch law is automatically chosen.
-pub const AUTO_QUALITY_MAX_D: usize = 16;
-
-/// Power-law coefficients for batch size derivation: B = C_B * k^b_k * n^b_n * T^b_T.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BatchLawCoefficients {
-    pub c_b: f64,
-    pub b_k: f64,
-    pub b_n: f64,
-    pub b_t: f64,
-}
-
-/// Shipped throughput scaling law parameters from Meta FAIR.
-pub const BATCH_LAW_THROUGHPUT: BatchLawCoefficients = BatchLawCoefficients {
-    c_b: 0.035134,
-    b_k: 0.134749,
-    b_n: 0.876473,
-    b_t: 0.813344,
+// Re-export core algorithmic mechanisms and scaling laws from benostream-gpu-ann
+pub use benostream_gpu_ann::e_means::{
+    is_emeans_eligible, resolve_alpha0, resolve_batch_size, round_power_of_two, scheduled_alpha,
+    BatchLaw, BatchLawCoefficients, EMeansConfig, StepLawCoefficients, ALPHA_LAW, ALPHA_MIN_FACTOR,
+    AUTO_QUALITY_MAX_D, BATCH_LAW_QUALITY, BATCH_LAW_THROUGHPUT, CHECK_UNUSED_EVERY, INIT_USAGE,
+    NO_REVIVAL_MAX_D, SPLIT_EPSILON, UNUSED_THRESHOLD,
 };
 
-/// Shipped quality scaling law parameters from Meta FAIR (1/8th throughput coefficient).
-pub const BATCH_LAW_QUALITY: BatchLawCoefficients = BatchLawCoefficients {
-    c_b: 0.00439175,
-    b_k: 0.134749,
-    b_n: 0.876473,
-    b_t: 0.813344,
-};
+/// Canonical deterministic seed used throughout BenoStreamDB.
+pub const DEFAULT_EMEANS_SEED: u64 = 0x00C0_FFEE_1337;
 
-/// Power-law coefficients for initial EMA step size: alpha0 = C_a * k^a_k * B^a_B * n^a_n * T^a_T.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct StepLawCoefficients {
-    pub c_alpha: f64,
-    pub a_k: f64,
-    pub a_b: f64,
-    pub a_n: f64,
-    pub a_t: f64,
-}
-
-pub const ALPHA_LAW: StepLawCoefficients = StepLawCoefficients {
-    c_alpha: 0.8244,
-    a_k: -0.4617,
-    a_b: 0.9003,
-    a_n: -0.4498,
-    a_t: -0.1057,
-};
-
-/// Batch size selection strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BatchLaw {
-    #[default]
-    Auto,
-    Throughput,
-    Quality,
-    Fixed(usize),
-}
-
-/// Configuration parameters for e-means clustering.
-#[derive(Debug, Clone)]
-pub struct EMeansConfig {
-    pub k: usize,
-    pub nepochs: usize,
-    pub batch_law: BatchLaw,
-    pub fixed_alpha0: Option<f32>,
-    pub unused_threshold: Option<f32>,
-    pub seed: u64,
-}
-
-impl Default for EMeansConfig {
-    fn default() -> Self {
-        Self {
-            k: 256,
-            nepochs: 3,
-            batch_law: BatchLaw::Auto,
-            fixed_alpha0: None,
-            unused_threshold: None,
-            seed: 42,
-        }
-    }
-}
-
-/// Round a positive value to the nearest power of two.
-pub fn round_power_of_two(value: usize) -> usize {
-    if value <= 1 {
-        return 1;
-    }
-    let val_f = value as f64;
-    let low = 1usize << (val_f.log2().floor() as usize);
-    let high = low * 2;
-    if val_f / (low as f64) < (high as f64) / val_f {
-        low
-    } else {
-        high
-    }
-}
-
-/// Derive initial EMA step size alpha_0 from dataset parameters via power-law scaling.
-pub fn resolve_alpha0(n: usize, k: usize, nepochs: usize, batch_size: usize) -> f32 {
-    let alpha = ALPHA_LAW.c_alpha
-        * (k as f64).powf(ALPHA_LAW.a_k)
-        * (batch_size as f64).powf(ALPHA_LAW.a_b)
-        * (n as f64).powf(ALPHA_LAW.a_n)
-        * (nepochs as f64).powf(ALPHA_LAW.a_t);
-    (alpha as f32).clamp(1e-4, 1.0)
-}
-
-/// Derive mini-batch size B from dataset parameters via power-law scaling.
-pub fn resolve_batch_size(n: usize, k: usize, nepochs: usize, dim: usize, law: BatchLaw) -> usize {
-    let selected_law = match law {
-        BatchLaw::Fixed(b) => return b.min(n).max(1),
-        BatchLaw::Throughput => BATCH_LAW_THROUGHPUT,
-        BatchLaw::Quality => BATCH_LAW_QUALITY,
-        BatchLaw::Auto => {
-            if dim <= AUTO_QUALITY_MAX_D {
-                BATCH_LAW_QUALITY
-            } else {
-                BATCH_LAW_THROUGHPUT
-            }
-        }
-    };
-
-    let raw_batch = selected_law.c_b
-        * (k as f64).powf(selected_law.b_k)
-        * (n as f64).powf(selected_law.b_n)
-        * (nepochs as f64).powf(selected_law.b_t);
-
-    let rounded = round_power_of_two(raw_batch.round() as usize);
-    // Enforce upper bound of at least 2 batches per epoch (n / 2)
-    let max_batch = round_power_of_two(n / 2).max(1);
-    rounded.min(max_batch).min(n).max(1)
-}
-
-/// Compute cosine-annealed EMA step size at a given global step index.
-pub fn scheduled_alpha(alpha0: f32, step: usize, total_steps: usize) -> f32 {
-    if total_steps == 0 {
-        return alpha0;
-    }
-    let fraction = (step.min(total_steps) as f32) / (total_steps as f32);
-    let cosine = 0.5 * (1.0 + (std::f32::consts::PI * fraction).cos());
-    alpha0 * (ALPHA_MIN_FACTOR + (1.0 - ALPHA_MIN_FACTOR) * cosine)
-}
-
-/// Check if a problem configuration satisfies the minimum eligibility criteria
-/// for high-throughput e-means coarse quantization.
-pub fn is_emeans_eligible(n: usize, k: usize, dim: usize) -> bool {
-    n >= 10_000 && k >= 64 && (n / k) >= 30 && dim > NO_REVIVAL_MAX_D
-}
-
-/// Train centroids using e-means clustering.
+/// Train centroids using hardware-accelerated e-means clustering.
+///
+/// Dispatches mini-batch assignments across active GPU context (CUDA/Metal/WGPU)
+/// or multi-core CPU with Rayon.
 ///
 /// Returns `(centroids, assignments)` on success.
 pub fn train_emeans(
@@ -197,64 +45,32 @@ pub fn train_emeans(
     dim: usize,
     config: &EMeansConfig,
 ) -> Result<(Vec<f32>, Vec<u32>)> {
-    let n = vectors.len() / dim;
-    anyhow::ensure!(n > 0, "Vector buffer must not be empty");
-    anyhow::ensure!(
-        n >= config.k,
-        "Vector count {} must exceed cluster count {}",
-        n,
-        config.k
-    );
-
-    let _batch_size = resolve_batch_size(n, config.k, config.nepochs, dim, config.batch_law);
-    let _alpha0 = config
-        .fixed_alpha0
-        .unwrap_or_else(|| resolve_alpha0(n, config.k, config.nepochs, _batch_size));
-
-    let _total_steps = (n * config.nepochs).div_ceil(_batch_size);
-
-    // Initial centroids sampled uniformly via seed
-    let (centroids, _usage) = initialize_centroids(vectors, dim, config.k, config.seed)?;
-
-    // Core training loop planned for v0.16.0
-    // 1. Mini-batch strided chunking
-    // 2. Pairwise assignment via AVX2 / Metal / CUDA GEMM
-    // 3. In-place EMA update (S_j, N_j)
-    // 4. Dead-cluster revival every CHECK_UNUSED_EVERY batches
-    // 5. Exact mean finalization pass
-
-    // Temporary placeholder delegating to existing assigner until full kernel is wired
-    let labels = crate::core::index::ivf::simple_kmeans_assignment(vectors, &centroids, dim)?;
-
-    Ok((centroids, labels))
+    let gpu_ctx = crate::core::index::gpu::get_thread_gpu_context()
+        .unwrap_or_else(crate::core::index::gpu::ComputeContext::auto_detect);
+    let ann_ctx = gpu_ctx.to_gpu_ann_context();
+    benostream_gpu_ann::e_means::train_emeans(vectors, dim, config, &ann_ctx)
 }
 
-fn initialize_centroids(
-    vectors: &[f32],
-    dim: usize,
-    k: usize,
-    seed: u64,
-) -> Result<(Vec<f32>, Vec<f32>)> {
-    use rand::{Rng, SeedableRng};
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let n = vectors.len() / dim;
+/// Train centroids using e-means on a slice of vector references (`Vec<Vec<f32>>` interface).
+///
+/// Flattens the input vector buffers, delegates to `train_emeans`, and reconstitutes
+/// centroid vectors into `Vec<Vec<f32>>`.
+pub fn train_emeans_vectors(
+    vectors: &[Vec<f32>],
+    config: &EMeansConfig,
+) -> Result<(Vec<Vec<f32>>, Vec<usize>)> {
+    let n = vectors.len();
+    anyhow::ensure!(n > 0, "Vector buffer must not be empty");
+    let dim = vectors[0].len();
+    anyhow::ensure!(dim > 0, "Vector dimension must be greater than 0");
 
-    let mut centroids = vec![0.0f32; k * dim];
-    let mut chosen = std::collections::HashSet::with_capacity(k);
+    let flat: Vec<f32> = vectors.iter().flat_map(|v| v.iter().copied()).collect();
+    let (centroids_flat, labels) = train_emeans(&flat, dim, config)?;
 
-    for j in 0..k {
-        let mut idx = rng.gen_range(0..n);
-        while chosen.contains(&idx) && chosen.len() < n {
-            idx = rng.gen_range(0..n);
-        }
-        chosen.insert(idx);
+    let centroids: Vec<Vec<f32>> = centroids_flat.chunks(dim).map(|c| c.to_vec()).collect();
+    let labels_usize: Vec<usize> = labels.into_iter().map(|l| l as usize).collect();
 
-        let src = &vectors[idx * dim..(idx + 1) * dim];
-        centroids[j * dim..(j + 1) * dim].copy_from_slice(src);
-    }
-
-    let usage = vec![INIT_USAGE; k];
-    Ok((centroids, usage))
+    Ok((centroids, labels_usize))
 }
 
 #[cfg(test)]
@@ -310,5 +126,45 @@ mod tests {
         assert!(!is_emeans_eligible(50_000, 2048, 128)); // n/k < 30
         assert!(!is_emeans_eligible(100_000, 1024, 2)); // dim <= 2
         assert!(is_emeans_eligible(100_000, 1024, 128)); // eligible
+    }
+
+    #[test]
+    fn test_train_emeans_vectors_synthetic() {
+        let k = 4;
+        let dim = 8;
+        let n_per_cluster = 100;
+
+        let mut vectors = Vec::with_capacity(k * n_per_cluster);
+        for c in 0..k {
+            let offset = (c as f32) * 10.0;
+            for _ in 0..n_per_cluster {
+                let mut v = Vec::with_capacity(dim);
+                for _ in 0..dim {
+                    v.push(offset + 0.1);
+                }
+                vectors.push(v);
+            }
+        }
+
+        let config = EMeansConfig {
+            k,
+            nepochs: 3,
+            batch_law: BatchLaw::Fixed(64),
+            fixed_alpha0: Some(0.5),
+            unused_threshold: Some(0.1),
+            seed: DEFAULT_EMEANS_SEED,
+        };
+
+        let (centroids, assignments) =
+            train_emeans_vectors(&vectors, &config).expect("train_emeans_vectors failed");
+
+        assert_eq!(centroids.len(), k);
+        assert_eq!(assignments.len(), k * n_per_cluster);
+
+        let mut unique_labels = std::collections::HashSet::new();
+        for &l in &assignments {
+            unique_labels.insert(l);
+        }
+        assert_eq!(unique_labels.len(), k);
     }
 }

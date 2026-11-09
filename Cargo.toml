@@ -75,7 +75,7 @@ metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
 
 
 [dependencies]
-benostream-gpu-ann = { version = "0.1.0", path = "benostream-gpu-ann", default-features = false }
+benostream-gpu-ann = { version = "0.2.0", path = "benostream-gpu-ann", default-features = false }
 libc = "0.2"
 # core columnar memory format
 # `pyarrow` (which pulls pyo3 → libpython) is only needed for the Python

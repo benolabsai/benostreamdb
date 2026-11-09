@@ -39,14 +39,20 @@
 
 pub mod backend;
 pub mod cagra;
+pub mod e_means;
+pub mod fastscan;
 pub mod hnsw;
+pub mod ivf_fastscan;
 pub mod ivf_flat;
 pub mod kmeans;
 pub mod metric;
 
 pub use backend::{ComputeContext, GpuBackend};
 pub use cagra::CagraIndex;
+pub use e_means::{train_emeans, BatchLaw, EMeansConfig};
+pub use fastscan::FastScanCodebook;
 pub use hnsw::HnswIndex;
+pub use ivf_fastscan::IvfFastScanIndex;
 pub use ivf_flat::{IvfFlatIndex, SearchResult};
 pub use metric::Metric;
 
@@ -55,6 +61,11 @@ pub use metric::Metric;
 pub enum Algorithm {
     /// IVF-Flat coarse Voronoi index (Stage 1: instant build, zero graph overhead)
     IvfFlat { n_lists: Option<usize> },
+    /// IVF FastScan with in-register 4-bit SIMD block inverted lists
+    IvfFastScan {
+        n_lists: Option<usize>,
+        m: Option<usize>,
+    },
     /// GPU-accelerated Hierarchical Navigable Small World graph (Stage 2: batched frontier evaluation)
     Hnsw { m: usize, ef_construction: usize },
     /// GPU-Native Anisotropic Graph (Stage 3: CAGRA fixed-degree graph built entirely on GPU)
@@ -73,6 +84,7 @@ impl Default for Algorithm {
 /// Unified Vector Index container supporting multiple index types.
 pub enum VectorIndex {
     IvfFlat(IvfFlatIndex),
+    IvfFastScan(IvfFastScanIndex),
     Hnsw(HnswIndex),
     Cagra(CagraIndex),
 }
@@ -88,6 +100,7 @@ impl VectorIndex {
     ) -> anyhow::Result<Vec<SearchResult>> {
         match self {
             VectorIndex::IvfFlat(idx) => idx.search(query, k, beam_or_probe, filter),
+            VectorIndex::IvfFastScan(idx) => idx.search(query, k, beam_or_probe, filter),
             VectorIndex::Hnsw(idx) => idx.search(query, k, beam_or_probe, filter),
             VectorIndex::Cagra(idx) => idx.search(query, k, beam_or_probe, filter),
         }
@@ -97,6 +110,7 @@ impl VectorIndex {
     pub fn dim(&self) -> usize {
         match self {
             VectorIndex::IvfFlat(idx) => idx.dim(),
+            VectorIndex::IvfFastScan(idx) => idx.dim(),
             VectorIndex::Hnsw(idx) => idx.dim(),
             VectorIndex::Cagra(idx) => idx.dim(),
         }
@@ -106,6 +120,7 @@ impl VectorIndex {
     pub fn len(&self) -> usize {
         match self {
             VectorIndex::IvfFlat(idx) => idx.len(),
+            VectorIndex::IvfFastScan(idx) => idx.len(),
             VectorIndex::Hnsw(idx) => idx.len(),
             VectorIndex::Cagra(idx) => idx.len(),
         }
@@ -120,6 +135,7 @@ impl VectorIndex {
     pub fn backend_name(&self) -> &str {
         match self {
             VectorIndex::IvfFlat(idx) => idx.backend_name(),
+            VectorIndex::IvfFastScan(idx) => idx.backend_name(),
             VectorIndex::Hnsw(idx) => idx.backend_name(),
             VectorIndex::Cagra(idx) => idx.backend_name(),
         }
@@ -178,6 +194,19 @@ impl IndexBuilder {
         IvfFlatIndex::build(vectors, ids, self.dim, n_lists, self.metric, self.ctx)
     }
 
+    /// Build an IVF-FastScan index with 4-bit in-register SIMD block traversal.
+    pub fn build_ivf_fastscan(
+        self,
+        vectors: &[f32],
+        ids: Option<&[u64]>,
+    ) -> anyhow::Result<IvfFastScanIndex> {
+        let (n_lists, m) = match self.algorithm {
+            Algorithm::IvfFastScan { n_lists, m } => (n_lists, m),
+            _ => (None, None),
+        };
+        IvfFastScanIndex::build(vectors, ids, self.dim, n_lists, m, self.metric, self.ctx)
+    }
+
     /// Build a GPU-accelerated HNSW index specifically (Stage 2).
     pub fn build_hnsw(self, vectors: &[f32], ids: Option<&[u64]>) -> anyhow::Result<HnswIndex> {
         let (m, ef_construction) = match self.algorithm {
@@ -221,6 +250,9 @@ impl IndexBuilder {
             Algorithm::IvfFlat { .. } => {
                 Ok(VectorIndex::IvfFlat(self.build_ivf_flat(vectors, ids)?))
             }
+            Algorithm::IvfFastScan { .. } => Ok(VectorIndex::IvfFastScan(
+                self.build_ivf_fastscan(vectors, ids)?,
+            )),
             Algorithm::Hnsw { .. } => Ok(VectorIndex::Hnsw(self.build_hnsw(vectors, ids)?)),
             Algorithm::Cagra { .. } => Ok(VectorIndex::Cagra(self.build_cagra(vectors, ids)?)),
         }

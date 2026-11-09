@@ -82,3 +82,10 @@ path = "fuzz_targets/connector_inputs.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "e_means"
+path = "fuzz_targets/e_means.rs"
+test = false
+doc = false
+bench = false
