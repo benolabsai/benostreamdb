@@ -278,14 +278,14 @@ mod tests {
         let dim = 128;
         let b = resolve_batch_size(n, k, 5, dim, BatchLaw::Auto);
         assert!(
-            b >= 4096 && b <= 65536,
+            (4096..=65536).contains(&b),
             "Batch size {} out of expected range",
             b
         );
 
         let alpha0 = resolve_alpha0(n, k, 5, b);
         assert!(
-            alpha0 >= 0.01 && alpha0 <= 1.0,
+            (0.01..=1.0).contains(&alpha0),
             "Alpha0 {} out of bounds",
             alpha0
         );
