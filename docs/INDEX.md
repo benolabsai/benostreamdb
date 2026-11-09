@@ -60,7 +60,7 @@ BenoStreamDB provides native connectors and API bridges for data engineering and
 ### 7. Evaluation & Project Roadmap
 * **[Benchmarking Methodology](BENCHMARKING.md)**: Reproducibility contract, test harnesses, and competitive analysis guidelines.
 * **[Benchmarking Plan](BENCHMARKING_PLAN.md)**: Workloads, competitor matrices, and evaluation dimensions.
-* **[MuSiQue GraphRAG Results](../benchmarks/MUSIQUE_PARITY.md)**: Multi-hop retrieval parity with Zilliz/HippoRAG (engine-native two-stage, no hosted LLM).
+* **[MuSiQue GraphRAG Results](MUSIQUE_GRAPHRAG.md)**: Multi-hop retrieval parity with Zilliz/HippoRAG (engine-native two-stage, no hosted LLM).
 * **[Production Readiness Assessment](PRODUCTION_READINESS_ASSESSMENT.md)**: Verification of core invariants and stability milestones.
 * **[Supported Surface & Build Matrix](SUPPORT_MATRIX.md)**: Shipped platforms/ABIs, cargo feature gates, trusted vs untrusted surfaces, and known limitations.
 * **[Project Roadmap](ROADMAP.md)**: Architecture status, shipped milestones, and planned roadmap items.

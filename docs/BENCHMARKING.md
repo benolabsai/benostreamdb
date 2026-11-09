@@ -288,6 +288,11 @@ A standalone multi-hop GraphRAG benchmark, separate from the 8-section sweep.
 It uses the exact corpus, OpenIE graph, and 1,000-question manifest that
 Zilliz/HippoRAG publish, so the comparison is like-for-like.
 
+> **Hardware & Memory Envelope (32 GiB vs. BigANN 16 GiB):**  
+> While NeurIPS BigANN (§5.1) enforces a strict **16 GiB RAM** envelope (Azure `Standard_D8lds_v5`) for columnar streaming and HNSW indexing, MuSiQue is provisioned with a **32 GiB RAM** envelope (`--memory=32g` in `benchmarks/docker-compose.musique.yml` and `benchmarks/run_musique_docker.sh`). The larger memory envelope is strictly required to host the in-memory PyTorch runtime for `bge-large-en-v1.5` (1,024-d dense embeddings) and the BGE cross-encoder reranker alongside four native Apache Iceberg tables.
+>
+> **Metric Distinction:** MuSiQue evaluates **multi-hop retrieval accuracy (Micro Recall@5)** across 1,000 2-to-4 hop reasoning questions—it is a retrieval quality benchmark, not a vector throughput (QPS) benchmark.
+
 ```bash
 # headline: engine-native two-stage retrieval, no hosted LLM
 python3 benchmarks/run_musique_parity.py --mode f32 --reranker bge --rebuild \
@@ -304,20 +309,19 @@ python3 benchmarks/run_musique_entity_rag.py --mode f32 --reranker bge --rebuild
 
 Headline (1,000 questions, `bge-large-en-v1.5`, f32, BGE cross-encoder):
 
-| Strategy | Micro Recall@5 |
-|---|---:|
-| Hop-1 vector search | 0.5600 |
-| Native Personalized PageRank | 0.5520 |
-| **Two-stage + BGE cross-encoder** | **0.5943** |
+| Strategy | Micro Recall@5 | Description |
+|---|---:|---|
+| Hop-1 vector search | 0.5600 | Direct top-$k$ vector similarity on passage embeddings |
+| Native Personalized PageRank | 0.5520 | In-engine PPR traversal over passage co-occurrence graph |
+| **Two-stage + BGE cross-encoder** | **0.5943** | Vector search + DataFusion graph expansion + cross-encoder |
 
 Zilliz's published Naive RAG baseline is 0.5803; the two-stage row clears it
 with the whole loop in-engine (vector search + DataFusion graph traversal +
 local cross-encoder), no hosted LLM and no per-token cost.
 
-The three inputs are git-ignored and reproducible; download locations, the
-entity-level results, and the full reproduce steps are in
-[`benchmarks/MUSIQUE_PARITY.md`](../benchmarks/MUSIQUE_PARITY.md) and
-[`benchmarks/MUSIQUE_RESULTS.md`](../benchmarks/MUSIQUE_RESULTS.md).
+The three inputs are git-ignored and reproducible; full entity-level results,
+data sources, and reproduction steps are documented in
+[`MUSIQUE_GRAPHRAG.md`](MUSIQUE_GRAPHRAG.md).
 
 ---
 

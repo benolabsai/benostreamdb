@@ -25,19 +25,16 @@ BenoStreamDB attaches persistent, reconstructible sidecar index files *alongside
 
 ## Storage Layout: Hybrid Segments
 
-Data is stored in immutable **Segments**, structured as:
+Data is stored in immutable **Segments** pairing open columnar storage with advisory index sidecars:
 
 1.  **Authoritative Raw Data**:
-    *   `segment_id.parquet`: Columnar data written with ZSTD compression and dictionary encoding.
-2.  **Advisory Indexes**:
-    *   `segment_id.col.inv.parquet`: Inverted Indexes (RoaringBitmaps) for scalar filtering.
-    *   `segment_id.col1_col2.comp.parquet`: Composite Roaring Bitmaps for multi-column predicates.
-    *   `segment_id.col.bm25.parquet`: BM25 inverted index sidecar with document lengths.
-    *   `segment_id.col.centroids.parquet`: Vector IV-centroids for IVF clustering.
-    *   `segment_id.col.cluster_N.hnsw.graph`: HNSW graph sidecars (supporting float32 or TurboQuant TQ4/TQ8 packed vectors).
+    *   `data/segment_id.parquet`: Standard Apache Iceberg columnar data files written with ZSTD compression and dictionary encoding. 100% readable by external engines (DuckDB, Spark, Trino, Polars).
+2.  **Advisory Secondary Indexes (Apache Iceberg Puffin Compound Bundles)**:
+    *   `metadata/segment_id.puffin`: As specified in [ADR-001](architecture/ADR_001_TIGHTENED_INDEX_OVERLAY_CONTRACT.md), production deployments consolidate secondary index artifacts into standard Apache Iceberg Puffin (`.puffin`) compound bundles. A single `.puffin` file encapsulates Roaring Bitmap inverted indexes, BM25 term frequencies, and Voronoi-clustered HNSW/TurboQuant vector graphs queried via HTTP byte-range offsets, preventing cloud object count explosion.
+    *   *(Uncompacted / Local Debug Mode)*: Prior to Voronoi cluster compaction (`rebuild_cluster_index`), transient per-column sidecars (`.inv.parquet`, `.bm25.parquet`, `.centroids.parquet`, `.hnsw.graph`) may be emitted before `compact()` or `vacuum()` merges them into compound Puffin bundles.
 3.  **Iceberg Table Metadata**:
-    *   `_manifest/v{N}.avro`: Iceberg V2/V3 snapshot manifests.
-    *   `_metadata/v{N}.metadata.json`: Iceberg table schema, sort orders, and partition specs.
+    *   `_manifest/v{N}.avro`: Standard Iceberg V2/V3 snapshot manifests and manifest lists.
+    *   `_metadata/v{N}.metadata.json`: Iceberg table schema, sort orders, partition specs, and snapshot lineage.
 
 ---
 
