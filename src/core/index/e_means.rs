@@ -199,12 +199,17 @@ pub fn train_emeans(
 ) -> Result<(Vec<f32>, Vec<u32>)> {
     let n = vectors.len() / dim;
     anyhow::ensure!(n > 0, "Vector buffer must not be empty");
-    anyhow::ensure!(n >= config.k, "Vector count {} must exceed cluster count {}", n, config.k);
+    anyhow::ensure!(
+        n >= config.k,
+        "Vector count {} must exceed cluster count {}",
+        n,
+        config.k
+    );
 
     let _batch_size = resolve_batch_size(n, config.k, config.nepochs, dim, config.batch_law);
-    let _alpha0 = config.fixed_alpha0.unwrap_or_else(|| {
-        resolve_alpha0(n, config.k, config.nepochs, _batch_size)
-    });
+    let _alpha0 = config
+        .fixed_alpha0
+        .unwrap_or_else(|| resolve_alpha0(n, config.k, config.nepochs, _batch_size));
 
     let _total_steps = (n * config.nepochs).div_ceil(_batch_size);
 
@@ -272,10 +277,18 @@ mod tests {
         let k = 1024;
         let dim = 128;
         let b = resolve_batch_size(n, k, 5, dim, BatchLaw::Auto);
-        assert!(b >= 4096 && b <= 65536, "Batch size {} out of expected range", b);
+        assert!(
+            b >= 4096 && b <= 65536,
+            "Batch size {} out of expected range",
+            b
+        );
 
         let alpha0 = resolve_alpha0(n, k, 5, b);
-        assert!(alpha0 >= 0.01 && alpha0 <= 1.0, "Alpha0 {} out of bounds", alpha0);
+        assert!(
+            alpha0 >= 0.01 && alpha0 <= 1.0,
+            "Alpha0 {} out of bounds",
+            alpha0
+        );
     }
 
     #[test]
