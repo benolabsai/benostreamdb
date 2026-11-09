@@ -196,8 +196,8 @@ The table below reflects machine-checked verification via `tests/test_iceberg_co
 | **Nanosecond Timestamps** | V2 | ✅ Conformant | `Timestamp(Nanosecond)` round-trips without precision loss. |
 | **Row Lineage** (`next-row-id`) | V3 | ✅ Conformant | `next-row-id` in metadata; `first-row-id` on snapshots. |
 | **Position Deletes** | V2 | ✅ Conformant | Registered in delete manifests; applied during scan planning. |
+| **Deletion Vectors** | V3 | ✅ Conformant | Official Iceberg V3 specification (`content = 3`, `deletion-vector-v1` stored in Puffin). Note: external readers must support Iceberg Format Version 3 (older V2-only readers require position delete files or compaction). |
 | **Compound Puffin Index Blobs** | Spec | ⚠️ Extension | Secondary index overlays (HNSW, BM25, Bitmaps) stored in `.puffin`. Standard readers ignore and fall back to Parquet scans. |
-| **Deletion Vectors** | V3 | ⚠️ Extension | Stored in Puffin blobs (BenoStreamDB extension). |
 | **Staging & WAL Directories** (`_staging`, `_wal`) | Spec | ⚠️ Extension | Durability artifacts stored alongside table root; ignored by external readers. |
 
 ---

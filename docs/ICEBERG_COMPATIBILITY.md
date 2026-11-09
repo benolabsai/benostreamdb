@@ -42,7 +42,7 @@ Validated against **pyiceberg 0.12.0** / **pyarrow 25.0.1**.
 | Nanosecond timestamps | V2 | ✅ Conformant | `Timestamp(Nanosecond)` round-trips without precision loss. |
 | Row lineage (`_row_id`, `_last_updated_sequence_number`) | V3 | ✅ Conformant | `next-row-id` in metadata; `first-row-id`/`added-rows` on the snapshot. |
 | Equality / position deletes | V2 | ✅ Conformant | Delete files registered in manifest entries. |
-| Deletion vectors | V3 | ⚠️ Extension | Written into Puffin blobs (BenoStream extension; not a base V3 reader feature). |
+| Deletion vectors | V3 | ✅ Conformant | Official Iceberg V3 specification (`content = 3`, `deletion-vector-v1` stored in Puffin). Note: external readers must support Iceberg Format Version 3 (older V2-only readers require position delete files or compaction). |
 | Puffin index blobs | — | ⚠️ Extension | BenoStream overlay indexes (HNSW/TQ/PQ/BM25/bitmap) ride in Puffin; standard readers ignore them and fall back to full scans. |
 | `_staging`, `_wal` directories | — | ⚠️ Extension | BenoStream durability artifacts; standard readers ignore them. |
 
@@ -55,9 +55,7 @@ Legend: ✅ conformant and machine-checked · ⚠️ documented deviation/extens
    full scan; only BenoStream uses the overlay indexes.
 2. **`_staging/` and `_wal/` directories** live beside the table. They are
    ignored by standard readers and excluded from orphan cleanup.
-3. **Deletion vectors** are supported as a BenoStream extension over Puffin,
-   not as a base V3 reader feature.
-4. **pgvector-style vector types** (`FixedSizeList<Float32>` etc.) are stored as
+3. **pgvector-style vector types** (`FixedSizeList<Float32>` etc.) are stored as
    standard Iceberg `list<float>` columns; vector distance operators are
    BenoStream SQL extensions (see the README's pgvector notes).
 
