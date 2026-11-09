@@ -579,7 +579,9 @@ impl Iterator for StreamRecordBatchReader {
                             if let Ok(col) = batch.column_by_name(field.name()).ok_or(()) {
                                 if col.data_type() != field.data_type() {
                                     let casted = arrow::compute::cast(col, field.data_type())
-                                        .map_err(|e| arrow::error::ArrowError::CastError(e.to_string()))?;
+                                        .map_err(|e| {
+                                            arrow::error::ArrowError::CastError(e.to_string())
+                                        })?;
                                     new_columns.push(casted);
                                 } else {
                                     new_columns.push(col.clone());

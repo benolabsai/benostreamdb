@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# .git/hooks/pre-push
+# BenoStreamDB Pre-Push Git Hook
+# Automatically blocks any git push (branches or tags) if pre-release checks fail locally.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CHECK_SCRIPT="${REPO_ROOT}/scripts/pre_release_check.sh"
+
+echo "================================================================="
+echo " [Git Pre-Push Hook] Running pre-release verification suite..."
+echo "================================================================="
+
+if [[ ! -x "${CHECK_SCRIPT}" ]]; then
+    chmod +x "${CHECK_SCRIPT}"
+fi
+
+if ! "${CHECK_SCRIPT}"; then
+    echo ""
+    echo "❌ [Git Pre-Push Hook] REJECTED: Local checks failed!"
+    echo "Fix formatting, clippy warnings, or version alignment before pushing."
+    exit 1
+fi
+
+echo "✅ [Git Pre-Push Hook] All checks passed. Proceeding with push."
+exit 0
