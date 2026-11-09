@@ -1,5 +1,7 @@
 # Iceberg Compatibility Matrix
 
+> **Authoritative Guide:** For the unified guide to Apache Iceberg storage, Python APIs, and zero-copy external engine reads, see [Apache Iceberg Storage & Zero-Copy Interoperability](ICEBERG_STORAGE.md).
+
 This document records which Iceberg V2/V3 features BenoStreamDB writes and reads
 conformantly, how that is validated, and the known deviations. It is the
 "published compatibility matrix" deliverable of WS4 in

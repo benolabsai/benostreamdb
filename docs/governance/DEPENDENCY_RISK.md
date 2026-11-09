@@ -1,7 +1,7 @@
 # Dependency Risk & Advisory Tracking Plan
 
 Status: living document. Owner: BenoStreamDB core.
-Companion config: [`audit.toml`](../audit.toml) (cargo-audit), [`deny.toml`](../deny.toml) (cargo-deny).
+Companion config: [`audit.toml`](../../audit.toml) (cargo-audit), [`deny.toml`](../../deny.toml) (cargo-deny).
 
 This document is the **tracking plan** for advisories we have reviewed and
 accepted. It exists so the allow-lists in `audit.toml` / `deny.toml` cannot
@@ -30,7 +30,7 @@ assessment, a migration path, and a review date.
 |---|---|
 | Crate / version | `bincode` 2.0.1 |
 | Kind | Unmaintained (not a vulnerability) |
-| Chain | **Direct** dependency of `benostreamdb` (`Cargo.toml`), used in [`src/core/index/hnsw_rs/hnswio.rs`](../src/core/index/hnsw_rs/hnswio.rs) |
+| Chain | **Direct** dependency of `benostreamdb` (`Cargo.toml`), used in [`src/core/index/hnsw_rs/hnswio.rs`](../../src/core/index/hnsw_rs/hnswio.rs) |
 | Reachability | Runtime, but only for HNSW point-vector dump/load. The bytes are our own index sidecars (reconstructible from the data), not untrusted input. `config::legacy()` is byte-compatible with bincode 1.3, so older dumps still load. |
 | Migration path | Replace with a maintained serializer (`postcard`, `rmp-serde`, or `ciborium`). This changes the on-disk format, so it requires a **format-version bump + index rebuild** — acceptable because HNSW sidecars are reconstructible. No drop-in maintained successor shares bincode's wire format. |
 | Status | Accepted, tracked. |
@@ -81,7 +81,7 @@ assessment, a migration path, and a review date.
 | Crate / version | `zstd` 0.13.3 (0391) and `zstd-safe` 7.2.4 (0398, 0403). `zstd-sys` was already bumped to the patched `2.1.2+zstd.1.5.7`, clearing RUSTSEC-2026-0410. |
 | Kind | Vulnerability (memory disclosure / UB) |
 | Chain | **Transitive**: `arrow-ipc 57.3.1`, `parquet 57.3.1`, `datafusion 52.5.0`, `datafusion-datasource 52.5.0` and `compression-codecs 0.4.38` all require `zstd ^0.13` / `zstd-safe ^7.2`. Only `arrow-ipc` **60.0.0** accepts `zstd ^0.14`, i.e. the fix rides on the Arrow 60 / DataFusion 54 migration. |
-| Reachability | **Not reachable in this configuration.** <br>• **0391** needs the `with_context` stream encoders/decoders to be reused across logically separate streams (e.g. per-user contexts). We never call them: the only direct `zstd` call sites are [`zstd::decode_all`](../src/core/puffin.rs) in the Puffin blob reader, and the parquet/datafusion paths use the bulk API.<br>• **0398** lives behind `zstd-safe`'s `seekable` feature, which is **not enabled** (`cargo tree -e features -i zstd-safe` shows `arrays,legacy,std,zdict_builder` only).<br>• **0403** requires the `zstd::stream::write::Decoder` push path with a corrupt legacy (v0.4–v0.7) frame; the advisory states `zstd::stream::read::Decoder`, `zstd::decode_all` and the bulk API are unaffected, and those are the only paths in the graph. |
+| Reachability | **Not reachable in this configuration.** <br>• **0391** needs the `with_context` stream encoders/decoders to be reused across logically separate streams (e.g. per-user contexts). We never call them: the only direct `zstd` call sites are [`zstd::decode_all`](../../src/core/puffin.rs) in the Puffin blob reader, and the parquet/datafusion paths use the bulk API.<br>• **0398** lives behind `zstd-safe`'s `seekable` feature, which is **not enabled** (`cargo tree -e features -i zstd-safe` shows `arrays,legacy,std,zdict_builder` only).<br>• **0403** requires the `zstd::stream::write::Decoder` push path with a corrupt legacy (v0.4–v0.7) frame; the advisory states `zstd::stream::read::Decoder`, `zstd::decode_all` and the bulk API are unaffected, and those are the only paths in the graph. |
 | Fix status | Blocked upstream: no 0.13.x / 7.x backport exists. `cargo update -p zstd -p zstd-safe` resolves to the vulnerable versions. |
 | Migration path | Bump the data stack to `arrow`/`parquet` 60 + `datafusion` 54, which moves `zstd` to 0.14 and `zstd-safe` to 8.x. Do **not** add a second `zstd 0.14` copy for our own direct use: it would duplicate the C library without removing the vulnerable copies transitively used by parquet/Arrow. Remove the three ignores once `cargo tree -i zstd` reports 0.14.3+. |
 | Status | Accepted, tracked. |

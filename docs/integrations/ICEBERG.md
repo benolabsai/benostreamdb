@@ -1,5 +1,7 @@
 # Zero-copy reads with the Trino Iceberg connector
 
+> **Authoritative Guide:** For the comprehensive guide to Apache Iceberg storage architecture, Python APIs, and conformance specifications, see [Apache Iceberg Storage & Zero-Copy Interoperability](../ICEBERG_STORAGE.md).
+
 BenoStreamDB already stores its data as Parquet and already writes Iceberg-shaped
 metadata. Making that metadata **spec-compliant** means an Iceberg reader can open
 a BenoStreamDB table directory directly: no export, no rewrite, no second copy of

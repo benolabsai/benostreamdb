@@ -30,7 +30,8 @@ BenoStreamDB provides native connectors and API bridges for data engineering and
 * **[ADR-001: Tightened Index Overlay Contract](architecture/ADR_001_TIGHTENED_INDEX_OVERLAY_CONTRACT.md)**: Compound Puffin bundles, artifact lifecycle, and metadata synchronization.
 
 ### 2. Table Storage & Catalogs
-* **[Iceberg Format Compatibility](ICEBERG_COMPATIBILITY.md)**: Conformance matrix for Apache Iceberg V2 and V3 specifications.
+* **[Apache Iceberg Storage & Zero-Copy Interop](ICEBERG_STORAGE.md)**: Unified architecture guide to native Iceberg V2/V3 storage, PyIceberg validation, metadata specifications, partition/sort evolution, and multi-engine zero-copy reads (DuckDB, Spark, Trino).
+* **[Iceberg Format Compatibility](ICEBERG_COMPATIBILITY.md)**: Granular conformance matrix for Apache Iceberg V2 and V3 specifications.
 * **[Iceberg V2/V3 APIs & Evolution](ICEBERG_V2_V3_API.md)**: Sort orders, partition spec evolution, row lineage, and statistics.
 * **[Catalog Integration Guide](CATALOG_USAGE.md)**: Production catalog configuration for Apache Polaris, Project Nessie, AWS Glue, Hive Metastore, Databricks Unity, and JDBC.
 
@@ -50,7 +51,8 @@ BenoStreamDB provides native connectors and API bridges for data engineering and
 * **[Monitoring & Observability](MONITORING.md)**: Prometheus metrics endpoints, OpenTelemetry traces, and health check probes.
 * **[Recovery Runbook](RECOVERY_RUNBOOK.md)**: Operational runbook for crash recovery, WAL truncation, and index reconciliation.
 * **[Zero-Panic Policy](NO_PANIC_POLICY.md)**: Engineering invariants ensuring production paths fail gracefully with descriptive errors instead of crashing.
-* **[Dependency Risk Analysis](DEPENDENCY_RISK.md)**: Supply chain posture and reviewed dependency advisories.
+* **[Dependency Risk Analysis](governance/DEPENDENCY_RISK.md)**: Supply chain posture and reviewed dependency advisories.
+* **[Architecture Review Response](governance/ARCHITECTURE_REVIEW_RESPONSE.md)**: Point-in-time responses to external architectural and security audits.
 
 ### 6. Tutorials & Walkthroughs
 * **[Tutorial 1: AI Retrieval via MCP](tutorials/01_AI_RETRIEVAL_MCP.md)**: Building an agentic retrieval pipeline with MCP tools.

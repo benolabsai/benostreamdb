@@ -1,5 +1,7 @@
 # Iceberg V2/V3 API Documentation
 
+> **Authoritative Guide:** For the unified guide to Apache Iceberg storage, physical layout controls, and external engine interoperability, see [Apache Iceberg Storage & Zero-Copy Interoperability](ICEBERG_STORAGE.md).
+
 ## Table of Contents
 - [Sort Orders (V2)](#sort-orders-v2)
 - [Partition Spec Evolution (V2)](#partition-spec-evolution-v2)

@@ -2,10 +2,14 @@
 
 ## Overview
 
-BenoStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration support across multiple hardware backends. This API allows you to compute distances between vectors directly from Python without writing SQL queries, with optional GPU acceleration for high-performance batch operations.
+BenoStreamDB provides a high-performance Python API for batch vector distance computations with SIMD and GPU acceleration support across multiple hardware backends. This API allows you to compute standalone distances directly over PyArrow arrays, NumPy matrices, and PyTorch tensors without database overhead.
 
 > [!NOTE]
-> This guide covers **standalone** distance functions for CPU/GPU. For persistent vector storage and search with TurboQuant indexing (TQ8/TQ4), please see [Vector Configuration](CONFIGURATION.md).
+> **Table Vector Search vs. Standalone Kernels:**
+> - For **Table Vector Search via SQL** (using standard PostgreSQL pgvector operators `<=>`, `<->`, `<#>` in DataFusion), see the [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md).
+> - For **Table Vector Search via Python** (`table.vector_search()`, `table.hybrid_search()`), see the [2-Minute Quickstart](QUICKSTART.md) and [Python Client Guide](integrations/PYTHON.md).
+> - For **Index Configuration & Quantizers** (HNSW, TurboQuant TQ8/TQ4, SQ8, IVF), see [Configuration Reference](CONFIGURATION.md).
+> - This document specifically details the **standalone, in-memory batch vector distance kernels** on CPU/GPU.
 
 ## Supported Distance Metrics
 
