@@ -439,6 +439,32 @@ Themes are ordered by priority.
 
 ---
 
+### Theme 12: High-Throughput Coarse Quantization via e-means (v0.16.0)
+*10× faster coarse quantizer clustering at lower quantization loss via stochastic exponential moving averages.* — 🔴 **High Priority (Committed for v0.16.0)**
+
+> **Why now.** Coarse centroid clustering is the primary computational bottleneck in building large-scale IVF, IVF-PQ, and TurboGraph partition overlays. Current implementations in `src/core/index/ivf.rs` rely on classical Lloyd's algorithm truncated to 10 iterations to prevent index build times from exploding. Truncated Lloyd's produces suboptimal Voronoi boundaries, directly hurting search recall at query time. Full convergence under Lloyd requires 20–25 full passes over the dataset. On out-of-core Parquet tables, scanning multi-gigabyte vector segments 25 times is I/O prohibitive.
+
+> **Algorithmic Foundation.** Based on the research by Meta FAIR / Faiss team (*"e-means: outperforming k-means in one-tenth the epochs"*, Bessa et al., arXiv:2611.09501, Nov 2026):
+> 1. **Exponential Moving Average (EMA) Updates**: Maintains running sum $S_j$ and mass count $N_j$. Centroid position $c_j = S_j / N_j$ is guaranteed to stay within the convex hull of assigned vectors, avoiding the overshooting of SGD.
+> 2. **Empirical Scaling Laws**: Automatically calculates mini-batch size $B$ and initial step size $\alpha_0$ from $(N, k, T)$ without user tuning.
+> 3. **Cosine Annealing**: Step size decays from $\alpha_0$ to $0.1 \alpha_0$ over $T$ epochs (default $T=3\dots 5$).
+> 4. **Dead-Cluster Revival via Mass-Proportional Donor Splitting**: Centroids falling below $0.1 \cdot \bar{N}$ are revived by splitting high-mass clusters along alternating perturbations ($\epsilon = 10^{-4}$), cutting dead centroids to $<0.3\%$.
+> 5. **Exact Last-Epoch Mean Finalization**: Strips residual EMA stochastic variance on the final pass.
+
+- [ ] **Pure Rust Core Engine (`src/core/index/e_means.rs`)** — 🔴 **High Priority**:
+  - Implement streaming mini-batch accumulator, cosine step schedule, and mass-proportional donor splitting.
+  - Implement Meta FAIR scaling laws for $(B, \alpha_0)$ with manual override support in index DDL.
+  - Full code attribution and MIT license header honoring Meta Platforms copyright.
+- [ ] **Gating & IVF Integration (`src/core/index/ivf.rs`)** — 🔴 **High Priority**:
+  - Activate e-means automatically when $N \ge 10,000$, $k \ge 64$, $N / k \ge 30$, and $d > 2$.
+  - Fall back to classical Lloyd's for small $N$ / micro-codebooks ($k=256, d \le 16$).
+- [ ] **Fuzzing & Robustness (`fuzz/fuzz_targets/e_means.rs`)** — 🔴 **High Priority**:
+  - Fuzz batch accumulators, donor splits, degenerate inputs (zero vectors, colinear points, extreme norms), and assert absence of NaNs and panics.
+- [ ] **Empirical Benchmarks (SIFT-1M & Cohere-10M)** — 🔴 **High Priority**:
+  - Verify 8–12× epoch reduction translates to 4–6× CPU / 10× GPU wall-clock index build acceleration with equal or better recall@10.
+
+---
+
 ## Benchmarks as Product Work
 
 Benchmarks and demonstrations are part of the product, not marketing polish.
