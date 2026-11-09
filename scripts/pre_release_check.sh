@@ -49,13 +49,23 @@ echo "PASS: Cargo check passed on all targets and binaries."
 
 # 5. Rustdoc Lint (mirrors ci.yml 'Build API docs')
 echo ""
-echo "--> [4/7] Checking documentation links and build (cargo doc)..."
+echo "--> [4/8] Checking documentation links and build (cargo doc)..."
 ${CARGO_CMD} doc --no-deps --features java
 echo "PASS: cargo doc passed without broken doc links."
 
-# 6. Version Single-Source Verification (mirrors ci.yml 'version-check')
+# 6. Cargo Deny / Security Advisory Check (mirrors ci.yml 'Cargo Audit')
 echo ""
-echo "--> [5/7] Asserting version single-source alignment across all connectors..."
+echo "--> [5/8] Running Cargo Deny security audit (cargo deny check)..."
+if command -v cargo-deny &> /dev/null; then
+    cargo deny --manifest-path "${REPO_ROOT}/Cargo.toml" check
+    echo "PASS: cargo deny audit passed (0 unreviewed vulnerabilities/bans)."
+else
+    echo "WARNING: cargo-deny is not installed locally. Skipping local audit step."
+fi
+
+# 7. Version Single-Source Verification (mirrors ci.yml 'version-check')
+echo ""
+echo "--> [6/8] Asserting version single-source alignment across all connectors..."
 python3 - <<'PY'
 import pathlib, re, sys
 
@@ -139,9 +149,9 @@ print("PASS: All connectors, crates, and metadata match workspace version.")
 PY
 echo "PASS: Version alignment verified."
 
-# 7. Python Regressions
+# 8. Python Regressions
 echo ""
-echo "--> [6/7] Running Python regression tests..."
+echo "--> [7/8] Running Python regression tests..."
 PY_BIN="python3"
 if [[ -f "${REPO_ROOT}/../benolabs/.venv/bin/python" ]]; then
     PY_BIN="${REPO_ROOT}/../benolabs/.venv/bin/python"
@@ -155,9 +165,9 @@ if [[ -f "${REPO_ROOT}/tests/python/test_vector_string_conformance.py" ]]; then
 fi
 echo "PASS: Python regression tests passed."
 
-# 8. Git Status & Uncommitted Check
+# 9. Git Status & Uncommitted Check
 echo ""
-echo "--> [7/7] Checking for unformatted or uncommitted modifications..."
+echo "--> [8/8] Checking for unformatted or uncommitted modifications..."
 if ! git diff --quiet; then
     echo "WARNING: Modified uncommitted files found in working tree:"
     git status -s
