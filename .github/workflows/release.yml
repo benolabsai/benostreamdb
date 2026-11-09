@@ -576,10 +576,10 @@ jobs:
             crate="$1"
             echo "Publishing $crate to crates.io..."
             if ! cargo publish -p "$crate" --token "${CARGO_REGISTRY_TOKEN}" --allow-dirty 2>"${crate}.err"; then
-              cat "${crate}.err"
-              if grep -qi "already exists on crates.io" "${crate}.err"; then
+              if grep -qiE "(already exists on crates\.io|already uploaded)" "${crate}.err"; then
                 echo "$crate already exists on crates.io, continuing."
               else
+                cat "${crate}.err"
                 echo "::error::cargo publish failed for $crate"
                 exit 1
               fi
