@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1215,7 +1215,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb-search"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "anyhow",
  "arrow",

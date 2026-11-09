@@ -23,7 +23,7 @@ echo "Using: $(${CARGO_CMD} --version)"
 
 # 2. Rust Formatting Check (mirrors ci.yml 'Check formatting')
 echo ""
-echo "--> [1/7] Checking Rust code formatting (cargo fmt --check)..."
+echo "--> [1/10] Checking Rust code formatting (cargo fmt --check)..."
 if ! ${CARGO_CMD} fmt --check; then
     echo "ERROR: Rust code formatting check failed!"
     echo "Run 'cargo fmt' to automatically apply formatting fixes before committing."
@@ -33,7 +33,7 @@ echo "PASS: cargo fmt --check passed."
 
 # 3. Rust Clippy (mirrors ci.yml 'Run Clippy')
 echo ""
-echo "--> [2/7] Running Clippy on all targets (cargo clippy --all-targets)..."
+echo "--> [2/10] Running Clippy on all targets (cargo clippy --all-targets)..."
 if ! ${CARGO_CMD} clippy --all-targets; then
     echo "ERROR: Clippy checks failed!"
     exit 1
@@ -42,20 +42,20 @@ echo "PASS: Clippy passed with 0 warnings."
 
 # 4. Cargo Check (mirrors ci.yml 'Run Cargo Check' & 'Check binary targets')
 echo ""
-echo "--> [3/7] Checking compilation on all targets & bins..."
+echo "--> [3/10] Checking compilation on all targets & bins..."
 ${CARGO_CMD} check --all-targets
 ${CARGO_CMD} check --bins
 echo "PASS: Cargo check passed on all targets and binaries."
 
 # 5. Rustdoc Lint (mirrors ci.yml 'Build API docs')
 echo ""
-echo "--> [4/8] Checking documentation links and build (cargo doc)..."
+echo "--> [4/10] Checking documentation links and build (cargo doc)..."
 ${CARGO_CMD} doc --no-deps --features java
 echo "PASS: cargo doc passed without broken doc links."
 
 # 6. Cargo Deny / Security Advisory Check (mirrors ci.yml 'Cargo Audit')
 echo ""
-echo "--> [5/8] Running Cargo Deny security audit (cargo deny check)..."
+echo "--> [5/10] Running Cargo Deny security audit (cargo deny check)..."
 if command -v cargo-deny &> /dev/null; then
     cargo deny --manifest-path "${REPO_ROOT}/Cargo.toml" check
     echo "PASS: cargo deny audit passed (0 unreviewed vulnerabilities/bans)."
@@ -65,7 +65,7 @@ fi
 
 # 7. Version Single-Source Verification (mirrors ci.yml 'version-check')
 echo ""
-echo "--> [6/8] Asserting version single-source alignment across all connectors..."
+echo "--> [6/10] Asserting version single-source alignment across all connectors..."
 python3 - <<'PY'
 import pathlib, re, sys
 
@@ -149,9 +149,26 @@ print("PASS: All connectors, crates, and metadata match workspace version.")
 PY
 echo "PASS: Version alignment verified."
 
-# 8. Python Regressions
+# 8. Rust Unit & Regression Tests (including fuzzer regression test cases)
 echo ""
-echo "--> [7/8] Running Python regression tests..."
+echo "--> [7/10] Running core Rust unit & regression tests..."
+${CARGO_CMD} test --lib core::planner::between_dump_tests
+echo "PASS: Core parser and fuzzer regression tests passed."
+
+# 9. Fuzz Smoke Check (untrusted connector input parsers)
+echo ""
+echo "--> [8/10] Running fuzz smoke test on untrusted parser inputs..."
+if command -v cargo-fuzz &> /dev/null && command -v rustup &> /dev/null && rustup toolchain list | grep -q "^nightly"; then
+    echo "Running 500-run smoke test on connector_inputs with cargo-fuzz..."
+    (cd "${REPO_ROOT}/fuzz" && cargo +nightly fuzz run connector_inputs -- -runs=500 -max_total_time=10)
+    echo "PASS: Fuzz smoke test passed with 0 crashes."
+else
+    echo "NOTE: cargo-fuzz or nightly toolchain not found; relying on Rust regression unit tests."
+fi
+
+# 10. Python Regressions
+echo ""
+echo "--> [9/10] Running Python regression tests..."
 PY_BIN="python3"
 if [[ -f "${REPO_ROOT}/../benolabs/.venv/bin/python" ]]; then
     PY_BIN="${REPO_ROOT}/../benolabs/.venv/bin/python"
@@ -165,9 +182,9 @@ if [[ -f "${REPO_ROOT}/tests/python/test_vector_string_conformance.py" ]]; then
 fi
 echo "PASS: Python regression tests passed."
 
-# 9. Git Status & Uncommitted Check
+# 11. Git Status & Uncommitted Check
 echo ""
-echo "--> [8/8] Checking for unformatted or uncommitted modifications..."
+echo "--> [10/10] Checking for unformatted or uncommitted modifications..."
 if ! git diff --quiet; then
     echo "WARNING: Modified uncommitted files found in working tree:"
     git status -s

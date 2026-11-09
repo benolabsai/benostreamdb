@@ -284,6 +284,23 @@ impl FilterExpr {
     /// # Errors
     /// Returns an error if the SQL is malformed or type coercion fails.
     pub async fn parse_sql(filter: &str, schema: SchemaRef) -> anyhow::Result<Self> {
+        use futures::FutureExt;
+        let filter_owned = filter.to_string();
+        let schema_owned = schema.clone();
+
+        match std::panic::AssertUnwindSafe(Self::parse_sql_inner(filter_owned, schema_owned))
+            .catch_unwind()
+            .await
+        {
+            Ok(res) => res,
+            Err(_) => Err(anyhow::anyhow!(
+                "Failed to parse filter expression: '{}'",
+                filter
+            )),
+        }
+    }
+
+    async fn parse_sql_inner(filter: String, schema: SchemaRef) -> anyhow::Result<Self> {
         use datafusion::sql::TableReference;
 
         let sql = format!("SELECT * FROM t WHERE {}", filter);
@@ -942,6 +959,19 @@ mod between_dump_tests {
         // 20-29 and 30-39 overlap the range and must be kept.
         assert!(planner.might_match_expr(&entry_with_id_range(20, 29), &fe));
         assert!(planner.might_match_expr(&entry_with_id_range(30, 39), &fe));
+    }
+
+    #[tokio::test]
+    async fn fuzzer_dec_question_mark() {
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+            arrow::datatypes::Field::new("title", arrow::datatypes::DataType::Utf8, true),
+        ]));
+        let res = FilterExpr::parse_sql("dec?", schema).await;
+        assert!(
+            res.is_err(),
+            "malformed expression 'dec?' must return an Err, not panic"
+        );
     }
 }
 
