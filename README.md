@@ -5,6 +5,10 @@
 # BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
+**Links:** [Docs](https://www.benostreamdb.org) · [Benchmarks](benchmarks/results/BENCHMARK_REPORT.md) · [Changelog](CHANGELOG.md) · [Beno Labs](https://www.benolabsai.com)
+
+**Links:** [Docs](https://www.benostreamdb.org) · [Benchmarks](benchmarks/results/BENCHMARK_REPORT.md) · [Changelog](CHANGELOG.md) · [Beno Labs](https://www.benolabsai.com)
+
 > ⚠️ **Developer Preview (v0.15.1)**
 > BenoStreamDB is an early-stage database engine intended for evaluation, benchmarking, and community feedback. 
 > - **API & Storage Mutability:** APIs, configuration schemas, and secondary index sidecar on-disk layouts may evolve between preview releases.
@@ -1134,6 +1138,14 @@ benostreamdb/
 - [x] **AI Agent Tools & Client Ecosystem**: Dedicated Model Context Protocol (MCP) server (`contrib/benostreamdb-mcp`) shipped. LangChain/LlamaIndex vector store adapters remain.
 
 *For the complete detailed roadmap and architecture status, see [docs/ROADMAP.md](docs/ROADMAP.md).*
+
+## 🔗 Links
+
+- **Documentation:** [benostreamdb.org](https://www.benostreamdb.org)
+- **Benchmarks:** [BENCHMARK_REPORT.md](benchmarks/results/BENCHMARK_REPORT.md)
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
+- **Engineering Blog:** [benolabsai.com/blog](https://www.benolabsai.com/blog/)
+- **Beno Labs:** [benolabsai.com](https://www.benolabsai.com)
 
 ## 🤝 Contributing
 
