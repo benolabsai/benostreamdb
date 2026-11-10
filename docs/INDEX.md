@@ -36,6 +36,7 @@ BenoStreamDB provides native connectors and API bridges for data engineering and
 * **[ADR-007: Trino Table-Function Pushdown](https://www.benostreamdb.org/guides/adr_007.html)**: Why vector and graph access goes through table functions rather than `applyTopN`, and the procedures that mirror the Spark maintenance surface.
 * **[ADR-008: Binding Ergonomics](https://www.benostreamdb.org/guides/adr_008.html)**: Removing the `arrow_cast(...)` tax from graph and vector SQL, and what remains open.
 * **[ADR-009: Native Connector Architecture](https://www.benostreamdb.org/guides/adr_009.html)**: Iceberg-free Spark DSv2, UDF exposure through pass-through SQL and table functions, and the Scala/Trino version matrix.
+* **[ADR-010: PendingCommit Transaction State Machine](https://www.benostreamdb.org/guides/adr_010.html)**: Explicit `Staging -> ManifestCommitted -> IcebergPublished` commit phases, linearizable `buffer_epoch` read double-check, segmented WAL rotation/watermark pruning, and V3/REST CAS convergence.
 
 ### 2. Table Storage & Catalogs
 * **[Apache Iceberg Storage & Zero-Copy Interop](ICEBERG_STORAGE.md)**: Unified architecture guide to native Iceberg V2/V3 storage, PyIceberg validation, metadata specifications, partition/sort evolution, and multi-engine zero-copy reads (DuckDB, Spark, Trino).

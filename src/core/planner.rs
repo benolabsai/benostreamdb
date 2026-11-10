@@ -109,6 +109,11 @@ pub struct VectorSearchParams {
     pub radius: Option<f32>,
     /// Optional table-level routing candidates: only these segments contain candidate clusters
     pub candidate_segments: Option<std::sync::Arc<std::collections::HashSet<String>>>,
+    /// Segments evaluated by the router that produced `candidate_segments`. When set,
+    /// only segments present in this set may be pruned by `candidate_segments`, so
+    /// unindexed segments absent from the router fall back to flat scan instead of
+    /// being silently dropped.
+    pub routed_segments: Option<std::sync::Arc<std::collections::HashSet<String>>>,
     /// Optional targeted clusters to probe per segment: segment_id -> Vec<cluster_id>
     pub targeted_clusters: Option<std::sync::Arc<std::collections::HashMap<String, Vec<usize>>>>,
     /// Optional refinement/oversampling factor for two-stage exact rescoring
@@ -129,6 +134,7 @@ impl VectorSearchParams {
             use_mmap: true, // Default to true for zero-copy
             radius: None,
             candidate_segments: None,
+            routed_segments: None,
             targeted_clusters: None,
             refine_factor: None,
         }
@@ -142,6 +148,16 @@ impl VectorSearchParams {
     ) -> Self {
         self.candidate_segments = Some(candidate_segments);
         self.targeted_clusters = Some(targeted_clusters);
+        self
+    }
+
+    /// Record the universe of segments covered by `candidate_segments` so unindexed
+    /// segments outside the router are not pruned.
+    pub fn with_routed_segments(
+        mut self,
+        routed_segments: std::sync::Arc<std::collections::HashSet<String>>,
+    ) -> Self {
+        self.routed_segments = Some(routed_segments);
         self
     }
 
@@ -1454,7 +1470,8 @@ impl QueryPlanner {
     /// Returns `true` if no stats are available (conservative: must scan).
     pub fn might_match_vector(&self, entry: &ManifestEntry, params: &VectorSearchParams) -> bool {
         // Table-level router pruning: if candidate segments are specified, only
-        // segments containing probed centroids are allowed.
+        // segments evaluated by the router may be pruned so unindexed segments
+        // outside `routed_segments` still fall back to flat scan.
         if let Some(ref candidates) = params.candidate_segments {
             let file_path = &entry.file_path;
             let name = file_path
@@ -1465,7 +1482,12 @@ impl QueryPlanner {
             let name = name.strip_suffix(".parquet").unwrap_or(name);
             let seg_id = name;
 
-            if !candidates.contains(seg_id) && !candidates.contains(file_path) {
+            let was_routed = params
+                .routed_segments
+                .as_ref()
+                .is_none_or(|routed| routed.contains(seg_id) || routed.contains(file_path));
+
+            if was_routed && !candidates.contains(seg_id) && !candidates.contains(file_path) {
                 metrics::counter!("bsdb.pruned.vector_router").increment(1);
                 return false;
             }
@@ -2105,4 +2127,51 @@ mod tests {
             assert_eq!(filters[2].column, "is_active");
         }
         */
+
+    #[test]
+    fn test_might_match_vector_keeps_unrouted_segments() {
+        use super::*;
+        use std::collections::{HashMap, HashSet};
+        use std::sync::Arc;
+
+        let planner = QueryPlanner::new();
+        let mk_entry = |name: &str| ManifestEntry {
+            file_path: format!("data/{name}.parquet"),
+            file_size_bytes: 128,
+            record_count: 10,
+            partition_values: HashMap::new(),
+            index_files: vec![],
+            delete_files: vec![],
+            column_stats: HashMap::new(),
+            file_checksum: None,
+            clustering_strategy: None,
+            clustering_columns: None,
+            min_clustering_score: None,
+            max_clustering_score: None,
+            normalization_mins: None,
+            normalization_maxs: None,
+            first_row_id: None,
+        };
+
+        let mut candidates = HashSet::new();
+        candidates.insert("seg_keep".to_string());
+        let mut routed = HashSet::new();
+        routed.insert("seg_keep".to_string());
+        routed.insert("seg_prune".to_string());
+
+        let params = VectorSearchParams::new(
+            "embedding",
+            crate::core::index::VectorValue::Float32(vec![1.0, 0.0, 0.0, 0.0]),
+            5,
+        )
+        .with_routing(Arc::new(candidates), Arc::new(HashMap::new()))
+        .with_routed_segments(Arc::new(routed));
+
+        assert!(planner.might_match_vector(&mk_entry("seg_keep"), &params));
+        assert!(!planner.might_match_vector(&mk_entry("seg_prune"), &params));
+        assert!(
+            planner.might_match_vector(&mk_entry("seg_unindexed"), &params),
+            "unindexed segment outside router must fall back to flat scan"
+        );
+    }
 }

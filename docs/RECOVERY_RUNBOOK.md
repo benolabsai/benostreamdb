@@ -7,13 +7,13 @@ BenoStreamDB is designed around a strict separation of **authoritative state** (
 ## Recovery Objectives
 
 ### RPO (Recovery Point Objective)
-BenoStreamDB’s RPO depends entirely on your configured `WalDurability` setting:
-- **`WalDurability::Sync`**: **RPO = 0**. Every acknowledged write is synchronously fsync'd to the Write-Ahead Log before the client receives an OK. No committed data is lost in a crash.
-- **`WalDurability::Async`**: **RPO = < 1s** (configurable). Writes are buffered in memory and flushed periodically. A hard crash will lose the in-memory buffer (unacknowledged or acknowledged asynchronously).
+BenoStreamDB’s RPO depends entirely on your configured `WalDurability` setting (`BSDB_WAL_DURABILITY` / `TableBuilder::with_durability`):
+- **`WalDurability::Sync` (`"sync"`, Default)**: **RPO = 0**. Every acknowledged write waits for `fdatasync` (`File::sync_data`, falling back to `File::sync_all`) on the WAL segment before the caller receives `Ok`. Failed syncs return an error to the caller. Note: for `s3://`, `gs://`, or `az://` tables, configure a persistent local volume via `BSDB_WAL_DIR` or `TableBuilder::with_wal_dir()`; otherwise the WAL defaults to temporary local storage (`/tmp/benostream_wal/...`) and logs a startup warning.
+- **`WalDurability::Async` (`"async"`)**: **RPO <= sync window**. Batches are handed to the WAL worker channel without blocking for `fdatasync`; the worker syncs every `BSDB_WAL_SYNC_BATCH_SIZE` (`10` batches) or `BSDB_WAL_SYNC_INTERVAL_MS` (`100` ms). Writes buffered inside the un-synced window are lost on hard termination.
 
 ### RTO (Recovery Time Objective)
-- **Data Availability**: **Seconds**. On startup, BenoStreamDB reads the latest Iceberg manifest and replays the WAL. This process typically takes under a second. The data is immediately available for querying (falling back to scalar/vector scans if indexes are missing).
-- **Performance Recovery (Index Rebuild)**: **Minutes to Hours**. If an index is lost or corrupted, queries will gracefully degrade to full-scans. Rebuilding the index is an asynchronous background process whose duration depends on dataset size.
+- **Data Availability**: **Seconds**. On startup, BenoStreamDB reads the latest manifest (`_manifest/v{N}.json`), replays uncommitted records from the segmented WAL while skipping any `benostream:tx_id` already present in the manifest property `benostream.committed_wal_tx`, and immediately resumes queries (falling back to Parquet scans while secondary indexes rebuild).
+- **Performance Recovery (Index Rebuild)**: **Minutes to Hours**. If an index is lost or corrupted, queries degrade deterministically to Parquet/exact scans. Rebuilding the index executes asynchronously without blocking ingestion.
 
 ---
 
@@ -25,29 +25,39 @@ Because Iceberg/Parquet in the object store is the authoritative source of truth
 **Action:**
 1. Provision a new compute node.
 2. Ensure the node has IAM/network access to the backing object store (S3/GCS/Azure).
-3. Start the BenoStreamDB process pointing to the existing URI:
+3. Start the BenoStreamDB process pointing to the existing URI (with `BSDB_WAL_DIR` pointing to persistent local WAL storage if present):
    ```rust
    let table = Table::new_async("s3://my-bucket/my-table").await?;
    ```
-4. **Result:** The system will immediately read the latest `commit.lock` or catalog pointer, load the manifest, and resume serving reads and writes.
+4. **Result:** The system loads the latest atomic manifest (`_manifest/v{N}.json` via `load_latest_direct`) and Iceberg metadata pointer, replays any uncommitted WAL segments, and resumes reads and writes.
 
 ---
 
 ## 2. WAL Recovery Procedure
 
-The Write-Ahead Log (`_wal/`) stores durable writes that have not yet been compacted into an Iceberg manifest. 
+The Write-Ahead Log (`_wal/` by default for local tables, or `BSDB_WAL_DIR` for remote URIs) stores durable writes in rotated Arrow IPC stream segments named `log_<timestamp>_<pid>_<seq>.arrow` until the transaction commits to a manifest and watermark pruning removes the sealed file (`prune_committed_segments`).
 
-**Scenario:** The process crashes mid-write, corrupting the active WAL file. Upon restart, the database fails to initialize with a `WalCorruptionError`.
+### Automatic Startup Recovery (Standard Crashes & Torn Tails)
+
+In most crash scenarios (`SIGKILL`, power loss mid-append, or crash between manifest commit and WAL cleanup), no manual action is required:
+- **Torn Trailing Frame / Interrupted Header:** On startup, `open_wal_segment` and `SafeIpcSegmentIter` automatically recover from 0-byte segments, zeroed preallocation headers (`<= 8` bytes), truncated Arrow IPC continuation/schema headers at EOF (`Empty`), and an `UnexpectedEof` mid-way through a trailing uncommitted batch frame (logging a `warn` and preserving every complete synced prefix batch).
+- **Idempotent Crash Replay:** If the process exited after committing `_manifest/v{N}.json` (`CommitPhase::ManifestCommitted`) but before watermark pruning deleted the sealed `.arrow` segment, startup filters out every batch whose `benostream:tx_id` already appears in `benostream.committed_wal_tx` and registers the segment for pruning on the next commit.
+
+### Manual Quarantine Procedure (Mid-Stream Byte Corruption)
+
+**Scenario:** Storage hardware corruption damages bytes inside a WAL header (non-zero wrong magic bytes, invalid metadata length) or mid-stream FlatBuffers payload, causing startup to refuse initialization with a `WAL Recovery Error`.
+
 **Action:**
-BenoStreamDB prioritizes data safety and will refuse to start if it detects torn or corrupted WAL batches. To forcibly recover availability at the cost of losing un-manifested writes:
-1. Locate the WAL directory (default: `[table_uri]/_wal/`).
-2. Identify the corrupted `.arrow` file (usually the one with the most recent timestamp).
-3. Move the file out of the directory:
+BenoStreamDB refuses silent data truncation when mid-stream corruption is detected inside a non-EOF record. To restore table availability by quarantining only the damaged segment:
+1. Inspect startup logs for the failing segment path (under `[table_uri]/_wal/` or `$BSDB_WAL_DIR`).
+2. Inspect the directory (`ls -la` sorted chronologically; filenames encode nanosecond timestamps and sequence numbers). Keep all undamaged segments in place.
+3. Quarantine only the failing segment outside the WAL directory:
    ```bash
-   mv s3://my-bucket/my-table/_wal/wal_0042.arrow /backup/corrupted_wal_0042.arrow
+   mkdir -p /var/backups/bsdb-wal-quarantine
+   mv /path/to/table/_wal/log_0001762780000000000_004210_00000003.arrow /var/backups/bsdb-wal-quarantine/
    ```
-4. Restart the database.
-5. **Result:** The DB will replay all valid WAL files and resume operation. Any writes contained in `wal_0042.arrow` are permanently lost.
+4. Restart the process.
+5. **Result:** Startup replays all valid WAL segments, skips already-committed transactions idempotently, and resumes serving traffic. Only uncommitted batches contained after the corruption point in the quarantined segment are absent.
 
 ---
 
@@ -65,7 +75,7 @@ Indexes (HNSW, BM25, Bloom filters) are non-authoritative. If they become corrup
    ```rust
    table.add_index("embedding".to_string(), IndexAlgorithm::HNSW).await?;
    ```
-3. **Result:** The system will serve vector similarity searches using exact nearest-neighbor (flat scan) until the HNSW build completes, at which point it will seamlessly swap to using the new index.
+3. **Result:** The system serves vector similarity queries using exact nearest-neighbor scans until the background HNSW build attaches to the manifest, then switches queries onto the rebuilt HNSW index automatically.
 
 ---
 

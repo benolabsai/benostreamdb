@@ -171,6 +171,68 @@ impl TableMetadata {
         self.snapshots.push(snapshot);
     }
 
+    /// Merge a snapshot monotonically and idempotently into `self`.
+    ///
+    /// - If a snapshot with `snapshot.snapshot_id` is already present, avoids adding
+    ///   a duplicate entry (still advancing `next_row_id` if higher).
+    /// - If `snapshot.sequence_number` trails an already-published snapshot (delayed
+    ///   concurrent metadata writer), preserves `current_snapshot_id`,
+    ///   `last_updated_ms`, and `last_sequence_number` at the newer head while
+    ///   retaining the historical snapshot entry.
+    /// - Returns `true` if `self` changed.
+    pub fn merge_snapshot_monotonic(
+        &mut self,
+        mut snapshot: Snapshot,
+        candidate_next_row_id: Option<i64>,
+    ) -> bool {
+        if self
+            .snapshots
+            .iter()
+            .any(|s| s.snapshot_id == snapshot.snapshot_id)
+        {
+            if self.format_version >= 3 {
+                if let Some(n) = candidate_next_row_id {
+                    let prev = self.next_row_id.unwrap_or(0);
+                    if n > prev {
+                        self.next_row_id = Some(n);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        let head_seq = self
+            .snapshots
+            .iter()
+            .filter_map(|s| s.sequence_number)
+            .max()
+            .unwrap_or(self.last_sequence_number);
+        let snap_seq = snapshot.sequence_number.unwrap_or(0);
+
+        if snap_seq >= head_seq {
+            snapshot.parent_snapshot_id = self.current_snapshot_id;
+            self.current_snapshot_id = Some(snapshot.snapshot_id);
+            self.last_updated_ms = self.last_updated_ms.max(snapshot.timestamp_ms);
+            self.last_sequence_number = self.last_sequence_number.max(snap_seq);
+        } else {
+            self.last_sequence_number = self.last_sequence_number.max(snap_seq);
+        }
+
+        self.snapshot_log.push(SnapshotLogEntry {
+            timestamp_ms: snapshot.timestamp_ms,
+            snapshot_id: snapshot.snapshot_id,
+        });
+        self.snapshots.push(snapshot);
+
+        if self.format_version >= 3 {
+            if let Some(n) = candidate_next_row_id {
+                self.next_row_id = Some(self.next_row_id.unwrap_or(0).max(n));
+            }
+        }
+        true
+    }
+
     /// Add a new schema
     pub fn add_schema(&mut self, schema: Schema) {
         self.last_column_id = schema
@@ -253,38 +315,221 @@ impl TableMetadata {
             }
         }
     }
+}
 
-    /// Save metadata to ObjectStore as a new version `v<X>.metadata.json`
+/// Outcome returned by a closure passed to [`TableMetadata::commit_update_atomic`].
+#[derive(Debug, Clone)]
+pub enum MetadataUpdateOutcome {
+    /// Persist the updated [`TableMetadata`] to a new `v{N}.metadata.json` file.
+    Updated(TableMetadata),
+    /// The latest metadata already contains this commit (idempotent tail resume).
+    AlreadyCurrent(TableMetadata),
+}
+
+impl TableMetadata {
+    /// Discover the highest `metadata/v{N}.metadata.json` version number in `storage`.
+    pub async fn latest_version_in_store(
+        storage: &dyn object_store::ObjectStore,
+    ) -> anyhow::Result<Option<i32>> {
+        use futures::StreamExt;
+
+        let prefix = object_store::path::Path::from("metadata");
+        let mut stream = storage.list(Some(&prefix));
+        let mut best: Option<i32> = None;
+        while let Some(item) = stream.next().await {
+            let meta = match item {
+                Ok(m) => m,
+                Err(object_store::Error::NotFound { .. }) => continue,
+                Err(e) => return Err(e.into()),
+            };
+            if let Some(name) = meta.location.filename() {
+                if let Some(v_num) = name
+                    .strip_prefix('v')
+                    .and_then(|s| s.strip_suffix(".metadata.json"))
+                    .and_then(|s| s.parse::<i32>().ok())
+                {
+                    best = Some(best.map_or(v_num, |b| b.max(v_num)));
+                }
+            }
+        }
+        Ok(best)
+    }
+
+    /// Monotonically advance `metadata/version-hint.text` using conditional CAS when
+    /// supported by the backing store so delayed concurrent writers cannot regress it.
+    pub async fn advance_version_hint(
+        storage: &dyn object_store::ObjectStore,
+        version: i32,
+    ) -> anyhow::Result<()> {
+        let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+        for attempt in 0..4usize {
+            let existing = storage.get(&hint_path).await;
+            let payload: object_store::PutPayload = version.to_string().into();
+
+            let put_res = match existing {
+                Ok(res) => {
+                    let e_tag = res.meta.e_tag.clone();
+                    let obj_version = res.meta.version.clone();
+                    let current_version = res
+                        .bytes()
+                        .await
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
+                        .and_then(|value| value.trim().parse::<i32>().ok());
+                    if current_version.is_some_and(|current| current >= version) {
+                        return Ok(());
+                    }
+                    if e_tag.is_some() || obj_version.is_some() {
+                        let mode = object_store::PutMode::Update(object_store::UpdateVersion {
+                            e_tag,
+                            version: obj_version,
+                        });
+                        storage.put_opts(&hint_path, payload, mode.into()).await
+                    } else {
+                        storage.put(&hint_path, payload).await
+                    }
+                }
+                Err(object_store::Error::NotFound { .. }) => {
+                    storage
+                        .put_opts(&hint_path, payload, object_store::PutMode::Create.into())
+                        .await
+                }
+                Err(e) => {
+                    if attempt + 1 < 4 {
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                        continue;
+                    }
+                    return Err(e.into());
+                }
+            };
+
+            match put_res {
+                Ok(_) => return Ok(()),
+                Err(object_store::Error::NotImplemented) => {
+                    storage.put(&hint_path, version.to_string().into()).await?;
+                    return Ok(());
+                }
+                Err(
+                    object_store::Error::AlreadyExists { .. }
+                    | object_store::Error::Precondition { .. },
+                ) => {
+                    if attempt + 1 < 4 {
+                        continue;
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    if attempt + 1 < 4 {
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                        continue;
+                    }
+                    return Err(e.into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Save metadata to ObjectStore as a new version `v<X>.metadata.json` using
+    /// `PutMode::Create` when supported by the backing store.
     pub async fn save_to_store(
         &mut self,
         storage: &dyn object_store::ObjectStore,
         version: i32,
     ) -> anyhow::Result<String> {
         self.normalize_iceberg_metadata();
-        let path = object_store::path::Path::from(format!("metadata/v{}.metadata.json", version));
+        let path_str = format!("metadata/v{}.metadata.json", version);
+        let path = object_store::path::Path::from(path_str.as_str());
         let json = serde_json::to_vec(self)?;
 
-        storage.put(&path, json.into()).await?;
-
-        // Advance `version-hint.text` monotonically. Data commits and
-        // properties-only commits both write metadata, and a writer that read an
-        // older head can finish last; regressing the hint would hide the newer
-        // metadata (and its table properties) from external readers.
-        let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-        let current_version = match storage.get(&hint_path).await {
-            Ok(res) => res
-                .bytes()
-                .await
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
-                .and_then(|value| value.trim().parse::<i32>().ok()),
-            Err(_) => None,
-        };
-        if current_version.is_none_or(|current| version >= current) {
-            storage.put(&hint_path, version.to_string().into()).await?;
+        match storage
+            .put_opts(
+                &path,
+                json.clone().into(),
+                object_store::PutMode::Create.into(),
+            )
+            .await
+        {
+            Ok(_) => {}
+            Err(object_store::Error::NotImplemented) => {
+                storage.put(&path, json.into()).await?;
+            }
+            Err(e) => return Err(e.into()),
         }
 
-        Ok(path.to_string())
+        Self::advance_version_hint(storage, version).await?;
+        Ok(path_str)
+    }
+
+    /// Atomically update `TableMetadata` in `storage` using CAS (`PutMode::Create`)
+    /// with bounded conflict-retry discovery of the highest `v{N}.metadata.json`.
+    pub async fn commit_update_atomic<F>(
+        storage: &dyn object_store::ObjectStore,
+        preferred_version: i32,
+        mut build_fn: F,
+    ) -> anyhow::Result<(String, Self)>
+    where
+        F: FnMut(Option<Self>) -> anyhow::Result<MetadataUpdateOutcome>,
+    {
+        for attempt in 0..64usize {
+            let latest_ver = Self::latest_version_in_store(storage).await?;
+            let current_meta = match latest_ver {
+                Some(v) => {
+                    let p =
+                        object_store::path::Path::from(format!("metadata/v{}.metadata.json", v));
+                    Self::load_from_store(storage, &p).await.ok()
+                }
+                None => Self::load_latest(storage).await.ok(),
+            };
+
+            match build_fn(current_meta)? {
+                MetadataUpdateOutcome::AlreadyCurrent(meta) => {
+                    let ver = latest_ver.unwrap_or(preferred_version.max(1));
+                    let _ = Self::advance_version_hint(storage, ver).await;
+                    return Ok((format!("metadata/v{}.metadata.json", ver), meta));
+                }
+                MetadataUpdateOutcome::Updated(mut next_meta) => {
+                    next_meta.normalize_iceberg_metadata();
+                    let next_ver = latest_ver
+                        .map(|v| (v + 1).max(preferred_version))
+                        .unwrap_or(preferred_version)
+                        .max(1);
+                    let path_str = format!("metadata/v{}.metadata.json", next_ver);
+                    let path = object_store::path::Path::from(path_str.as_str());
+                    let json = serde_json::to_vec(&next_meta)?;
+
+                    match storage
+                        .put_opts(
+                            &path,
+                            json.clone().into(),
+                            object_store::PutMode::Create.into(),
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            Self::advance_version_hint(storage, next_ver).await?;
+                            return Ok((path_str, next_meta));
+                        }
+                        Err(object_store::Error::NotImplemented) => {
+                            storage.put(&path, json.into()).await?;
+                            Self::advance_version_hint(storage, next_ver).await?;
+                            return Ok((path_str, next_meta));
+                        }
+                        Err(
+                            object_store::Error::AlreadyExists { .. }
+                            | object_store::Error::Precondition { .. },
+                        ) => {
+                            let backoff_ms = ((attempt as u64) % 8) + 1;
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                            continue;
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!("Exceeded max CAS attempts (64) committing TableMetadata update")
     }
 
     /// Load metadata from ObjectStore
@@ -298,14 +543,50 @@ impl TableMetadata {
         Ok(metadata)
     }
 
-    /// Load the latest metadata version using version-hint.text
+    /// Load the latest metadata version using `version-hint.text`, verifying against
+    /// newer `v{N}.metadata.json` files if the hint lags or is absent.
     pub async fn load_latest(storage: &dyn object_store::ObjectStore) -> anyhow::Result<Self> {
         let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+        if let Ok(res) = storage.get(&hint_path).await {
+            if let Ok(bytes) = res.bytes().await {
+                if let Ok(version_str) = String::from_utf8(bytes.to_vec()) {
+                    if let Ok(version) = version_str.trim().parse::<i32>() {
+                        let next_path = object_store::path::Path::from(format!(
+                            "metadata/v{}.metadata.json",
+                            version + 1
+                        ));
+                        if storage.head(&next_path).await.is_ok() {
+                            if let Ok(Some(max_v)) = Self::latest_version_in_store(storage).await {
+                                let path = object_store::path::Path::from(format!(
+                                    "metadata/v{}.metadata.json",
+                                    max_v
+                                ));
+                                if let Ok(meta) = Self::load_from_store(storage, &path).await {
+                                    return Ok(meta);
+                                }
+                            }
+                        }
+                        let path = object_store::path::Path::from(format!(
+                            "metadata/v{}.metadata.json",
+                            version
+                        ));
+                        if let Ok(meta) = Self::load_from_store(storage, &path).await {
+                            return Ok(meta);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(max_v) = Self::latest_version_in_store(storage).await? {
+            let path = object_store::path::Path::from(format!("metadata/v{}.metadata.json", max_v));
+            return Self::load_from_store(storage, &path).await;
+        }
+
         let res = storage.get(&hint_path).await?;
         let bytes = res.bytes().await?;
         let version_str = String::from_utf8(bytes.to_vec())?;
         let version = version_str.trim().parse::<i32>()?;
-
         let path = object_store::path::Path::from(format!("metadata/v{}.metadata.json", version));
         Self::load_from_store(storage, &path).await
     }

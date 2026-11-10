@@ -91,7 +91,16 @@ fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     l2_distance_scalar(a, b)
 }
 
+/// Pre-extracted flat `f32` vectors ready to append to [`InMemoryVectorIndex`].
+#[derive(Debug, Clone)]
+pub struct PreparedVectors {
+    pub dim: usize,
+    pub count: usize,
+    pub vectors: Vec<f32>,
+}
+
 /// Flat in-memory storage for buffering writes with brute-force search
+#[derive(Clone)]
 pub struct InMemoryVectorIndex {
     vectors: Vec<f32>,
     pub count: usize,
@@ -110,10 +119,128 @@ impl std::fmt::Debug for InMemoryVectorIndex {
 impl InMemoryVectorIndex {
     pub fn new(dim: usize) -> Self {
         Self {
-            vectors: Vec::with_capacity(100_000 * dim),
+            vectors: Vec::with_capacity(100_000usize.saturating_mul(dim)),
             count: 0,
             dim,
         }
+    }
+
+    pub fn with_capacity(dim: usize, row_capacity: usize) -> Self {
+        Self {
+            vectors: Vec::with_capacity(row_capacity.saturating_mul(dim)),
+            count: 0,
+            dim,
+        }
+    }
+
+    pub fn from_prepared(prepared: PreparedVectors) -> Self {
+        Self {
+            vectors: prepared.vectors,
+            count: prepared.count,
+            dim: prepared.dim,
+        }
+    }
+
+    pub fn append_prepared(&mut self, prepared: PreparedVectors) -> Result<()> {
+        if self.dim != prepared.dim {
+            anyhow::bail!(
+                "Vector dimension mismatch: index expects {}, batch has {}",
+                self.dim,
+                prepared.dim
+            );
+        }
+        self.vectors.extend_from_slice(&prepared.vectors);
+        self.count += prepared.count;
+        Ok(())
+    }
+
+    pub fn extend_from(&mut self, other: &InMemoryVectorIndex) -> Result<()> {
+        if self.dim != other.dim {
+            anyhow::bail!(
+                "Vector dimension mismatch: index expects {}, source has {}",
+                self.dim,
+                other.dim
+            );
+        }
+        self.vectors.extend_from_slice(&other.vectors);
+        self.count += other.count;
+        Ok(())
+    }
+
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Infer vector dimensionality for `column_name` from a batch.
+    pub fn infer_column_dim(batch: &RecordBatch, column_name: &str) -> Option<usize> {
+        let col = batch.column_by_name(column_name)?;
+        if let Some(fsl) = col.as_any().downcast_ref::<FixedSizeListArray>() {
+            Some(fsl.value_length() as usize)
+        } else if let Some(list) = col.as_any().downcast_ref::<ListArray>() {
+            (0..list.len()).find_map(|i| {
+                if list.is_null(i) {
+                    None
+                } else {
+                    let v = list.value(i);
+                    if let Some(f) = v.as_any().downcast_ref::<Float32Array>() {
+                        Some(f.len())
+                    } else {
+                        v.as_any()
+                            .downcast_ref::<arrow::array::Float64Array>()
+                            .map(|f| f.len())
+                    }
+                }
+            })
+        } else if let Some(list) = col.as_any().downcast_ref::<LargeListArray>() {
+            (0..list.len()).find_map(|i| {
+                if list.is_null(i) {
+                    None
+                } else {
+                    let v = list.value(i);
+                    if let Some(f) = v.as_any().downcast_ref::<Float32Array>() {
+                        Some(f.len())
+                    } else {
+                        v.as_any()
+                            .downcast_ref::<arrow::array::Float64Array>()
+                            .map(|f| f.len())
+                    }
+                }
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Extract flat `f32` vectors across `batches` without mutating any shared index.
+    pub fn extract_prepared(
+        batches: &[RecordBatch],
+        column_name: &str,
+        expected_dim: Option<usize>,
+    ) -> Result<Option<PreparedVectors>> {
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        if total_rows == 0 {
+            return Ok(None);
+        }
+        let dim = match expected_dim.or_else(|| {
+            batches
+                .iter()
+                .find_map(|b| Self::infer_column_dim(b, column_name))
+        }) {
+            Some(d) => d,
+            None => return Ok(None),
+        };
+        let mut scratch = Self::with_capacity(dim, total_rows);
+        for batch in batches {
+            scratch.insert_batch(batch, column_name, 0)?;
+        }
+        if scratch.count == 0 {
+            return Ok(None);
+        }
+        Ok(Some(PreparedVectors {
+            dim: scratch.dim,
+            count: scratch.count,
+            vectors: scratch.vectors,
+        }))
     }
 
     /// Insert vectors from a batch.

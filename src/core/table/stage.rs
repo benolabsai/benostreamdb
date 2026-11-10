@@ -199,23 +199,60 @@ impl Table {
             return Ok(());
         }
         let _maintenance_guard = self.maintenance_lock.read().await;
+        let _commit_guard = self.commit_lock.lock().await;
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let new_manifest = manifest_manager
-            .commit(
-                &entries,
-                &[],
-                crate::core::manifest::CommitMetadata::default(),
-            )
-            .await?;
+        let (latest_manifest, latest_ver) = manifest_manager.load_latest_direct().await?;
+        let existing_entries = if latest_ver > 0 {
+            manifest_manager.load_all_entries(&latest_manifest).await?
+        } else {
+            Vec::new()
+        };
+
+        let root_prefix = self.uri.trim_end_matches('/');
+        let normalize_rel = |path: &str| -> String {
+            path.strip_prefix(root_prefix)
+                .unwrap_or(path)
+                .trim_start_matches('/')
+                .to_string()
+        };
+        let existing_paths: std::collections::HashSet<String> = existing_entries
+            .iter()
+            .map(|e| normalize_rel(&e.file_path))
+            .collect();
+
+        let total_rows: i64 = entries.iter().map(|e| e.record_count).sum();
+        let entry_count = entries.len();
+        let pending_entries: Vec<ManifestEntry> = entries
+            .into_iter()
+            .filter(|e| !existing_paths.contains(&normalize_rel(&e.file_path)))
+            .collect();
+
+        let new_manifest = if pending_entries.is_empty() {
+            tracing::debug!(
+                "All {} staged data file(s) already present in {} v{}; converging snapshot publication",
+                entry_count,
+                self.uri,
+                latest_manifest.version
+            );
+            latest_manifest
+        } else {
+            manifest_manager
+                .commit(
+                    &pending_entries,
+                    &[],
+                    crate::core::manifest::CommitMetadata::default(),
+                )
+                .await?
+        };
 
         self.ensure_table_metadata_async(&new_manifest).await?;
         self.publish_snapshot_async(&new_manifest, "append").await?;
 
         tracing::info!(
             "Committed {} staged data file(s) ({} rows) to {} as snapshot v{}",
-            entries.len(),
-            entries.iter().map(|e| e.record_count).sum::<i64>(),
+            entry_count,
+            total_rows,
             self.uri,
             new_manifest.version
         );
@@ -452,32 +489,44 @@ impl Table {
             // resolves it and reports a genuinely missing table.
             return Ok(());
         }
-        let store = crate::core::storage::create_object_store(&self.uri)?;
-        if crate::core::metadata::TableMetadata::load_latest(store.as_ref())
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-        let schema =
-            new_manifest.schemas.last().cloned().unwrap_or_else(|| {
-                crate::core::manifest::Schema::from_arrow(&self.arrow_schema(), 0)
-            });
-        let mut metadata = crate::core::metadata::TableMetadata::new(
-            self.get_format_version(),
-            uuid::Uuid::new_v4().to_string(),
-            self.uri.clone(),
-            schema,
-            new_manifest.partition_spec.clone(),
-            new_manifest
-                .sort_orders
-                .first()
-                .cloned()
-                .unwrap_or_default(),
-        );
-        metadata
-            .save_to_store(store.as_ref(), new_manifest.version as i32)
-            .await?;
+        let fallback_schema = self.arrow_schema();
+        let uri_clone = self.uri.clone();
+        let manifest_clone = new_manifest.clone();
+        let raw_fv = self.get_format_version().max(new_manifest.format_version);
+        let eff_fv = if raw_fv == 0 { 2 } else { raw_fv };
+
+        crate::core::metadata::TableMetadata::commit_update_atomic(
+            self.store.as_ref(),
+            new_manifest.version.max(1) as i32,
+            move |existing| {
+                if let Some(meta) = existing {
+                    return Ok(crate::core::metadata::MetadataUpdateOutcome::AlreadyCurrent(meta));
+                }
+                let schema = manifest_clone.schemas.last().cloned().unwrap_or_else(|| {
+                    crate::core::manifest::Schema::from_arrow(&fallback_schema, 0)
+                });
+                let mut metadata = crate::core::metadata::TableMetadata::new(
+                    eff_fv,
+                    uuid::Uuid::new_v4().to_string(),
+                    uri_clone.clone(),
+                    schema,
+                    manifest_clone.partition_spec.clone(),
+                    manifest_clone
+                        .sort_orders
+                        .first()
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+                metadata.current_schema_id = manifest_clone.current_schema_id;
+                metadata.default_spec_id = manifest_clone.default_spec_id;
+                metadata.default_sort_order_id = manifest_clone.default_sort_order_id;
+                metadata.last_column_id = manifest_clone.last_column_id;
+                Ok(crate::core::metadata::MetadataUpdateOutcome::Updated(
+                    metadata,
+                ))
+            },
+        )
+        .await?;
         Ok(())
     }
 }

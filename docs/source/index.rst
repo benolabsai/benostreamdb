@@ -43,6 +43,7 @@ Key Architecture Highlights
    guides/adr_007
    guides/adr_008
    guides/adr_009
+   guides/adr_010
 
 .. toctree::
    :maxdepth: 2

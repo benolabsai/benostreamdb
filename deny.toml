@@ -17,7 +17,7 @@ unmaintained = "none"
 
 # Ignore specific advisories that have been reviewed and deemed low-risk in
 # transitive dependencies. The full tracking plan (owner, chain, reachability,
-# migration path, review date) lives in `docs/DEPENDENCY_RISK.md`.
+# migration path, review dates) lives in `docs/governance/DEPENDENCY_RISK.md`.
 ignore = [
     "RUSTSEC-2026-0104",
     "RUSTSEC-2026-0099",
@@ -35,8 +35,8 @@ ignore = [
     # `ClientSessionStore` (2026-0346), and we do not enable ECH (2026-0347/0348)
     # or rely on resumption-based key-share prediction (2026-0349). Our own TLS
     # paths (reqwest/object_store/metrics) use rustls 0.23.46, where these are
-    # fixed. Tracked in docs/DEPENDENCY_RISK.md; drop when the AWS SDK moves off
-    # rustls 0.21.
+    # fixed. Tracked in docs/governance/DEPENDENCY_RISK.md; drop when the AWS SDK
+    # moves off rustls 0.21.
     "RUSTSEC-2026-0346",
     "RUSTSEC-2026-0349",
     # RUSTSEC-2026-0382 (distrusted emSign intermediates). The fixed releases
@@ -45,13 +45,14 @@ ignore = [
     # parent that cannot move within our dependency graph: webpki-roots 0.26.11
     # only through `sqlx-core 0.8.6` (the fix is 1.0.10+; the 0.26 line has no
     # patched release). Our own TLS paths use the fixed versions.
-    # Tracked in docs/DEPENDENCY_RISK.md; drop this ignore when sqlx leaves the
-    # affected major line.
+    # Tracked in docs/governance/DEPENDENCY_RISK.md; drop this ignore when sqlx
+    # leaves the affected major line.
     "RUSTSEC-2026-0382",
     # RUSTSEC-2026-0459 (libsqlite3-sys CVE-2026-119375 uninitialized page-cache memory in -wal).
     # Pinned by sqlx-sqlite 0.8.6 which requires libsqlite3-sys <0.31. Fixed in libsqlite3-sys
     # 0.39.0+ / rusqlite 0.41+. Unexploitable: we do not open unauthenticated external
     # SQLite -wal database files from untrusted third parties.
+    # Tracked in docs/governance/DEPENDENCY_RISK.md.
     "RUSTSEC-2026-0459",
     # zstd / zstd-safe 0.13.x / 7.x. The fixes are zstd 0.14.3 and zstd-safe
     # 8.2.0, both semver-major; the whole data stack still pins the 0.13 / 7.x
@@ -64,10 +65,10 @@ ignore = [
     #   0403 - requires the `zstd::stream::write::Decoder` path; parquet /
     #          compression-codecs use the bulk API, we use `decode_all`.
     # The bundled zstd-sys is already on the patched 2.1.2 (RUSTSEC-2026-0410).
-    # Tracked in docs/DEPENDENCY_RISK.md.
+    # Tracked in docs/governance/DEPENDENCY_RISK.md.
     # thrift 0.17.0 (RUSTSEC-2026-0435). Pinned transitively by parquet 57.3.1 /
     # datafusion 52.5.0 for Parquet Thrift metadata decoding. Moving requires the
-    # upstream Arrow/DataFusion upgrade.
+    # upstream Arrow/DataFusion upgrade. Tracked in docs/governance/DEPENDENCY_RISK.md.
     "RUSTSEC-2026-0435",
     "RUSTSEC-2026-0391",
     "RUSTSEC-2026-0398",

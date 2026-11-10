@@ -76,6 +76,41 @@ pub enum QuantizerImpl {
     Pq(pq::PqEncoder),
 }
 
+/// Preprocessed query state across any supported [`QuantizerImpl`] for
+/// calibrated, un-clamped Asymmetric Distance Calculation (ADC).
+#[derive(Debug, Clone)]
+pub enum PreparedQuantizedQuery<'a> {
+    BenoQuant(benoquant::PreparedBenoQuantQuery<'a>),
+    Sq(sq::PreparedSqQuery<'a>),
+    Pq(pq::PreparedPqQuery),
+}
+
+impl QuantizerImpl {
+    /// Prepare an asymmetric query evaluator once per search before traversing
+    /// one or more cluster graphs.
+    pub fn prepare_query(&self, query: &[f32], metric: VectorMetric) -> PreparedQuantizedQuery<'_> {
+        match self {
+            QuantizerImpl::BenoQuant(q) => {
+                PreparedQuantizedQuery::BenoQuant(q.prepare_query(query, metric))
+            }
+            QuantizerImpl::Sq(q) => PreparedQuantizedQuery::Sq(q.prepare_query(query, metric)),
+            QuantizerImpl::Pq(q) => PreparedQuantizedQuery::Pq(q.prepare_query(query, metric)),
+        }
+    }
+}
+
+impl<'a> PreparedQuantizedQuery<'a> {
+    /// Evaluate calibrated asymmetric distance against stored quantized bytes.
+    #[inline]
+    pub fn distance(&self, encoded: &[u8]) -> f32 {
+        match self {
+            PreparedQuantizedQuery::BenoQuant(q) => q.distance(encoded),
+            PreparedQuantizedQuery::Sq(q) => q.distance(encoded),
+            PreparedQuantizedQuery::Pq(q) => q.distance(encoded),
+        }
+    }
+}
+
 impl Quantizer for QuantizerImpl {
     fn encode(&self, vector: &[f32]) -> Vec<u8> {
         match self {

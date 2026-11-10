@@ -1,13 +1,14 @@
 # BenoStreamDB — Production-Readiness Plan
 
-**Status (2026-11-10, v0.15.1): open.** WS1, WS2, WS4 and WS5 have
-harnesses in `tests/`; WS2 sweeps every `CrashPoint` across delete,
-compaction, vacuum and index build. The open items are: (a) WS3's
-randomized N-writer harness with injected commit conflicts and
-object-store errors — `test_concurrent_writers.rs` currently has a single
-test; (b) the cross-cutting benchmark classes (p95/p99 tails, sustained
-concurrent queries, throttling, skewed data); (c) the security track
-beyond static-key/JWT auth.
+**Status (2026-11-10, Developer Preview v0.15.1 + M2 & multi-writer differential staged for v0.15.2): Developer Preview & M2 gates passed; post-Preview Iceberg V3/catalog parity and CI/scale hardening open.**
+
+WS1 (`test_differential_index_oracle.rs`, `test_randomized_differential_workload.rs` calibrated to `BSDB_WORKLOAD_STEPS=400`), WS2 (`test_crash_injection_sweep.rs`, `test_m2_commit_state_machine.rs`, `fuzz/fuzz_targets/wal_segment.rs`), WS3 (`test_multi_writer_concurrency.rs` 16-writer + `FaultyStore` + S3/RustFS, `test_multi_writer_differential.rs`), WS4 (`test_iceberg_conformance.rs`, PyIceberg V2), WS5 (`test_maintenance_invariant.rs`, `tests/soak.rs`, local 180s/stage `pre_release_soak.sh`), [`ADR-010`](https://github.com/benolabsai/benostreamdb/blob/main/docs/architecture/ADR_010_PENDING_COMMIT_STATE_MACHINE.md), and stateless API-key/JWT/RBAC auth (`src/core/auth.rs`) are shipped.
+
+**Remaining open items (tracked across this plan and [iceberg_v3_and_catalog_parity_plan.md](iceberg_v3_and_catalog_parity_plan.md)):**
+1. **CI & live-object-store soak automation:** add `wal_segment` to [`.github/workflows/fuzz.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/fuzz.yml), invoke `test_multi_writer_differential` in [`scripts/pre_release_soak.sh`](https://github.com/benolabsai/benostreamdb/blob/main/scripts/pre_release_soak.sh) / [`.github/workflows/soak.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/soak.yml), and wire live RustFS (`AWS_ENDPOINT_URL`) into CI so `s3_multi_writer_*` executes instead of skipping locally.
+2. **Iceberg V3 Deletion Vectors, `apache/iceberg-rust` oracle, & catalog parity:** documentation honesty (`V3.1`) is complete; remaining work closes the V3 `deletion-vector-v1` Puffin write/read gap and Avro `format-version = 3` / `143–145` schema gaps (`V3.2–V3.3`), adds an isolated `iceberg-rust` V3 reader oracle + Spark/Trino bi-directional mutation round-trips (`V3.4`), and adds/hardens catalogs (`S3Tables`, `Memory`, and JDBC/Glue/Hive/Unity/Nessie CAS fixes, `C1–C4`) ([iceberg_v3_and_catalog_parity_plan.md](iceberg_v3_and_catalog_parity_plan.md)).
+3. **WS1 / manifest & CI hygiene tail:** add an explicit Rust regression test for quantized `explain()` vector access paths in [`tests/test_differential_index_oracle.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_differential_index_oracle.rs), populate `proptest-regressions/` over random SQL predicates, clean up remaining legacy `Manifest.entries` references in [`load_initial_schema`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/mod.rs#L827) and [`schema.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/schema.rs#L47), and remove the dead `--ignore=tests/integration/test_catalog.py` flag in [`.github/workflows/ci.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/ci.yml#L255).
+4. **Post-Preview operational & enterprise tracks:** metadata-scaling stress (`>10k` snapshots/segments), `p99`-under-compaction / throttling benchmarks, and untrusted multi-tenant security (native TLS, per-table RBAC, MCP scratch tenant isolation, auth audit logging, distributed multi-node/multi-table consensus).
 
 Derived from the external (OpenAI) production-readiness review. The review's
 verdict: the **storage/index architecture is the strongest part**; the gap is
@@ -69,7 +70,9 @@ indexed, once full-scan — and assert identical results.
 
 ---
 
-## 2. Immediate finding — `explain()` misreports the vector access path
+## 2. Historical finding — `explain()` misreported the vector access path (**Status: fixed in engine; explicit Rust vector regression test still open**)
+
+While exercising the early 51.8M-row demo, `Table.explain()` on the `nodes` table returned:
 
 While exercising the demo, `Table.explain()` on the `nodes` table returned:
 
@@ -113,8 +116,7 @@ fails — it is just catastrophically slow. It is the same *class* of bug as the
 graph-index v1→v2 issue already found (manifest/loader disagreeing about which
 index artifacts are live).
 
-**This is Workstream 1's first test case, and it should be fixed before any
-performance claim is made.**
+**Status update:** [`explain()`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L533) now resolves vector access paths directly from the manifest's `index_files`, and scalar/stats pruning rules are tested in [`tests/python/test_explain_pruning.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_explain_pruning.py#L1). An explicit Rust regression assertion that `explain()` reports `HNSW-TQ8 Cluster Index` (not `"Brute Force Scan"`) remains to be added to `tests/test_differential_index_oracle.rs`.
 
 ### 2.1 Differential oracle finding — a BM25 index silently drops equality matches
 
@@ -189,10 +191,11 @@ All three now resolve entries via `load_all_entries`, matching the reader.
 active segments; any code that needs the live segment set must go through
 `load_all_entries` (or `load_latest_full`). A follow-up lint/helper that makes
 the raw field private, or a `#[deprecated]` accessor, would prevent regressions.
-The remaining direct use in
-[`load_initial_schema`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/mod.rs#L639) is a benign last-resort
-fallback (it degrades to a bounded directory listing) but should be migrated for
-consistency.
+The remaining direct reads in
+[`load_initial_schema`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/mod.rs#L827)
+(a benign last-resort fallback that degrades to a bounded directory listing)
+and [`update_schema`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/schema.rs#L47)
+should be migrated for consistency (keeping tiered manifests free of stale inline entries).
 
 ### 2.3 WS2 finding — WAL replay was not idempotent (duplicate rows)
 
@@ -408,28 +411,27 @@ flowchart TD
     C -->|diverge| R[Report divergence with seed]
 ```
 
-**Deliverables**
+**Deliverables & status**
 - A harness that, for a given snapshot, runs each query with indexes enabled and
-  with indexes disabled (force full scan) and diffs the result sets.
+  with indexes disabled (force full scan) and diffs the result sets (**shipped:**
+  [`tests/test_differential_index_oracle.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_differential_index_oracle.rs#L1)
+  and [`tests/test_randomized_differential_workload.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_randomized_differential_workload.rs#L1)).
 - Coverage matrix: scalar bitmap, inverted/BM25, HNSW/IVF/TurboQuant, CSR graph,
-  bloom, composite, and the pgvector operators.
+  bloom, composite, and the pgvector operators (**shipped**).
 - A **regression test for the §2 finding**: assert `explain()` reports an index
   access path (not "Brute Force Scan") for a table that has a vector index, and
-  assert the indexed vector query is materially faster than the scan.
-- Property tests (extend `proptest-regressions/`) over random predicates.
+  assert the indexed vector query is materially faster than the scan (**partial:**
+  `explain()` itself is fixed in [`src/core/table/read.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L533)
+  and scalar/stats pruning is tested in [`tests/python/test_explain_pruning.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_explain_pruning.py#L1),
+  while an explicit Rust quantized vector `explain()` assertion remains open).
+- Property tests (populate `proptest-regressions/` over random predicates — **open**).
 
-**Existing assets to build on:** [`tests/test_vector_consistency.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_vector_consistency.rs),
+**Existing assets:** [`tests/test_vector_consistency.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_vector_consistency.rs),
 [`tests/test_vector_metrics_parity.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_vector_metrics_parity.rs),
 [`tests/python/test_vector_search_correctness.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_vector_search_correctness.py),
 [`tests/python/test_explain_pruning.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_explain_pruning.py),
 [`src/core/planner.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/planner.rs#L1099) (`prune_entries`,
-`classify_condition`), [`src/core/table/read.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L121) (`explain`).
-
-**Root-cause work for §2:** verify the `nodes` manifest registers the `embedding`
-vector index (mirror the graph v1→v2 investigation in
-[`src/python/helpers.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/helpers.rs#L73)), and that
-[`src/core/planner.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/planner.rs#L1458) `select_index` matches the
-vector index type for the `embedding` column.
+`classify_condition`), [`src/core/table/read.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L533) (`explain`).
 
 ---
 
@@ -438,30 +440,22 @@ vector index type for the `embedding` column.
 **Goal:** kill the process at hundreds/thousands of points across the
 commit/WAL/manifest/index boundaries and prove recovery is deterministic.
 
-**Boundaries to inject at**
-- WAL append → WAL flush → WAL truncation.
+**Boundaries covered**
+- WAL append → WAL flush → WAL truncation (**expanded under M2** with rotated segment recovery and torn-EOF trimming).
 - Data upload → index upload → manifest commit (the review's cases A–F).
 - Manifest commit → object-store visibility delay.
 - Compaction start → new files written → manifest swap.
 - GC/vacuum start → artifact deletion.
 
-**Deliverables**
-- A fault-injection layer (env-var or trait-based) that can `SIGKILL` at named
-  points, plus a driver that sweeps the injection point.
-- For each injection point, assert: snapshot correctness, row counts, delete
-  semantics, index correctness, manifest consistency, WAL recovery, time travel.
-- Explicit tests for the review's cases A–F (data-without-index,
-  index-without-manifest, delayed visibility, WAL-before-manifest,
-  manifest-before-WAL-truncation, two-writer race).
-
-**Existing assets:** [`tests/test_crash_injection.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_crash_injection.rs#L1)
-(WAL tx identity/sequence), [`tests/test_durability_robust.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_durability_robust.rs),
-[`tests/test_chaos.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_chaos.rs#L47) (missing index files),
-[`tests/integration/test_wal_durability.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_wal_durability.py),
-[`tests/integration/test_wal_compaction.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_wal_compaction.py).
-
-**Gap:** existing tests cover specific scenarios; there is no *swept* injection
-across every boundary with a reference oracle.
+**Assets & status:** **Developer Preview gate shipped** across
+[`tests/test_crash_injection.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_crash_injection.rs#L1),
+[`tests/test_crash_injection_sweep.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_crash_injection_sweep.rs#L1),
+[`tests/test_crash_injection_cases.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_crash_injection_cases.rs#L1),
+[`tests/test_crash_injection_workload.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_crash_injection_workload.rs#L1),
+[`tests/test_m2_commit_state_machine.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_m2_commit_state_machine.rs#L1) (subprocess `SIGABRT`/`SIGKILL` and `ScriptedStore` sweeps),
+[`tests/test_durability_robust.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_durability_robust.rs), and
+[`tests/test_chaos.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_chaos.rs#L47).
+**Remaining hardening:** wire the [`wal_segment`](https://github.com/benolabsai/benostreamdb/blob/main/fuzz/fuzz_targets/wal_segment.rs) libFuzzer target (shipped; verified at `5,000` runs with `0` crashes) into [`.github/workflows/fuzz.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/fuzz.yml).
 
 ---
 
@@ -470,25 +464,41 @@ across every boundary with a reference oracle.
 **Goal:** prove the OCC + distributed-locking design is safe with N concurrent
 writers against shared object storage, under randomized failure.
 
-**Deliverables**
-- Randomized concurrency harness: N writers × (insert/update/delete/commit/
-  compact/vacuum) with injected commit conflicts and object-store errors.
-- Assert: no lost updates, no torn snapshots, no orphaned-but-referenced
-  artifacts, deterministic conflict resolution.
-- A shared-object-store variant (RustFS/S3) rather than only local FS.
+**Status & remaining work:** Core 16-writer shared-store, randomized
+maintenance-vs-writer, `FaultyStore`, S3/RustFS round-trip, `multi_writer_soak`,
+M2 state-machine guarantees ([`test_m2_commit_state_machine.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_m2_commit_state_machine.rs#L1)),
+and the dedicated multi-writer union-model differential suite
+([`test_multi_writer_differential.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_multi_writer_differential.rs#L1),
+`4/4` tests covering V2 union recall, V3 strict OCC `_row_id` uniqueness, and
+`ToggleFaultyStore`) are **shipped**, and a local `180s`/stage
+[`pre_release_soak.sh`](https://github.com/benolabsai/benostreamdb/blob/main/scripts/pre_release_soak.sh)
+sweep (`BSDB_WORKLOAD_STEPS=400`) passed cleanly.
+**Remaining:** wire `test_multi_writer_differential` into
+[`scripts/pre_release_soak.sh`](https://github.com/benolabsai/benostreamdb/blob/main/scripts/pre_release_soak.sh) /
+[`.github/workflows/soak.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/soak.yml)
+and run live RustFS (`AWS_ENDPOINT_URL`) in CI so `s3_multi_writer_*` tests
+execute rather than skipping early.
 
-**Existing assets:** [`tests/test_concurrent_writers.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_concurrent_writers.rs#L44),
+**Existing assets:** [`tests/test_multi_writer_concurrency.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_multi_writer_concurrency.rs#L1),
+[`tests/test_m2_commit_state_machine.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_m2_commit_state_machine.rs#L1),
+[`tests/test_concurrent_writers.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_concurrent_writers.rs#L44),
 [`tests/test_concurrency_robust.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_concurrency_robust.rs),
 [`tests/python/test_mvcc_commits.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_mvcc_commits.py),
 [`tests/integration/test_concurrent_access.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_concurrent_access.py),
-[`src/core/lock.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/lock.rs), [`src/core/nessie.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/nessie.rs).
+[`src/core/lock.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/lock.rs), [`src/core/catalog/nessie.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/nessie.rs).
 
 ---
 
 ### WS4 — Iceberg interoperability / conformance  *(review gate #4)*
 
-**Goal:** the "100% of core V2/V3" claim must be validated by *other*
-implementations, not only internal tests.
+**Goal:** validate V2/V3 conformance and multi-catalog parity through *external*
+implementations, not only internal round-trips.
+
+**Status & next steps:** Structural Rust checks (`tests/test_iceberg_conformance.rs`)
+and PyIceberg V2 reader/writer checks (`tests/integration/test_bsdb_to_pyiceberg.py`)
+are **shipped**. Full V3 `deletion-vector-v1` write/read wiring, `apache/iceberg-rust`
+reader oracle integration, bi-directional Spark/Trino mutation tests, and
+catalog CAS/S3Tables/Memory parity are specified in **[iceberg_v3_and_catalog_parity_plan.md](iceberg_v3_and_catalog_parity_plan.md)**.
 
 **Deliverables**
 - Round-trip matrix: BenoStreamDB → {Spark, Trino, PyIceberg} → read/update/delete
@@ -532,22 +542,26 @@ review's GC-vs-reader race.
 
 ## 4. Cross-cutting tracks
 
-- **Compatibility matrices** — one explicit, automated matrix per compatibility
-  surface (pgvector, OpenSearch, Qdrant, Flight SQL, Spark, Trino, dbt), with
-  upstream test suites where licensing permits. "Looks compatible" ≠ "is
-  compatible".
-- **Security (untrusted network)** — the OpenSearch-compatible server has no
-  auth. Before any Internet-facing deployment: TLS, authn/authz, tenant
-  isolation, request/payload limits, query timeouts, memory/concurrency limits,
-  audit logging, secret handling.
-- **Operational tooling** — recovery runbooks, GC/compaction observability,
-  metadata-scaling limits (millions of snapshots / small files / partitions),
-  p99 and tail-latency-under-compaction benchmarks.
-- **Benchmark honesty** — keep the current discipline (only the reproducible
-  Wikipedia Graph-RAG benchmark is stood behind). Add the *production* benchmark
-  classes the review lists: sustained concurrent queries, concurrent writers,
-  p99/tail latency, recovery time, object-store throttling, pathological filters,
-  skewed data.
+- **Compatibility matrices** — explicit conformance matrices published for
+  Iceberg ([`ICEBERG_COMPATIBILITY.md`](https://www.benostreamdb.org/guides/iceberg_compatibility.html)),
+  connectors ([`docs/integrations/`](https://github.com/benolabsai/benostreamdb/tree/main/docs/integrations)),
+  and supported platforms ([`SUPPORT_MATRIX.md`](https://www.benostreamdb.org/guides/support_matrix.html));
+  V3 DV + multi-catalog automation expands via [iceberg_v3_and_catalog_parity_plan.md](iceberg_v3_and_catalog_parity_plan.md).
+- **Security (untrusted network)** — static API key (`BSDB_API_KEY`),
+  HS256/RS256 JWT + RBAC claim extraction ([`src/core/auth.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/auth.rs#L1)),
+  fail-closed non-loopback network binding on `bsdb-search` and `benostreamdb-flight`,
+  and `BSDB_SSRF_GUARD=1` are **shipped**. Remaining post-Preview scope:
+  native TLS termination, external IdP sync, per-table/per-column RBAC,
+  query/payload quotas, and auth audit logging.
+- **Operational tooling** — recovery runbook, Prometheus/OTLP metrics, and
+  M2 recovery procedures are active; remaining focus is metadata-scaling
+  limits (`>10k` snapshots / small files / partitions) and automated
+  p99-under-compaction profiling.
+- **Benchmark honesty** — maintain reproducible benchmark discipline
+  ([`BENCHMARKING.md`](https://www.benostreamdb.org/guides/benchmarking.html),
+  `lastfm-64-dot` recall collapse fixed and verified). Expand CI sweeps across
+  sustained concurrent queries, multi-writer throughput, recovery time,
+  object-store throttling, and skewed predicates.
 
 ---
 

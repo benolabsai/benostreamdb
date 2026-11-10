@@ -204,6 +204,47 @@ impl HnswGraph {
         }
     }
 
+    /// Search using a precomputed [`crate::core::index::PreparedQuantizedQuery`]
+    /// for quantized graphs, falling back to [`Self::search`] for unquantized or
+    /// unmatched variants.
+    pub fn search_with_quantizer(
+        &self,
+        query_fallback: &VectorValue,
+        prepared: Option<&crate::core::index::PreparedQuantizedQuery<'_>>,
+        k: usize,
+        ef: usize,
+        filter: Option<&roaring::RoaringBitmap>,
+    ) -> Vec<Neighbour> {
+        use crate::core::index::PreparedQuantizedQuery;
+        match (self, prepared) {
+            (HnswGraph::TurboQuant8(h), Some(PreparedQuantizedQuery::BenoQuant(pq))) => {
+                h.search_with_scorer(k, ef, filter, |code| pq.distance(code))
+            }
+            (HnswGraph::TurboQuant4(h), Some(PreparedQuantizedQuery::BenoQuant(pq))) => {
+                h.search_with_scorer(k, ef, filter, |code| pq.distance(code))
+            }
+            (HnswGraph::TurboQuant8Arrow(h), Some(PreparedQuantizedQuery::BenoQuant(pq))) => {
+                h.search_with_scorer(k, ef, filter, |code| pq.distance(code))
+            }
+            (HnswGraph::TurboQuant4Arrow(h), Some(PreparedQuantizedQuery::BenoQuant(pq))) => {
+                h.search_with_scorer(k, ef, filter, |code| pq.distance(code))
+            }
+            (HnswGraph::Sq8(h), Some(PreparedQuantizedQuery::Sq(psq))) => {
+                h.search_with_scorer(k, ef, filter, |code| psq.distance(code))
+            }
+            (HnswGraph::Sq8Arrow(h), Some(PreparedQuantizedQuery::Sq(psq))) => {
+                h.search_with_scorer(k, ef, filter, |code| psq.distance(code))
+            }
+            (HnswGraph::Pq(h), Some(PreparedQuantizedQuery::Pq(ppq))) => {
+                h.search_with_scorer(k, ef, filter, |code| ppq.distance(code))
+            }
+            (HnswGraph::PqArrow(h), Some(PreparedQuantizedQuery::Pq(ppq))) => {
+                h.search_with_scorer(k, ef, filter, |code| ppq.distance(code))
+            }
+            _ => self.search(query_fallback, k, ef, filter),
+        }
+    }
+
     /// Retrieve the stored vector for a neighbour, for exact rescoring.
     ///
     /// The f32 graph variants return the raw vector. The compressed variants
@@ -969,35 +1010,19 @@ impl HnswIvfIndex {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn build_and_save_from_file_inner(
+    fn sample_vectors_from_tmp_file(
         tmp_path: &str,
-        output_base_path: &str,
-        metric: VectorMetric,
-        n_lists: Option<usize>,
-        hnsw_m: Option<usize>,
-        algo: &IndexAlgorithm,
-        seed: Option<u64>,
-        precomputed_centroids: Option<Vec<Vec<f32>>>,
-    ) -> Result<Vec<String>> {
-        let start = std::time::Instant::now();
-        tracing::info!(
-            "Building & streaming HNSW-IVF out-of-core from file {} to {}",
-            tmp_path,
-            output_base_path
-        );
-
+        max_samples: usize,
+    ) -> Result<(usize, usize, Vec<Vec<f32>>)> {
         let mut file = std::fs::File::open(tmp_path)?;
         let file_len = file.metadata()?.len();
-        let mut n_vectors = 0;
-        let mut dim = 0;
+        let mut n_vectors = 0usize;
+        let mut dim = 0usize;
         let mut vectors_sampled = Vec::new();
 
         use std::io::{Read, Seek, SeekFrom};
         let mut id_buf = [0u8; 4];
         let mut dim_buf = [0u8; 4];
-        let max_samples = 100_000;
-
         let mut magic_buf = [0u8; 4];
         let has_header = file.read_exact(&mut magic_buf).is_ok()
             && u32::from_le_bytes(magic_buf) == VEC_TMP_MAGIC
@@ -1011,34 +1036,63 @@ impl HnswIvfIndex {
             } else {
                 0
             };
-            let to_sample = n_vectors.min(max_samples);
-            const SAMPLE_BLOCK: usize = 64;
-            let n_blocks = (to_sample / SAMPLE_BLOCK).max(1).min(n_vectors);
-            let stride = (n_vectors / n_blocks).max(1);
-            let record = (8 + dim * 4) as u64;
 
-            'sample: for b in 0..n_blocks {
-                let start_idx = b * stride;
-                if start_idx >= n_vectors {
-                    break;
-                }
-                file.seek(SeekFrom::Start(8 + start_idx as u64 * record))?;
-                for _ in 0..SAMPLE_BLOCK {
-                    if vectors_sampled.len() >= to_sample {
-                        break 'sample;
-                    }
+            if n_vectors <= max_samples {
+                // Sample all vectors sequentially so small and medium corpora
+                // (<= 100k vectors) never miss tail elements during k-means or
+                // quantizer range estimation.
+                vectors_sampled.reserve(n_vectors);
+                for _ in 0..n_vectors {
                     if file.read_exact(&mut id_buf).is_err()
                         || file.read_exact(&mut dim_buf).is_err()
                     {
-                        break 'sample;
+                        break;
                     }
                     let current_dim = u32::from_le_bytes(dim_buf) as usize;
                     let mut vec_f32 = vec![0f32; current_dim];
                     file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
                     vectors_sampled.push(vec_f32);
                 }
+            } else {
+                // Sample **across the whole file**, not its prefix.
+                //
+                // Read `SAMPLE_BLOCK` consecutive vectors from evenly spaced
+                // offsets spanning `[0, n_vectors - SAMPLE_BLOCK]` so head,
+                // middle, and tail regions are all represented.
+                const SAMPLE_BLOCK: usize = 64;
+                let to_sample = max_samples;
+                let n_blocks = to_sample.div_ceil(SAMPLE_BLOCK).min(n_vectors);
+                let max_start = n_vectors.saturating_sub(SAMPLE_BLOCK);
+                let record_u64 = record as u64;
+
+                'sample: for b in 0..n_blocks {
+                    let start_idx = if n_blocks <= 1 {
+                        0
+                    } else {
+                        ((b as u64 * max_start as u64) / (n_blocks as u64 - 1)) as usize
+                    };
+                    file.seek(SeekFrom::Start(8 + start_idx as u64 * record_u64))?;
+                    for _ in 0..SAMPLE_BLOCK {
+                        if vectors_sampled.len() >= to_sample {
+                            break 'sample;
+                        }
+                        if file.read_exact(&mut id_buf).is_err()
+                            || file.read_exact(&mut dim_buf).is_err()
+                        {
+                            break 'sample;
+                        }
+                        let current_dim = u32::from_le_bytes(dim_buf) as usize;
+                        // f32-ALIGNED buffer: Vec<u8> has alignment 1, so casting it
+                        // to &[f32] panics intermittently
+                        // ("TargetAlignmentGreaterAndInputNotAligned").
+                        let mut vec_f32 = vec![0f32; current_dim];
+                        file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+                        vectors_sampled.push(vec_f32);
+                    }
+                }
             }
         } else {
+            // Legacy file without a header: full scan.
             file.seek(SeekFrom::Start(0))?;
             loop {
                 if file.read_exact(&mut id_buf).is_err() {
@@ -1063,6 +1117,34 @@ impl HnswIvfIndex {
         if n_vectors == 0 {
             anyhow::bail!("No vectors found in temp file");
         }
+
+        Ok((n_vectors, dim, vectors_sampled))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_and_save_from_file_inner(
+        tmp_path: &str,
+        output_base_path: &str,
+        metric: VectorMetric,
+        n_lists: Option<usize>,
+        hnsw_m: Option<usize>,
+        algo: &IndexAlgorithm,
+        seed: Option<u64>,
+        precomputed_centroids: Option<Vec<Vec<f32>>>,
+    ) -> Result<Vec<String>> {
+        let start = std::time::Instant::now();
+        tracing::info!(
+            "Building & streaming HNSW-IVF out-of-core from file {} to {}",
+            tmp_path,
+            output_base_path
+        );
+
+        use std::io::{Read, Seek, SeekFrom};
+        let mut id_buf = [0u8; 4];
+        let mut dim_buf = [0u8; 4];
+        let max_samples = 100_000;
+        let (n_vectors, dim, vectors_sampled) =
+            Self::sample_vectors_from_tmp_file(tmp_path, max_samples)?;
 
         let num_cpus = num_cpus::get();
         let n_lists = n_lists
@@ -1327,98 +1409,12 @@ impl HnswIvfIndex {
         let start = std::time::Instant::now();
         tracing::info!("Building HNSW-IVF out-of-core from file: {}", tmp_path);
 
-        let mut file = std::fs::File::open(tmp_path)?;
-        let file_len = file.metadata()?.len();
-        let mut n_vectors = 0;
-        let mut dim = 0;
-        let mut vectors_sampled = Vec::new();
-
         use std::io::{Read, Seek, SeekFrom};
         let mut id_buf = [0u8; 4];
         let mut dim_buf = [0u8; 4];
         let max_samples = 100_000;
-
-        // Pass 1: count + sample. Prefer the self-describing header (magic +
-        // dim) so the count is derived from the file length instead of
-        // re-reading every vector; fall back to a full scan for legacy files.
-        let mut magic_buf = [0u8; 4];
-        let has_header = file.read_exact(&mut magic_buf).is_ok()
-            && u32::from_le_bytes(magic_buf) == VEC_TMP_MAGIC
-            && file.read_exact(&mut dim_buf).is_ok();
-
-        if has_header {
-            dim = u32::from_le_bytes(dim_buf) as usize;
-            let record = 8 + dim * 4;
-            n_vectors = if file_len >= 8 && record > 0 {
-                ((file_len - 8) / record as u64) as usize
-            } else {
-                0
-            };
-            // Sample **across the whole file**, not its prefix.
-            //
-            // The previous version trained k-means on the first `max_samples`
-            // vectors only. A contiguous prefix is not a sample of the corpus:
-            // at 1M it was 10% of the rows, at 10M 1%, and at 100M 0.1%, so the
-            // centroids drifted further from the true distribution as the
-            // dataset grew — which is exactly the regime where IVF recall is set
-            // by centroid quality. Read `block` consecutive vectors from evenly
-            // spaced offsets instead: same sample count, ~n_blocks seeks.
-            let to_sample = n_vectors.min(max_samples);
-            const SAMPLE_BLOCK: usize = 64;
-            let n_blocks = (to_sample / SAMPLE_BLOCK).max(1).min(n_vectors);
-            let stride = (n_vectors / n_blocks).max(1);
-            let record = (8 + dim * 4) as u64;
-
-            'sample: for b in 0..n_blocks {
-                let start_idx = b * stride;
-                if start_idx >= n_vectors {
-                    break;
-                }
-                file.seek(SeekFrom::Start(8 + start_idx as u64 * record))?;
-                for _ in 0..SAMPLE_BLOCK {
-                    if vectors_sampled.len() >= to_sample {
-                        break 'sample;
-                    }
-                    if file.read_exact(&mut id_buf).is_err()
-                        || file.read_exact(&mut dim_buf).is_err()
-                    {
-                        break 'sample;
-                    }
-                    let current_dim = u32::from_le_bytes(dim_buf) as usize;
-                    // f32-ALIGNED buffer: Vec<u8> has alignment 1, so casting it
-                    // to &[f32] panics intermittently
-                    // ("TargetAlignmentGreaterAndInputNotAligned").
-                    let mut vec_f32 = vec![0f32; current_dim];
-                    file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
-                    vectors_sampled.push(vec_f32);
-                }
-            }
-        } else {
-            // Legacy file without a header: full scan.
-            file.seek(SeekFrom::Start(0))?;
-            loop {
-                if file.read_exact(&mut id_buf).is_err() {
-                    break;
-                }
-                if file.read_exact(&mut dim_buf).is_err() {
-                    break;
-                }
-                let current_dim = u32::from_le_bytes(dim_buf) as usize;
-                if dim == 0 {
-                    dim = current_dim;
-                }
-                let mut vec_f32 = vec![0f32; current_dim];
-                file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
-                n_vectors += 1;
-                if vectors_sampled.len() < max_samples {
-                    vectors_sampled.push(vec_f32);
-                }
-            }
-        }
-
-        if n_vectors == 0 {
-            anyhow::bail!("No vectors found in temp file");
-        }
+        let (n_vectors, dim, vectors_sampled) =
+            Self::sample_vectors_from_tmp_file(tmp_path, max_samples)?;
 
         let num_cpus = num_cpus::get();
         let n_lists = n_lists
@@ -2346,40 +2342,6 @@ impl HnswIvfIndex {
         self.dim
     }
 
-    fn quantize_query(&self, query_f32: &[f32], query: &VectorValue) -> VectorValue {
-        match self.quantizer {
-            Some(QuantizerImpl::BenoQuant(ref q)) => {
-                let mut q_vec = query_f32.to_vec();
-                if self.metric == VectorMetric::Cosine {
-                    let norm = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-                    if norm > 1e-12 {
-                        let inv = 1.0 / norm;
-                        for v in &mut q_vec {
-                            *v *= inv;
-                        }
-                    }
-                }
-                VectorValue::Binary(q.encode(&q_vec))
-            }
-            Some(QuantizerImpl::Sq(ref q)) => VectorValue::Binary(q.encode(query_f32)),
-            Some(QuantizerImpl::Pq(ref q)) => {
-                let mut q_vec = query_f32.to_vec();
-                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
-                {
-                    let norm = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-                    if norm > 1e-6 {
-                        let inv = 1.0 / norm;
-                        for v in &mut q_vec {
-                            *v *= inv;
-                        }
-                    }
-                }
-                VectorValue::Binary(q.encode(&q_vec))
-            }
-            _ => query.clone(),
-        }
-    }
-
     /// Set the candidate oversampling factor used before exact InnerProduct
     /// rescoring. Values below `1` are clamped to `1`.
     pub fn with_rescore_oversample(mut self, factor: usize) -> Self {
@@ -2407,10 +2369,14 @@ impl HnswIvfIndex {
             VectorValue::Keyword(_) => return Ok(vec![]),
         };
 
-        let effective_query = self.quantize_query(query_f32, query);
+        let prepared_query = self
+            .quantizer
+            .as_ref()
+            .map(|q| q.prepare_query(query_f32, self.metric));
         self.search_clusters_internal(
             query_f32,
-            &effective_query,
+            query,
+            prepared_query.as_ref(),
             target_clusters,
             k,
             filter,
@@ -2437,7 +2403,10 @@ impl HnswIvfIndex {
             VectorValue::Keyword(_) => return Ok(vec![]),
         };
 
-        let effective_query = self.quantize_query(query_f32, query);
+        let prepared_query = self
+            .quantizer
+            .as_ref()
+            .map(|q| q.prepare_query(query_f32, self.metric));
 
         // Step 1: Find n_probe nearest clusters (coarse search)
         // (Centroids are always f32 for stability)
@@ -2497,7 +2466,8 @@ impl HnswIvfIndex {
 
         self.search_clusters_internal(
             query_f32,
-            &effective_query,
+            query,
+            prepared_query.as_ref(),
             &clusters_to_search,
             k,
             filter,
@@ -2506,10 +2476,12 @@ impl HnswIvfIndex {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn search_clusters_internal(
         &self,
         query_f32: &[f32],
-        effective_query: &VectorValue,
+        query_fallback: &VectorValue,
+        prepared_query: Option<&crate::core::index::PreparedQuantizedQuery<'_>>,
         clusters_to_search: &[usize],
         k: usize,
         filter: Option<&roaring::RoaringBitmap>,
@@ -2554,8 +2526,9 @@ impl HnswIvfIndex {
                     // For smaller clusters, scale ef proportionally to avoid excess priority queue churn
                     let cluster_ef = ef.min((row_id_mapping.len() * 3) / 4).max(cluster_k);
 
-                    let results = hnsw.search(
-                        effective_query,
+                    let results = hnsw.search_with_quantizer(
+                        query_fallback,
+                        prepared_query,
                         cluster_k,
                         cluster_ef,
                         local_filter_opt.as_ref(),
@@ -3737,5 +3710,119 @@ mod tests {
         )
         .unwrap();
         assert_eq!(total_points(&idx2), n, "legacy path dropped vectors");
+    }
+
+    #[test]
+    fn out_of_core_sampling_includes_tail_vectors() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let dim = 8;
+        let n = 119usize; // Previously: 119 / 64 == 1 block -> only rows 0..64 were sampled.
+        let path = dir.path().join("tail_sample.bin");
+
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(&VEC_TMP_MAGIC.to_le_bytes()).unwrap();
+            f.write_all(&(dim as u32).to_le_bytes()).unwrap();
+            for i in 0..n {
+                // Rows 0..64 live near 0..63; tail rows 64..119 jump up to 1000..1054.
+                let val = if i < 64 {
+                    i as f32
+                } else {
+                    1000.0 + (i - 64) as f32
+                };
+                let v = vec![val; dim];
+                f.write_all(&(i as u32).to_le_bytes()).unwrap();
+                f.write_all(&(dim as u32).to_le_bytes()).unwrap();
+                f.write_all(bytemuck::cast_slice(&v)).unwrap();
+            }
+        }
+
+        let (count, parsed_dim, samples) =
+            HnswIvfIndex::sample_vectors_from_tmp_file(path.to_str().unwrap(), 100_000).unwrap();
+        assert_eq!(count, n);
+        assert_eq!(parsed_dim, dim);
+        assert_eq!(samples.len(), n);
+        assert!(samples.iter().any(|v| (v[0] - 1054.0).abs() < 1e-4));
+
+        // Build an out-of-core HnswTq8 index over the 119 vectors and verify
+        // exact tail retrieval without cross-row clamping collapse.
+        let algo = crate::core::manifest::IndexAlgorithm::hnsw_tq8();
+        let idx = HnswIvfIndex::build_from_file(
+            path.to_str().unwrap(),
+            VectorMetric::L2,
+            None,
+            None,
+            &algo,
+        )
+        .unwrap();
+        let hits = idx
+            .search(&VectorValue::Float32(vec![1054.0; dim]), 5, 16, None, None)
+            .unwrap();
+        assert!(
+            hits.iter().any(|(id, _)| *id == n - 1),
+            "expected tail row {} in top-5, got {:?}",
+            n - 1,
+            hits
+        );
+        assert!(
+            hits[0].0 >= 110 && hits[0].1 < 25.0,
+            "expected top hit in near-tail with calibrated L2 distance, got {:?}",
+            hits
+        );
+    }
+
+    #[test]
+    fn multi_segment_quantized_l2_distances_remain_calibrated_on_out_of_range_queries() {
+        let dim = 8;
+        let seg1_vecs: Vec<Vec<f32>> = (0..16).map(|i| vec![(i * 4) as f32; dim]).collect();
+        let seg2_vecs: Vec<Vec<f32>> = (190..206).map(|i| vec![i as f32; dim]).collect();
+        let query = VectorValue::Float32(vec![197.0; dim]);
+
+        for algo in [
+            crate::core::manifest::IndexAlgorithm::hnsw_tq8(),
+            crate::core::manifest::IndexAlgorithm::hnsw_tq4(),
+            crate::core::manifest::IndexAlgorithm::hnsw_sq8(),
+        ] {
+            let idx1 =
+                HnswIvfIndex::build(seg1_vecs.clone(), VectorMetric::L2, Some(1), None, &algo, 0)
+                    .unwrap();
+            let idx2 = HnswIvfIndex::build(
+                seg2_vecs.clone(),
+                VectorMetric::L2,
+                Some(1),
+                None,
+                &algo,
+                100,
+            )
+            .unwrap();
+
+            let h1 = idx1.search(&query, 3, 1, None, None).unwrap();
+            let h2 = idx2.search(&query, 3, 1, None, None).unwrap();
+
+            assert!(!h1.is_empty() && !h2.is_empty());
+            let d1_best = h1[0].1;
+            let d2_best = h2[0].1;
+            let expected_seg1 = (197.0 - 60.0) * (dim as f32).sqrt();
+            assert!(
+                (d1_best - expected_seg1).abs() < 45.0,
+                "algo={:?}: seg1 best distance must be calibrated (~{expected_seg1}), got {d1_best}",
+                algo
+            );
+            assert!(
+                d2_best < 45.0 && d2_best < d1_best,
+                "algo={:?}: exact match in seg2 ({d2_best}) must beat out-of-range seg1 ({d1_best})",
+                algo
+            );
+            if !matches!(algo, crate::core::manifest::IndexAlgorithm::HnswTq4 { .. }) {
+                assert!(
+                    h2.iter().any(|(id, _)| *id == 107),
+                    "algo={:?}: expected row 107 ([197; 8]) in top-3, got {:?}",
+                    algo,
+                    h2
+                );
+            }
+        }
     }
 }

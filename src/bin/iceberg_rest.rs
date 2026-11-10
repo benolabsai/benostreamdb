@@ -547,8 +547,112 @@ pub enum TableUpdateAction {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum TableRequirement {
     AssertCreate,
+    AssertTableUuid {
+        uuid: String,
+    },
+    AssertRefSnapshotId {
+        #[serde(rename = "ref")]
+        ref_name: String,
+        #[serde(rename = "snapshot-id")]
+        snapshot_id: Option<i64>,
+    },
+    AssertCurrentSchemaId {
+        #[serde(rename = "current-schema-id")]
+        current_schema_id: i32,
+    },
+    AssertDefaultSpecId {
+        #[serde(rename = "default-spec-id")]
+        default_spec_id: i32,
+    },
+    AssertDefaultSortOrderId {
+        #[serde(rename = "default-sort-order-id")]
+        default_sort_order_id: i32,
+    },
     #[serde(other)]
     Unknown,
+}
+
+fn validate_requirements(
+    requirements: &[TableRequirement],
+    existing_meta: Option<&TableMetadata>,
+    current_manifest: &benostreamdb::core::manifest::Manifest,
+    current_manifest_ver: u64,
+) -> Result<(), String> {
+    for req in requirements {
+        match req {
+            TableRequirement::AssertCreate => {
+                if existing_meta.is_some() || current_manifest_ver > 0 {
+                    return Err("Requirement failed: table already exists".to_string());
+                }
+            }
+            TableRequirement::AssertTableUuid { uuid } => {
+                let actual = existing_meta
+                    .map(|m| m.table_uuid.as_str())
+                    .unwrap_or_default();
+                if actual != uuid {
+                    return Err(format!(
+                        "Requirement failed: assert-table-uuid expected '{}', got '{}'",
+                        uuid, actual
+                    ));
+                }
+            }
+            TableRequirement::AssertRefSnapshotId {
+                ref_name,
+                snapshot_id,
+            } => {
+                if ref_name == "main" {
+                    let fallback_snap =
+                        (current_manifest_ver > 0).then_some(current_manifest_ver as i64);
+                    let actual_snap = existing_meta
+                        .and_then(|m| m.current_snapshot_id)
+                        .or(fallback_snap);
+                    if actual_snap != *snapshot_id {
+                        return Err(format!(
+                            "Requirement failed: assert-ref-snapshot-id on '{}' expected {:?}, got {:?}",
+                            ref_name, snapshot_id, actual_snap
+                        ));
+                    }
+                }
+            }
+            TableRequirement::AssertCurrentSchemaId { current_schema_id } => {
+                let actual = existing_meta
+                    .map(|m| m.current_schema_id)
+                    .unwrap_or(current_manifest.current_schema_id);
+                if actual != *current_schema_id {
+                    return Err(format!(
+                        "Requirement failed: assert-current-schema-id expected {}, got {}",
+                        current_schema_id, actual
+                    ));
+                }
+            }
+            TableRequirement::AssertDefaultSpecId { default_spec_id } => {
+                let actual = existing_meta
+                    .map(|m| m.default_spec_id)
+                    .unwrap_or(current_manifest.default_spec_id);
+                if actual != *default_spec_id {
+                    return Err(format!(
+                        "Requirement failed: assert-default-spec-id expected {}, got {}",
+                        default_spec_id, actual
+                    ));
+                }
+            }
+            TableRequirement::AssertDefaultSortOrderId {
+                default_sort_order_id,
+            } => {
+                let actual = existing_meta
+                    .map(|m| m.default_sort_order_id)
+                    .unwrap_or(current_manifest.default_sort_order_id);
+                if actual != *default_sort_order_id {
+                    return Err(format!(
+                        "Requirement failed: assert-default-sort-order-id expected {}, got {}",
+                        default_sort_order_id, actual
+                    ));
+                }
+            }
+            TableRequirement::Unknown => {}
+        }
+    }
+    Ok(())
 }
 
 async fn update_table(
@@ -586,7 +690,50 @@ async fn update_table(
     // Support complex namespaces with '/' (URL decoded from '%2F')
     let decoded_namespace = namespace.replace("%2F", "/").replace("%2f", "/");
     let table_path = format!("{}/{}", decoded_namespace, table);
+    let table_full_uri = format!("{}/{}", uri.trim_end_matches('/'), table_path);
     let manager = ManifestManager::new(store.clone(), &table_path, &uri);
+
+    let table_store = benostreamdb::core::storage::create_object_store(&table_full_uri).ok();
+    let existing_meta = if let Some(ref ts) = table_store {
+        TableMetadata::load_latest(ts.as_ref()).await.ok()
+    } else {
+        None
+    };
+
+    // Load current manifest directly so requirement assertions never see stale cache.
+    let (current_manifest, current_manifest_ver) = manager
+        .load_latest_direct()
+        .await
+        .unwrap_or((benostreamdb::core::manifest::Manifest::default(), 0));
+
+    if let Some(ref reqs) = payload.requirements {
+        if let Err(msg) = validate_requirements(
+            reqs,
+            existing_meta.as_ref(),
+            &current_manifest,
+            current_manifest_ver,
+        ) {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": {
+                        "message": msg,
+                        "type": "CommitFailedException",
+                        "code": 409
+                    }
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    let expected_manifest_ver = if payload.requirements.as_ref().is_some_and(|r| !r.is_empty())
+        && current_manifest_ver > 0
+    {
+        Some(current_manifest_ver)
+    } else {
+        None
+    };
 
     // 1. Apply Updates
     let mut new_entries = Vec::new();
@@ -600,12 +747,6 @@ async fn update_table(
     let mut updated_sort_orders = None;
     let mut updated_default_sort_order_id = None;
     let mut updated_last_column_id = None;
-
-    // Load current manifest to get schemas for decoding
-    let (current_manifest, _) = manager
-        .load_latest()
-        .await
-        .unwrap_or((benostreamdb::core::manifest::Manifest::default(), 0));
 
     // Pre-load all existing entries if we might be modifying them (rewriting)
     let mut all_existing_entries = if payload.updates.iter().any(|u| {
@@ -864,6 +1005,11 @@ async fn update_table(
     }
 
     // 2. Commit
+    let has_meta_updates = updated_schemas.is_some()
+        || updated_schema_id.is_some()
+        || updated_properties.is_some()
+        || removed_properties.is_some();
+
     let commit_metadata = benostreamdb::core::manifest::CommitMetadata {
         updated_schemas,
         updated_schema_id,
@@ -874,26 +1020,64 @@ async fn update_table(
         updated_default_sort_order_id,
         removed_properties,
         updated_last_column_id,
+        expected_version: expected_manifest_ver,
         is_fast_append: false,
         ..Default::default()
     };
 
     match manager.commit(&new_entries, &[], commit_metadata).await {
-        Ok(_) => {
+        Ok(committed_manifest) => {
+            if has_meta_updates {
+                if let Some(ref ts) = table_store {
+                    let _ = TableMetadata::commit_update_atomic(
+                        ts.as_ref(),
+                        committed_manifest.version as i32,
+                        move |existing| match existing {
+                            Some(mut meta) => {
+                                meta.schemas = committed_manifest.schemas.clone();
+                                meta.current_schema_id = committed_manifest.current_schema_id;
+                                meta.properties = committed_manifest.properties.clone();
+                                meta.last_updated_ms =
+                                    meta.last_updated_ms.max(committed_manifest.timestamp_ms);
+                                Ok(
+                                    benostreamdb::core::metadata::MetadataUpdateOutcome::Updated(
+                                        meta,
+                                    ),
+                                )
+                            }
+                            None => Ok(
+                                benostreamdb::core::metadata::MetadataUpdateOutcome::AlreadyCurrent(
+                                    TableMetadata::default(),
+                                ),
+                            ),
+                        },
+                    )
+                    .await;
+                }
+            }
             // Return updated metadata
             get_table(ax_lib::extract::Path((prefix, namespace, table)))
                 .await
                 .into_response()
         }
         Err(e) => {
+            let is_conflict = matches!(
+                e.downcast_ref::<benostreamdb::core::error::BenoStreamError>(),
+                Some(benostreamdb::core::error::BenoStreamError::ManifestVersionMismatch { .. })
+            );
+            let (status, code) = if is_conflict {
+                (StatusCode::CONFLICT, 409)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, 500)
+            };
             eprintln!("Failed to commit update: {}", e);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                status,
                 Json(serde_json::json!({
                     "error": {
                         "message": format!("Commit failed: {}", e),
                         "type": "CommitFailedException",
-                        "code": 500
+                        "code": code
                     }
                 })),
             )
@@ -923,4 +1107,43 @@ async fn register_table(
 // Alias for convenience since I noticed axum was used in gateway.rs but I might need to verify the exact module path if it changed
 mod ax_lib {
     pub use axum::*;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_requirements_accepts_and_rejects_correctly() {
+        let mut meta = TableMetadata::minimal("file:///tmp/t".to_string());
+        meta.table_uuid = "uuid-123".to_string();
+        meta.current_snapshot_id = Some(42);
+        meta.current_schema_id = 1;
+        let manifest = benostreamdb::core::manifest::Manifest::default();
+
+        let ok_reqs = vec![
+            TableRequirement::AssertTableUuid {
+                uuid: "uuid-123".to_string(),
+            },
+            TableRequirement::AssertRefSnapshotId {
+                ref_name: "main".to_string(),
+                snapshot_id: Some(42),
+            },
+            TableRequirement::AssertCurrentSchemaId {
+                current_schema_id: 1,
+            },
+        ];
+        assert!(validate_requirements(&ok_reqs, Some(&meta), &manifest, 5).is_ok());
+
+        let bad_snap = vec![TableRequirement::AssertRefSnapshotId {
+            ref_name: "main".to_string(),
+            snapshot_id: Some(41),
+        }];
+        assert!(validate_requirements(&bad_snap, Some(&meta), &manifest, 5).is_err());
+
+        let bad_uuid = vec![TableRequirement::AssertTableUuid {
+            uuid: "wrong".to_string(),
+        }];
+        assert!(validate_requirements(&bad_uuid, Some(&meta), &manifest, 5).is_err());
+    }
 }

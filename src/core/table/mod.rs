@@ -124,6 +124,44 @@ pub(crate) struct PendingWrite {
     pub(crate) tx_id: uuid::Uuid,
 }
 
+/// Phase of an in-flight buffered table commit in the M2 state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CommitPhase {
+    /// Batches & frozen in-memory vector index drained into staging prior to manifest commit.
+    /// Still readable by concurrent queries and restorable on pre-manifest failure.
+    Staging,
+    /// Manifest commit has succeeded on disk; batches are readable via manifest and WAL TX IDs
+    /// are durably recorded. Tail steps (metadata, catalog, WAL pruning, subscriber notify)
+    /// can safely converge idempotently.
+    ManifestCommitted,
+    /// `TableMetadata` and any configured external catalog have published the snapshot.
+    IcebergPublished,
+}
+
+pub(crate) type PendingIndexBuild = (
+    crate::core::manifest::ManifestEntry,
+    RecordBatch,
+    std::collections::HashMap<String, serde_json::Value>,
+    String,
+);
+
+pub(crate) struct PendingCommit {
+    pub(crate) id: uuid::Uuid,
+    pub(crate) phase: CommitPhase,
+    pub(crate) batches: Vec<RecordBatch>,
+    pub(crate) wal_tx_ids: Vec<uuid::Uuid>,
+    pub(crate) frozen_memory_index: Option<crate::core::index::memory::InMemoryVectorIndex>,
+    pub(crate) segment_entries: Vec<crate::core::manifest::ManifestEntry>,
+    pub(crate) v3_row_id_base: i64,
+    pub(crate) added_rows_total: i64,
+    pub(crate) committed_manifest: Option<crate::core::manifest::Manifest>,
+    pub(crate) metadata_location: Option<String>,
+    pub(crate) published_snapshot: Option<crate::core::metadata::Snapshot>,
+    pub(crate) should_update_schema: bool,
+    pub(crate) pending_builds: Vec<PendingIndexBuild>,
+    pub(crate) subscribers_notified: bool,
+}
+
 /// Main Table struct - represents a BenoStreamDB table
 pub struct Table {
     pub uri: String,
@@ -139,6 +177,10 @@ pub struct Table {
 
     pub(crate) schema: Arc<parking_lot::RwLock<SchemaRef>>,
     pub(crate) pending_writes: Arc<parking_lot::RwLock<Vec<PendingWrite>>>,
+    pub(crate) commit_lock: Arc<Mutex<()>>,
+    pub(crate) pending_commit: Arc<parking_lot::Mutex<Option<PendingCommit>>>,
+    pub(crate) committed_wal_txs: Arc<parking_lot::Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    pub(crate) buffer_epoch: Arc<std::sync::atomic::AtomicU64>,
     pub(crate) maintenance_lock: Arc<tokio::sync::RwLock<()>>,
     pub(crate) wal: Arc<Mutex<WriteAheadLog>>,
     pub(crate) background_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -280,6 +322,10 @@ impl Clone for Table {
             catalog_state: self.catalog_state.clone(),
             schema: self.schema.clone(),
             pending_writes: self.pending_writes.clone(),
+            commit_lock: self.commit_lock.clone(),
+            pending_commit: self.pending_commit.clone(),
+            committed_wal_txs: self.committed_wal_txs.clone(),
+            buffer_epoch: self.buffer_epoch.clone(),
             maintenance_lock: self.maintenance_lock.clone(),
             wal: self.wal.clone(),
             background_tasks: self.background_tasks.clone(),
@@ -327,6 +373,11 @@ impl Drop for Table {
 }
 
 impl Table {
+    pub(crate) fn bump_buffer_epoch(&self) {
+        self.buffer_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub fn builder(uri: impl Into<String>) -> builder::TableBuilder {
         builder::TableBuilder::new(uri)
     }
@@ -355,12 +406,13 @@ impl Table {
                     break;
                 }
 
-                let is_empty = {
+                let has_pending = {
+                    let pc = bg_table.pending_commit.lock();
                     let pending = bg_table.pending_writes.read();
-                    pending.is_empty()
+                    pc.is_some() || !pending.is_empty()
                 };
 
-                if !is_empty {
+                if has_pending {
                     tracing::info!(
                         "Micro-batch timer elapsed. Flushing buffer to Iceberg snapshot."
                     );
@@ -759,7 +811,7 @@ impl Table {
 
     pub(crate) async fn load_initial_schema(store: Arc<dyn ObjectStore>, _uri: &str) -> SchemaRef {
         let manifest_manager = ManifestManager::new(store.clone(), "", _uri);
-        if let Ok((manifest, version)) = manifest_manager.load_latest().await {
+        if let Ok((manifest, version)) = manifest_manager.load_latest_direct().await {
             if version > 0 && !manifest.schemas.is_empty() {
                 if let Some(latest) = manifest
                     .schemas

@@ -53,6 +53,12 @@ pub enum CrashPoint {
     VacuumStart = 10,
     /// After the vacuum has decided what to delete, before deleting it.
     VacuumDelete = 11,
+    /// After rotating the active WAL segment, before staging data files.
+    WalRotate = 12,
+    /// After the manifest commit succeeds, before persisting Iceberg TableMetadata.
+    MetadataSave = 13,
+    /// After Iceberg TableMetadata is persisted, before committing to an external catalog.
+    CatalogCommit = 14,
 }
 
 impl CrashPoint {
@@ -60,11 +66,14 @@ impl CrashPoint {
     pub const ALL: &'static [CrashPoint] = &[
         CrashPoint::WalAppend,
         CrashPoint::WalFlush,
-        CrashPoint::WalTruncate,
+        CrashPoint::WalRotate,
         CrashPoint::DataUpload,
         CrashPoint::IndexUpload,
         CrashPoint::ManifestCommit,
         CrashPoint::ManifestVisible,
+        CrashPoint::MetadataSave,
+        CrashPoint::CatalogCommit,
+        CrashPoint::WalTruncate,
         CrashPoint::CompactionStart,
         CrashPoint::CompactionManifestSwap,
         CrashPoint::VacuumStart,
@@ -86,6 +95,9 @@ impl CrashPoint {
             CrashPoint::CompactionManifestSwap => "compaction_manifest_swap",
             CrashPoint::VacuumStart => "vacuum_start",
             CrashPoint::VacuumDelete => "vacuum_delete",
+            CrashPoint::WalRotate => "wal_rotate",
+            CrashPoint::MetadataSave => "metadata_save",
+            CrashPoint::CatalogCommit => "catalog_commit",
         }
     }
 
@@ -102,6 +114,9 @@ impl CrashPoint {
             9 => CrashPoint::CompactionManifestSwap,
             10 => CrashPoint::VacuumStart,
             11 => CrashPoint::VacuumDelete,
+            12 => CrashPoint::WalRotate,
+            13 => CrashPoint::MetadataSave,
+            14 => CrashPoint::CatalogCommit,
             _ => CrashPoint::None,
         }
     }

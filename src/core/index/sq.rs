@@ -112,6 +112,101 @@ impl SqEncoder {
             metric,
         })
     }
+
+    /// Precompute the un-clamped query state once for asymmetric distance
+    /// evaluation against SQ8 codes.
+    pub fn prepare_query(&self, query_f32: &[f32], metric: VectorMetric) -> PreparedSqQuery<'_> {
+        let mut query = vec![0.0f32; self.dim];
+        let copy_len = query_f32.len().min(self.dim);
+        query[..copy_len].copy_from_slice(&query_f32[..copy_len]);
+
+        if metric == VectorMetric::Cosine || self.metric == VectorMetric::Cosine {
+            let norm = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 1e-12 {
+                let inv = 1.0 / norm;
+                for x in &mut query {
+                    *x *= inv;
+                }
+            }
+        }
+
+        let q_norm_sq = query.iter().map(|x| x * x).sum::<f32>();
+        PreparedSqQuery {
+            encoder: self,
+            query,
+            q_norm_sq,
+            metric,
+        }
+    }
+}
+
+/// Pre-processed, un-clamped query state for Asymmetric Distance Calculation
+/// (ADC) against [`SqEncoder`] codes.
+#[derive(Debug, Clone)]
+pub struct PreparedSqQuery<'a> {
+    encoder: &'a SqEncoder,
+    query: Vec<f32>,
+    q_norm_sq: f32,
+    metric: VectorMetric,
+}
+
+impl<'a> PreparedSqQuery<'a> {
+    /// Evaluate calibrated asymmetric distance against a stored SQ8 code.
+    /// Guaranteed finite and non-negative.
+    #[inline]
+    pub fn distance(&self, encoded: &[u8]) -> f32 {
+        let n = self
+            .encoder
+            .dim
+            .min(self.query.len())
+            .min(encoded.len())
+            .min(self.encoder.offsets.len())
+            .min(self.encoder.inv_scales.len());
+
+        let dist = match self.metric {
+            VectorMetric::Cosine | VectorMetric::InnerProduct => {
+                let mut dot = 0.0f32;
+                let mut v_norm_sq = 0.0f32;
+                for j in 0..n {
+                    let decoded =
+                        (encoded[j] as f32 * self.encoder.inv_scales[j]) + self.encoder.offsets[j];
+                    dot += self.query[j] * decoded;
+                    v_norm_sq += decoded * decoded;
+                }
+                let denom = (self.q_norm_sq * v_norm_sq).sqrt();
+                if denom > 1e-12 {
+                    (1.0 - (dot / denom).clamp(-1.0, 1.0)).max(0.0)
+                } else {
+                    1.0
+                }
+            }
+            VectorMetric::L1 => {
+                let mut dist = 0.0f32;
+                for j in 0..n {
+                    let decoded =
+                        (encoded[j] as f32 * self.encoder.inv_scales[j]) + self.encoder.offsets[j];
+                    dist += (self.query[j] - decoded).abs();
+                }
+                dist
+            }
+            _ => {
+                let mut dist_sq = 0.0f32;
+                for j in 0..n {
+                    let decoded =
+                        (encoded[j] as f32 * self.encoder.inv_scales[j]) + self.encoder.offsets[j];
+                    let diff = self.query[j] - decoded;
+                    dist_sq += diff * diff;
+                }
+                dist_sq.max(0.0).sqrt()
+            }
+        };
+
+        if dist.is_finite() {
+            dist.max(0.0)
+        } else {
+            f32::MAX
+        }
+    }
 }
 
 impl Quantizer for SqEncoder {
@@ -150,14 +245,7 @@ impl Quantizer for SqEncoder {
     }
 
     fn distance_adc(&self, query: &[f32], encoded: &[u8]) -> f32 {
-        let mut dist_sq = 0.0;
-        let n = self.dim.min(query.len()).min(encoded.len());
-        for j in 0..n {
-            let decoded = (encoded[j] as f32 * self.inv_scales[j]) + self.offsets[j];
-            let diff = query[j] - decoded;
-            dist_sq += diff * diff;
-        }
-        dist_sq
+        self.prepare_query(query, self.metric).distance(encoded)
     }
 
     fn name(&self) -> String {
@@ -204,7 +292,7 @@ impl Distance<u8> for DistSq8 {
                 }
                 let denom = (na * nb).sqrt();
                 if denom > 1e-12 {
-                    1.0 - dot / denom
+                    (1.0 - (dot / denom).clamp(-1.0, 1.0)).max(0.0)
                 } else {
                     1.0
                 }
@@ -245,5 +333,33 @@ mod tests {
         for j in 0..dim {
             assert!((test_vec[j] - decoded[j]).abs() < 0.5);
         }
+    }
+
+    #[test]
+    fn test_sq8_adc_calibrated_l2_and_out_of_range_query() {
+        let dim = 8;
+        let seg1: Vec<Vec<f32>> = vec![vec![194.0; dim], vec![195.0; dim], vec![196.0; dim]];
+        let seg2: Vec<Vec<f32>> = vec![vec![197.0; dim]];
+        let query = vec![197.0f32; dim];
+
+        let enc1 = SqEncoder::train(&seg1, 8, VectorMetric::L2).unwrap();
+        let enc2 = SqEncoder::train(&seg2, 8, VectorMetric::L2).unwrap();
+
+        let d_196 = enc1
+            .prepare_query(&query, VectorMetric::L2)
+            .distance(&enc1.encode(&seg1[2]));
+        let d_197 = enc2
+            .prepare_query(&query, VectorMetric::L2)
+            .distance(&enc2.encode(&seg2[0]));
+
+        let expected_196 = (dim as f32).sqrt();
+        assert!(
+            (d_196 - expected_196).abs() < 0.2,
+            "SQ8 out-of-range query must not clamp to 0; got {d_196}, expected ~{expected_196}"
+        );
+        assert!(
+            d_197 < 0.05,
+            "SQ8 exact single-row match must score ~0, got {d_197}"
+        );
     }
 }

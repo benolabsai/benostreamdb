@@ -292,20 +292,23 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         f(&flat_values[u_start..u_end])
     }
 
-    fn search_layer(
+    fn search_layer_with_scorer<F: Fn(&[T]) -> f32 + ?Sized>(
         &self,
-        query: &[T],
         entry_point: usize,
         ef: usize,
         layer: usize,
         filter: Option<&roaring::RoaringBitmap>,
+        score_fn: &F,
     ) -> std::collections::BinaryHeap<Candidate> {
         let mut return_points = std::collections::BinaryHeap::with_capacity(ef);
         if self.neighbors_array.len() == 0 {
             return return_points;
         }
 
-        let dist_to_entry = self.distance.eval(query, &self.get_vector(entry_point));
+        // Reused across candidates: `get_vector_slice` fills it, so allocating
+        // per pop was pure churn.
+        let mut scratch = Vec::new();
+        let dist_to_entry = score_fn(self.get_vector_slice(entry_point, &mut scratch));
 
         // Visited tracking: a version array indexed by point id. A hash set
         // hashes every neighbour id and reallocates as it grows; a flat array is
@@ -338,12 +341,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             });
         }
 
-        // Reused across candidates: `get_vector_slice` fills it, so allocating
-        // per pop was pure churn.
-        let mut scratch = Vec::new();
-        while !candidate_points.is_empty() {
-            let c = candidate_points.pop().unwrap();
-
+        while let Some(c) = candidate_points.pop() {
             if let Some(f) = return_points.peek() {
                 if return_points.len() >= ef && -(c.dist) > f.dist {
                     break;
@@ -356,7 +354,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
                     if e_idx < visited.len() && visited[e_idx] != visit_mark {
                         visited[e_idx] = visit_mark;
                         let v_slice = self.get_vector_slice(e_idx, &mut scratch);
-                        let e_dist = self.distance.eval(query, v_slice);
+                        let e_dist = score_fn(v_slice);
 
                         let is_promising = if return_points.len() < ef {
                             true
@@ -395,12 +393,14 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         return_points
     }
 
-    pub fn search(
+    /// Search with a custom per-node scoring closure (used for calibrated
+    /// asymmetric quantized distance without changing on-disk code storage).
+    pub fn search_with_scorer<F: Fn(&[T]) -> f32>(
         &self,
-        query: &[T],
         knbn: usize,
         ef_s: usize,
         filter: Option<&roaring::RoaringBitmap>,
+        score_fn: F,
     ) -> Vec<crate::core::index::hnsw_rs::hnsw::Neighbour> {
         if self.neighbors_array.len() == 0 {
             return Vec::new();
@@ -409,26 +409,24 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         let mut pivot = self.entry_point;
         let mut scratch = Vec::new();
         let v_slice = self.get_vector_slice(pivot, &mut scratch);
-        let mut dist_to_entry = self.distance.eval(query, v_slice);
-        let mut new_pivot = None;
+        let mut dist_to_entry = score_fn(v_slice);
 
         for layer in (1..=self.max_layer as usize).rev() {
             loop {
-                let mut has_changed = false;
+                let mut new_pivot = None;
                 self.with_neighbors(pivot, layer, |neighbors| {
                     for &n_idx in neighbors {
                         let n_idx = n_idx as usize;
                         let tmp_slice = self.get_vector_slice(n_idx, &mut scratch);
-                        let tmp_dist = self.distance.eval(query, tmp_slice);
+                        let tmp_dist = score_fn(tmp_slice);
                         if tmp_dist < dist_to_entry {
                             new_pivot = Some(n_idx);
-                            has_changed = true;
                             dist_to_entry = tmp_dist;
                         }
                     }
                 });
-                if has_changed {
-                    pivot = new_pivot.unwrap();
+                if let Some(next_pivot) = new_pivot {
+                    pivot = next_pivot;
                 } else {
                     break;
                 }
@@ -436,14 +434,13 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         }
 
         let ef = ef_s.max(knbn);
-        let neighbours_heap = self.search_layer(query, pivot, ef, 0, filter);
+        let neighbours_heap = self.search_layer_with_scorer(pivot, ef, 0, filter, &score_fn);
 
         let neighbours = neighbours_heap.into_sorted_vec();
 
         let last = knbn.min(ef).min(neighbours.len());
         let mut results = Vec::with_capacity(last);
-        for i in 0..last {
-            let p = &neighbours[i];
+        for p in neighbours.iter().take(last) {
             results.push(Neighbour {
                 d_id: self.data_id_array.value(p.idx) as usize,
                 distance: p.dist,
@@ -451,5 +448,15 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             });
         }
         results
+    }
+
+    pub fn search(
+        &self,
+        query: &[T],
+        knbn: usize,
+        ef_s: usize,
+        filter: Option<&roaring::RoaringBitmap>,
+    ) -> Vec<crate::core::index::hnsw_rs::hnsw::Neighbour> {
+        self.search_with_scorer(knbn, ef_s, filter, |v| self.distance.eval(query, v))
     }
 }

@@ -373,6 +373,319 @@ impl Table {
         Ok(())
     }
 
+    /// Resolve the object store and root location where Iceberg `TableMetadata`
+    /// lives, avoiding redundant re-instantiation when metadata sits in `self.store`.
+    pub(crate) fn resolve_metadata_store(
+        &self,
+        meta_location_root: &str,
+    ) -> Result<Arc<dyn object_store::ObjectStore>> {
+        if meta_location_root.trim_end_matches('/') == self.uri.trim_end_matches('/') {
+            Ok(self.store.clone())
+        } else {
+            crate::core::storage::create_object_store(meta_location_root)
+        }
+    }
+
+    /// Persist `new_manifest`'s snapshot into Iceberg `TableMetadata` atomically via
+    /// [`TableMetadata::commit_update_atomic`], returning `(metadata_location, snapshot)`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn publish_metadata_step_async(
+        &self,
+        meta_location_root: &str,
+        meta_store: &dyn object_store::ObjectStore,
+        new_manifest: &crate::core::manifest::Manifest,
+        operation: &str,
+        table_uuid_hint: Option<&str>,
+        prior_snapshot_id_hint: Option<i64>,
+        v3_first_row_id: Option<i64>,
+        v3_added_rows: Option<i64>,
+        v3_next_row_id: Option<i64>,
+        should_update_schema: bool,
+    ) -> Result<(String, crate::core::metadata::Snapshot)> {
+        let manifest_list_abs = match new_manifest.manifest_list_path.clone() {
+            Some(p) if p.contains("://") || p.starts_with('/') => p,
+            Some(p) => format!(
+                "{}/{}",
+                self.uri.trim_end_matches('/'),
+                p.trim_start_matches('/')
+            ),
+            None => String::new(),
+        };
+
+        let snapshot_id = new_manifest.version as i64;
+        let seq_num = new_manifest.version as i64;
+        let fallback_schema = self.arrow_schema();
+        let uri_clone = self.uri.clone();
+        let manifest_clone = new_manifest.clone();
+        let operation_str = operation.to_string();
+        let uuid_hint = table_uuid_hint.map(|s| s.to_string());
+
+        let (written_metadata_path, updated_meta) =
+            crate::core::metadata::TableMetadata::commit_update_atomic(
+                meta_store,
+                new_manifest.version as i32,
+                move |existing| {
+                    let mut meta = match existing {
+                        Some(m) => m,
+                        None => {
+                            let schema =
+                                manifest_clone.schemas.last().cloned().unwrap_or_else(|| {
+                                    crate::core::manifest::Schema::from_arrow(&fallback_schema, 0)
+                                });
+                            let mut skeleton = crate::core::metadata::TableMetadata::new(
+                                manifest_clone.format_version.max(2),
+                                uuid_hint
+                                    .clone()
+                                    .filter(|u| !u.is_empty())
+                                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                                uri_clone.clone(),
+                                schema,
+                                manifest_clone.partition_spec.clone(),
+                                manifest_clone
+                                    .sort_orders
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            );
+                            skeleton.current_schema_id = manifest_clone.current_schema_id;
+                            skeleton.default_spec_id = manifest_clone.default_spec_id;
+                            skeleton.default_sort_order_id = manifest_clone.default_sort_order_id;
+                            skeleton
+                        }
+                    };
+
+                    if meta.snapshots.iter().any(|s| s.snapshot_id == snapshot_id) {
+                        if meta.format_version >= 3 {
+                            if let Some(next_id) = v3_next_row_id {
+                                if next_id > meta.next_row_id.unwrap_or(0) {
+                                    meta.next_row_id = Some(next_id);
+                                    return Ok(
+                                        crate::core::metadata::MetadataUpdateOutcome::Updated(meta),
+                                    );
+                                }
+                            }
+                        }
+                        return Ok(
+                            crate::core::metadata::MetadataUpdateOutcome::AlreadyCurrent(meta),
+                        );
+                    }
+
+                    let head_seq = meta
+                        .snapshots
+                        .iter()
+                        .filter_map(|s| s.sequence_number)
+                        .max()
+                        .unwrap_or(meta.last_sequence_number);
+
+                    if let Some(latest_schema) = manifest_clone.schemas.last() {
+                        if !meta
+                            .schemas
+                            .iter()
+                            .any(|s| s.schema_id == latest_schema.schema_id)
+                        {
+                            meta.add_schema(latest_schema.clone());
+                        } else if should_update_schema {
+                            meta.current_schema_id =
+                                meta.current_schema_id.max(latest_schema.schema_id);
+                        }
+                    }
+
+                    meta.format_version = meta.format_version.max(manifest_clone.format_version);
+                    if seq_num >= head_seq {
+                        if !manifest_clone.sort_orders.is_empty() {
+                            meta.sort_orders = manifest_clone.sort_orders.clone();
+                            meta.default_sort_order_id = manifest_clone.default_sort_order_id;
+                        }
+                        meta.properties = manifest_clone.properties.clone();
+                    }
+
+                    let eff_first_row_id = if meta.format_version >= 3 {
+                        v3_first_row_id.or(meta.next_row_id)
+                    } else {
+                        None
+                    };
+                    let eff_added_rows = if meta.format_version >= 3 {
+                        v3_added_rows
+                    } else {
+                        None
+                    };
+
+                    let snapshot = crate::core::metadata::Snapshot {
+                        snapshot_id,
+                        parent_snapshot_id: prior_snapshot_id_hint.or(meta.current_snapshot_id),
+                        timestamp_ms: manifest_clone.timestamp_ms,
+                        sequence_number: Some(seq_num),
+                        summary: std::collections::HashMap::from([(
+                            "operation".to_string(),
+                            operation_str.clone(),
+                        )]),
+                        manifest_list: manifest_list_abs.clone(),
+                        schema_id: Some(manifest_clone.current_schema_id),
+                        first_row_id: eff_first_row_id,
+                        added_rows: eff_added_rows,
+                    };
+
+                    meta.merge_snapshot_monotonic(snapshot, v3_next_row_id);
+                    Ok(crate::core::metadata::MetadataUpdateOutcome::Updated(meta))
+                },
+            )
+            .await?;
+
+        let metadata_location = format!(
+            "{}/{}",
+            meta_location_root.trim_end_matches('/'),
+            written_metadata_path.trim_start_matches('/')
+        );
+        let published_snap = updated_meta
+            .snapshots
+            .iter()
+            .find(|s| s.snapshot_id == snapshot_id)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Committed snapshot {} missing from updated TableMetadata",
+                    snapshot_id
+                )
+            })?;
+
+        Ok((metadata_location, published_snap))
+    }
+
+    /// Commit `snapshot` and `metadata_location` to an external Iceberg catalog with
+    /// optimistic requirements (`assert-table-uuid`, `assert-ref-snapshot-id`) and bounded
+    /// 409-conflict convergence (handles both shared-storage REST servers and concurrent writers).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn commit_catalog_step_async(
+        &self,
+        catalog: &dyn crate::core::catalog::Catalog,
+        ns: &str,
+        table: &str,
+        meta_location_root: &str,
+        meta_store: &dyn object_store::ObjectStore,
+        new_manifest: &crate::core::manifest::Manifest,
+        operation: &str,
+        v3_first_row_id: Option<i64>,
+        v3_added_rows: Option<i64>,
+        v3_next_row_id: Option<i64>,
+        should_update_schema: bool,
+        mut metadata_location: String,
+        mut snapshot: crate::core::metadata::Snapshot,
+    ) -> Result<(String, crate::core::metadata::Snapshot)> {
+        const MAX_CATALOG_RETRIES: usize = 8;
+
+        let mut catalog_meta = catalog.load_table(ns, table).await?;
+        for attempt in 0..MAX_CATALOG_RETRIES {
+            if let Some(existing) = catalog_meta
+                .snapshots
+                .iter()
+                .find(|s| s.snapshot_id == snapshot.snapshot_id)
+            {
+                return Ok((metadata_location, existing.clone()));
+            }
+
+            snapshot.parent_snapshot_id = catalog_meta.current_snapshot_id;
+
+            let mut requirements = Vec::new();
+            if !catalog_meta.table_uuid.is_empty() {
+                requirements.push(serde_json::json!({
+                    "type": "assert-table-uuid",
+                    "uuid": catalog_meta.table_uuid,
+                }));
+            }
+            requirements.push(serde_json::json!({
+                "type": "assert-ref-snapshot-id",
+                "ref": "main",
+                "snapshot-id": catalog_meta.current_snapshot_id,
+            }));
+
+            let updates = vec![
+                serde_json::json!({
+                    "action": "set-metadata-location",
+                    "metadata-location": metadata_location,
+                }),
+                serde_json::json!({
+                    "action": "add-snapshot",
+                    "snapshot": snapshot,
+                }),
+                serde_json::json!({
+                    "action": "set-current-snapshot",
+                    "snapshot-id": snapshot.snapshot_id,
+                }),
+            ];
+
+            match catalog
+                .commit_table_with_requirements(ns, table, updates, requirements)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!(
+                        "Committed snapshot {} to catalog {}.{}",
+                        snapshot.snapshot_id,
+                        ns,
+                        table
+                    );
+                    return Ok((metadata_location, snapshot));
+                }
+                Err(err) => {
+                    let is_conflict = err
+                        .downcast_ref::<crate::core::error::BenoStreamError>()
+                        .is_some_and(|e| {
+                            matches!(
+                                e,
+                                crate::core::error::BenoStreamError::CatalogRequest {
+                                    status: Some(409),
+                                    ..
+                                }
+                            )
+                        })
+                        || err.to_string().contains("409")
+                        || err.to_string().contains("CommitFailedException");
+
+                    if !is_conflict || attempt + 1 == MAX_CATALOG_RETRIES {
+                        return Err(err);
+                    }
+
+                    catalog_meta = catalog.load_table(ns, table).await?;
+                    if let Some(existing) = catalog_meta
+                        .snapshots
+                        .iter()
+                        .find(|s| s.snapshot_id == snapshot.snapshot_id)
+                    {
+                        return Ok((metadata_location, existing.clone()));
+                    }
+
+                    let (remerged_loc, mut remerged_snap) = self
+                        .publish_metadata_step_async(
+                            meta_location_root,
+                            meta_store,
+                            new_manifest,
+                            operation,
+                            Some(&catalog_meta.table_uuid),
+                            catalog_meta.current_snapshot_id,
+                            v3_first_row_id,
+                            v3_added_rows,
+                            v3_next_row_id,
+                            should_update_schema,
+                        )
+                        .await?;
+                    remerged_snap.parent_snapshot_id = catalog_meta.current_snapshot_id;
+                    metadata_location = remerged_loc;
+                    snapshot = remerged_snap;
+
+                    tokio::time::sleep(std::time::Duration::from_millis(5 * (attempt as u64 + 1)))
+                        .await;
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "Failed to converge catalog commit for snapshot {} on {}.{}",
+            snapshot.snapshot_id,
+            ns,
+            table
+        )
+    }
+
     /// Publish a committed manifest as a new Iceberg snapshot.
     ///
     /// A manifest commit alone is invisible to external Iceberg readers: they
@@ -384,98 +697,77 @@ impl Table {
         new_manifest: &crate::core::manifest::Manifest,
         operation: &str,
     ) -> Result<()> {
-        let meta_location = if let Some(catalog) = &self.catalog_state.catalog {
-            if let (Some(ns), Some(t)) = (
-                &self.catalog_state.namespace,
-                &self.catalog_state.table_name,
-            ) {
-                catalog
-                    .load_table(ns, t)
-                    .await
-                    .map(|m| m.location)
-                    .unwrap_or_else(|_| self.uri.clone())
-            } else {
-                self.uri.clone()
+        let snapshot_id = new_manifest.version as i64;
+        let catalog_tuple = match (
+            &self.catalog_state.catalog,
+            &self.catalog_state.namespace,
+            &self.catalog_state.table_name,
+        ) {
+            (Some(cat), Some(ns), Some(tbl)) => Some((cat, ns.as_str(), tbl.as_str())),
+            _ => None,
+        };
+
+        let prior_catalog_meta = if let Some((cat, ns, tbl)) = catalog_tuple {
+            let loaded = cat.load_table(ns, tbl).await.ok();
+            if let Some(ref cm) = loaded {
+                if cm.snapshots.iter().any(|s| s.snapshot_id == snapshot_id) {
+                    self.indexing.cluster_indexes.write().clear();
+                    self.indexing.vector_routers.write().clear();
+                    return Ok(());
+                }
             }
+            loaded
         } else {
-            self.uri.clone()
+            None
         };
 
-        let meta_store_arc = crate::core::storage::create_object_store(&meta_location)?;
-        let meta_store = meta_store_arc.as_ref();
-        let mut table_meta = crate::core::metadata::TableMetadata::load_latest(meta_store).await?;
+        let meta_location = prior_catalog_meta
+            .as_ref()
+            .map(|m| m.location.clone())
+            .unwrap_or_else(|| self.uri.clone());
+        let meta_store_arc = self.resolve_metadata_store(&meta_location)?;
 
-        let manifest_list_abs = match new_manifest.manifest_list_path.clone() {
-            Some(p) if p.contains("://") || p.starts_with('/') => p,
-            Some(p) => format!(
-                "{}/{}",
-                self.uri.trim_end_matches('/'),
-                p.trim_start_matches('/')
-            ),
-            None => String::new(),
-        };
-        let snapshot = crate::core::metadata::Snapshot {
-            snapshot_id: new_manifest.version as i64,
-            parent_snapshot_id: table_meta.current_snapshot_id,
-            timestamp_ms: new_manifest.timestamp_ms,
-            sequence_number: Some(new_manifest.version as i64),
-            summary: std::collections::HashMap::from([(
-                "operation".to_string(),
-                operation.to_string(),
-            )]),
-            manifest_list: manifest_list_abs,
-            schema_id: Some(new_manifest.current_schema_id),
-            first_row_id: None,
-            added_rows: None,
-        };
-        table_meta.add_snapshot(snapshot);
-
-        // Never regress `version-hint.text`: `save_to_store` only advances it,
-        // so writing an older-numbered file would leave readers on stale
-        // metadata. Take the max of the manifest version and the current hint.
-        let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-        let current_version = match meta_store.get(&hint_path).await {
-            Ok(result) => result
-                .bytes()
-                .await
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes.to_vec()).ok())
-                .and_then(|value| value.trim().parse::<i32>().ok()),
-            Err(_) => None,
-        };
-        let new_meta_version = current_version
-            .map_or(1, |version| version + 1)
-            .max(new_manifest.version as i32);
-        let written_metadata_path = table_meta
-            .save_to_store(meta_store, new_meta_version)
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::MetadataSave,
+        )?;
+        let (written_metadata_loc, published_snap) = self
+            .publish_metadata_step_async(
+                &meta_location,
+                meta_store_arc.as_ref(),
+                new_manifest,
+                operation,
+                prior_catalog_meta.as_ref().map(|m| m.table_uuid.as_str()),
+                prior_catalog_meta
+                    .as_ref()
+                    .and_then(|m| m.current_snapshot_id),
+                None,
+                None,
+                None,
+                false,
+            )
             .await?;
-        let metadata_location = format!(
-            "{}/{}",
-            self.uri.trim_end_matches('/'),
-            written_metadata_path.trim_start_matches('/')
-        );
 
-        if let Some(catalog) = &self.catalog_state.catalog {
-            if let (Some(ns), Some(table)) = (
-                &self.catalog_state.namespace,
-                &self.catalog_state.table_name,
-            ) {
-                let updates = vec![
-                    serde_json::json!({
-                        "action": "set-metadata-location",
-                        "metadata-location": metadata_location
-                    }),
-                    serde_json::json!({
-                        "action": "add-snapshot",
-                        "snapshot": table_meta.snapshots.last()
-                    }),
-                    serde_json::json!({
-                        "action": "set-current-snapshot",
-                        "snapshot-id": table_meta.current_snapshot_id
-                    }),
-                ];
-                catalog.commit_table(ns, table, updates).await?;
-            }
+        if let Some((cat, ns, tbl)) = catalog_tuple {
+            crate::core::fault_injection::check(
+                crate::core::fault_injection::CrashPoint::CatalogCommit,
+            )?;
+            let _ = self
+                .commit_catalog_step_async(
+                    cat.as_ref(),
+                    ns,
+                    tbl,
+                    &meta_location,
+                    meta_store_arc.as_ref(),
+                    new_manifest,
+                    operation,
+                    None,
+                    None,
+                    None,
+                    false,
+                    written_metadata_loc,
+                    published_snap,
+                )
+                .await?;
         }
 
         // A published snapshot changes the set of live data files. Table-level

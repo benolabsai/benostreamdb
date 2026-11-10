@@ -4,13 +4,16 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::super::types::*;
 use super::ManifestManager;
 
 fn is_already_exists(err: &object_store::Error) -> bool {
-    err.to_string().contains("already exists")
+    matches!(err, object_store::Error::AlreadyExists { .. })
+        || err.to_string().contains("already exists")
+        || err.to_string().contains("409")
+        || err.to_string().contains("Conflict")
+        || err.to_string().contains("PreconditionFailed")
 }
 
 impl ManifestManager {
@@ -70,24 +73,12 @@ impl ManifestManager {
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Schema Update)", new_ver);
-                    let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .invalidate(&dir_key)
-                        .await;
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .insert(dir_key, new_ver)
-                        .await;
-                    let file_key = self.get_cache_key(&path);
-                    crate::core::cache::MANIFEST_CACHE
-                        .insert(file_key, Arc::new(new_manifest.clone()))
+                    self.update_version_cache_monotonic(&new_manifest, new_ver)
                         .await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                    let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .invalidate(&dir_key)
-                        .await;
+                    self.invalidate_latest_version_cache().await;
                     // Conflict, retry
                     if attempt >= max_retries {
                         break;
@@ -99,6 +90,7 @@ impl ManifestManager {
                     continue;
                 }
                 Err(e) => {
+                    self.invalidate_latest_version_cache().await;
                     return Err(e.into());
                 }
             }
@@ -160,16 +152,7 @@ impl ManifestManager {
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Properties Update)", new_ver);
-                    let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .invalidate(&dir_key)
-                        .await;
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .insert(dir_key, new_ver)
-                        .await;
-                    let file_key = self.get_cache_key(&path);
-                    crate::core::cache::MANIFEST_CACHE
-                        .insert(file_key, Arc::new(new_manifest.clone()))
+                    self.update_version_cache_monotonic(&new_manifest, new_ver)
                         .await;
 
                     // Mirror the properties into `TableMetadata`, which is the
@@ -190,10 +173,7 @@ impl ManifestManager {
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                    let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .invalidate(&dir_key)
-                        .await;
+                    self.invalidate_latest_version_cache().await;
                     if attempt >= max_retries {
                         break;
                     }
@@ -204,6 +184,7 @@ impl ManifestManager {
                     continue;
                 }
                 Err(e) => {
+                    self.invalidate_latest_version_cache().await;
                     return Err(e.into());
                 }
             }
@@ -322,24 +303,12 @@ impl ManifestManager {
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Index Spec Update)", new_ver);
-                    let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .invalidate(&dir_key)
-                        .await;
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .insert(dir_key, new_ver)
-                        .await;
-                    let file_key = self.get_cache_key(&path);
-                    crate::core::cache::MANIFEST_CACHE
-                        .insert(file_key, Arc::new(new_manifest.clone()))
+                    self.update_version_cache_monotonic(&new_manifest, new_ver)
                         .await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                    let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE
-                        .invalidate(&dir_key)
-                        .await;
+                    self.invalidate_latest_version_cache().await;
                     attempt += 1;
                     if attempt >= max_retries {
                         break;
@@ -349,7 +318,10 @@ impl ManifestManager {
                     tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
                     continue;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    self.invalidate_latest_version_cache().await;
+                    return Err(e.into());
+                }
             }
         }
         Err(anyhow::anyhow!("Failed to commit index spec update"))

@@ -961,6 +961,19 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         layer: u8,
         filter: Option<&roaring::RoaringBitmap>,
     ) -> BinaryHeap<Arc<PointWithOrder<T>>> {
+        self.search_layer_with_scorer(entry_point, ef, layer, filter, &|v| {
+            self.dist_f.eval(point, v)
+        })
+    }
+
+    fn search_layer_with_scorer<F: Fn(&[T]) -> f32 + ?Sized>(
+        &self,
+        entry_point: Arc<Point<T>>,
+        ef: usize,
+        layer: u8,
+        filter: Option<&roaring::RoaringBitmap>,
+        score_fn: &F,
+    ) -> BinaryHeap<Arc<PointWithOrder<T>>> {
         let _span = tracing::debug_span!("hnsw_search_layer", layer = layer, ef = ef).entered();
         self.profile.record_search_layer();
         //
@@ -988,7 +1001,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         }
         // initialize visited points
         self.profile.record_distance_eval();
-        let dist_to_entry_point = self.dist_f.eval(point, &entry_point.v);
+        let dist_to_entry_point = score_fn(&entry_point.v);
         log::trace!("       distance to entry point: {:?} ", dist_to_entry_point);
         // keep a list of id visited
         let mut visited_point_id = HashMap::<PointId, Arc<Point<T>>>::new();
@@ -1054,7 +1067,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
                     visited_point_id.insert(e.point_ref.p_id, Arc::clone(&e.point_ref));
                     log::trace!("             visited insertion {:?}", e.point_ref.p_id);
                     self.profile.record_distance_eval();
-                    let e_dist_to_p = self.dist_f.eval(point, &e.point_ref.v);
+                    let e_dist_to_p = score_fn(&e.point_ref.v);
 
                     // We must EXPLORE this node regardless of filter, but filter determines if it enters return_points
                     let mut enters_return = false;
@@ -1541,52 +1554,55 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         ef_arg: usize,
         filter: Option<&roaring::RoaringBitmap>,
     ) -> Vec<Neighbour> {
-        //
+        self.search_with_scorer(knbn, ef_arg, filter, |v| self.dist_f.eval(data, v))
+    } // end of knn_search
+
+    /// Search using a custom asymmetric distance scorer without changing the
+    /// stored node representation in the graph.
+    pub fn search_with_scorer<F: Fn(&[T]) -> f32>(
+        &self,
+        knbn: usize,
+        ef_arg: usize,
+        filter: Option<&roaring::RoaringBitmap>,
+        score_fn: F,
+    ) -> Vec<Neighbour> {
         let t_start = Instant::now();
-        let entry_point;
-        {
-            // a lock on an option an a Arc<Point>
+        let entry_point = {
             let entry_point_opt_ref = self.layer_indexed_points.entry_point.read();
-            if entry_point_opt_ref.is_none() {
-                self.profile
-                    .record_search(t_start.elapsed().as_nanos() as u64);
-                return Vec::<Neighbour>::new();
-            } else {
-                entry_point = Arc::clone((*entry_point_opt_ref).as_ref().unwrap());
+            match entry_point_opt_ref.as_ref() {
+                Some(ep) => Arc::clone(ep),
+                None => {
+                    self.profile
+                        .record_search(t_start.elapsed().as_nanos() as u64);
+                    return Vec::<Neighbour>::new();
+                }
             }
-        }
-        //
-        let mut dist_to_entry = self.dist_f.eval(data, &entry_point.as_ref().v);
+        };
+
+        let mut dist_to_entry = score_fn(&entry_point.as_ref().v);
         let mut pivot = Arc::clone(&entry_point);
-        let mut new_pivot = None;
-        //
+
         for layer in (1..=entry_point.p_id.0).rev() {
-            let mut has_changed = false;
-            // search in stored neighbours
+            let mut new_pivot = None;
             {
                 let neighbours = &pivot.neighbours.read()[layer as usize];
                 for n in neighbours {
-                    // get the lowest  distance point.
-                    let tmp_dist = self.dist_f.eval(data, &n.point_ref.v);
+                    let tmp_dist = score_fn(&n.point_ref.v);
                     if tmp_dist < dist_to_entry {
                         new_pivot = Some(Arc::clone(&n.point_ref));
-                        has_changed = true;
                         dist_to_entry = tmp_dist;
                     }
-                } // end of for on neighbours
+                }
             }
-            if has_changed {
-                pivot = Arc::clone(new_pivot.as_ref().unwrap());
+            if let Some(np) = new_pivot {
+                pivot = np;
             }
-        } // end on for on layers
-          // ef must be greater than knbn. Possibly it should be between knbn and self.max_nb_connection
+        }
+
         let ef = ef_arg.max(knbn);
-        // now search with asked ef in layer 0
-        let neighbours_heap = self.search_layer(data, pivot, ef, 0, filter);
-        // go from heap of points with negative dist to a sorted vec of increasing points with > 0 distances.
+        let neighbours_heap = self.search_layer_with_scorer(pivot, ef, 0, filter, &score_fn);
         let neighbours = neighbours_heap.into_sorted_vec();
-        // get the min of K and ef points into a vector.
-        //
+
         let last = knbn.min(ef).min(neighbours.len());
         let knn_neighbours: Vec<Neighbour> = neighbours[0..last]
             .iter()
@@ -1602,7 +1618,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         self.profile
             .record_search(t_start.elapsed().as_nanos() as u64);
         knn_neighbours
-    } // end of knn_search
+    }
 
     fn search_with_id(
         &self,

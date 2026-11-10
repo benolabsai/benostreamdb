@@ -41,8 +41,8 @@ Validated against **pyiceberg 0.12.0** / **pyarrow 25.0.1**.
 | Column statistics (NDV / bounds) | V2 | ✅ Conformant | `null_value_counts`, `lower_bounds`, `upper_bounds` written per field id. |
 | Nanosecond timestamps | V2 | ✅ Conformant | `Timestamp(Nanosecond)` round-trips without precision loss. |
 | Row lineage (`_row_id`, `_last_updated_sequence_number`) | V3 | ✅ Conformant | `next-row-id` in metadata; `first-row-id`/`added-rows` on the snapshot. |
-| Equality / position deletes | V2 | ✅ Conformant | Delete files registered in manifest entries. |
-| Deletion vectors | V3 | ✅ Conformant | Official Iceberg V3 specification (`content = 3`, `deletion-vector-v1` stored in Puffin). Note: external readers must support Iceberg Format Version 3 (older V2-only readers require position delete files or compaction). |
+| Equality / position deletes | V2 | ✅ Conformant | Delete files registered in manifest entries (used for deletes across V2 and V3 tables today). |
+| Deletion vectors | V3 | ⚠️ Planned / Partial | Partial Puffin RoaringBitmap deserialization and manifest (`content = 3`) types exist on read, but `Table::delete_async` still writes V2 Parquet position deletes and Puffin `deletion-vector-v1` framing (`format-version = 3` Avro metadata, fields `143–145`, `PUFFIN` format) plus reader wiring remain planned (see [`plans/iceberg_v3_and_catalog_parity_plan.md`](https://github.com/benolabsai/benostreamdb/blob/main/plans/iceberg_v3_and_catalog_parity_plan.md)). |
 | Puffin index blobs | — | ⚠️ Extension | BenoStream overlay indexes (HNSW/TQ/PQ/BM25/bitmap) ride in Puffin; standard readers ignore them and fall back to full scans. |
 | `_staging`, `_wal` directories | — | ⚠️ Extension | BenoStream durability artifacts; standard readers ignore them. |
 

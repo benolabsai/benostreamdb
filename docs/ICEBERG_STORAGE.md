@@ -196,8 +196,8 @@ The table below reflects machine-checked verification via `tests/test_iceberg_co
 | **Column Statistics (NDV / Bounds)** | V2 | ✅ Conformant | `null_value_counts`, `lower_bounds`, `upper_bounds` per field ID. |
 | **Nanosecond Timestamps** | V2 | ✅ Conformant | `Timestamp(Nanosecond)` round-trips without precision loss. |
 | **Row Lineage** (`next-row-id`) | V3 | ✅ Conformant | `next-row-id` in metadata; `first-row-id` on snapshots. |
-| **Position Deletes** | V2 | ✅ Conformant | Registered in delete manifests; applied during scan planning. |
-| **Deletion Vectors** | V3 | ✅ Conformant | Official Iceberg V3 specification (`content = 3`, `deletion-vector-v1` stored in Puffin). Note: external readers must support Iceberg Format Version 3 (older V2-only readers require position delete files or compaction). |
+| **Position Deletes** | V2 | ✅ Conformant | Registered in delete manifests; applied during scan planning (used across V2 and V3 tables today). |
+| **Deletion Vectors** | V3 | ⚠️ Planned / Partial | Partial read helpers exist, but `Table::delete_async` currently emits V2 Parquet position deletes; spec-exact Puffin `deletion-vector-v1` framing, `format-version = 3` Avro fields (`143–145`, `PUFFIN`), and scan reader wiring remain planned in [`plans/iceberg_v3_and_catalog_parity_plan.md`](https://github.com/benolabsai/benostreamdb/blob/main/plans/iceberg_v3_and_catalog_parity_plan.md). |
 | **Compound Puffin Index Blobs** | Spec | ⚠️ Extension | Secondary index overlays (HNSW, BM25, Bitmaps) stored in `.puffin`. Standard readers ignore and fall back to Parquet scans. |
 | **Staging & WAL Directories** (`_staging`, `_wal`) | Spec | ⚠️ Extension | Durability artifacts stored alongside table root; ignored by external readers. |
 

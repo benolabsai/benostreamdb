@@ -142,6 +142,36 @@ fn distance_for(metric: VectorMetric, q: &[f32], c: &[f32]) -> f32 {
     }
 }
 
+/// Centroid spread radius for a multi-centroid segment: maximum metric distance
+/// from the arithmetic mean of the segment's centroids to any individual centroid.
+fn segment_centroid_radius(
+    metric: VectorMetric,
+    matrix: &[f32],
+    dim: usize,
+    indices: &[usize],
+) -> f32 {
+    if indices.len() < 2 || dim == 0 {
+        return 0.0;
+    }
+    let mut mean = vec![0.0f32; dim];
+    let inv = 1.0 / indices.len() as f32;
+    for &i in indices {
+        let c = &matrix[i * dim..(i + 1) * dim];
+        for (m, &v) in mean.iter_mut().zip(c.iter()) {
+            *m += v * inv;
+        }
+    }
+    let mut max_radius = 0.0f32;
+    for &i in indices {
+        let c = &matrix[i * dim..(i + 1) * dim];
+        let d = distance_for(metric, c, &mean);
+        if d > max_radius {
+            max_radius = d;
+        }
+    }
+    max_radius
+}
+
 /// Whether the Adaptive policy may cap how many segments one query fans out to.
 ///
 /// Off by default, and it must stay off for any measurement that has to mean
@@ -350,11 +380,14 @@ impl TableVectorRouter {
             }
 
             RoutingPolicy::Adaptive { factor } => {
-                // Per-segment best distance, top-k clusters, and centroid count
-                // in one pass. The centroid count decides whether the segment
-                // has enough spatial structure to be pruned at all.
-                let mut per_segment: Vec<(&String, f32, Vec<usize>, usize)> =
+                // Per-segment best distance, top-k clusters, and centroid slice
+                // in one pass. Only multi-centroid segments (`>= 2`) contribute to
+                // `partitioned_min`, because 1-centroid segments have no spatial
+                // partitioning and must not pull the pruning threshold below an
+                // actual multi-centroid segment's nearest cluster center.
+                let mut per_segment: Vec<(&String, f32, Vec<usize>, &[usize])> =
                     Vec::with_capacity(self.segment_indices.len());
+                let mut partitioned_min = f32::MAX;
                 for (seg_id, indices) in &self.segment_indices {
                     let mut heap = BinaryHeap::with_capacity(k + 1);
                     let mut seg_best = f32::MAX;
@@ -367,6 +400,9 @@ impl TableVectorRouter {
                         if dist < global_min {
                             global_min = dist;
                         }
+                        if indices.len() >= 2 && dist < partitioned_min {
+                            partitioned_min = dist;
+                        }
                         push_bounded(&mut heap, k, Candidate { dist, idx: i });
                     }
                     let targeted: Vec<usize> = heap
@@ -374,16 +410,22 @@ impl TableVectorRouter {
                         .into_iter()
                         .map(|c| self.targets[c.idx].1)
                         .collect();
-                    per_segment.push((seg_id, seg_best, targeted, indices.len()));
+                    per_segment.push((seg_id, seg_best, targeted, indices.as_slice()));
                 }
 
-                // Threshold calculation handling zero / negative inner-product metrics
-                let threshold = if global_min.abs() < 1e-6 {
-                    1e-4
-                } else if global_min < 0.0 {
-                    global_min * (2.0 - factor)
+                let base_min = if partitioned_min < f32::MAX {
+                    partitioned_min
                 } else {
-                    global_min * factor
+                    global_min
+                };
+
+                // Threshold calculation handling zero / negative inner-product metrics
+                let threshold = if base_min.abs() < 1e-6 {
+                    1e-4
+                } else if base_min < 0.0 {
+                    base_min * (2.0 - factor)
+                } else {
+                    base_min * factor
                 };
 
                 // Rank once by best distance; both the threshold filter and the
@@ -400,18 +442,26 @@ impl TableVectorRouter {
                 // be measured deliberately rather than inherited by accident —
                 // see `adaptive_segment_cap_enabled`.
                 let max_segments = routing_max_segments(k, per_segment.len());
-                for (seg_id, seg_best, targeted, centroid_count) in per_segment.iter() {
+                for (seg_id, seg_best, targeted, indices) in per_segment.iter() {
                     if candidate_segments.len() >= max_segments {
                         break;
                     }
                     // A segment with a single centroid has no spatial structure
                     // to route on: that centroid is the segment mean, and a
-                    // query's own row can be arbitrarily far from it. Pruning
-                    // such a segment by centroid distance can drop the very
-                    // segment that owns the query, so always admit it. Segments
-                    // with two or more centroids are spatially partitioned and
-                    // safe to prune by the threshold.
-                    if *centroid_count <= 1 || *seg_best <= threshold {
+                    // query's own row can be arbitrarily far from it. For
+                    // multi-centroid segments on distance metrics, discount
+                    // `seg_best` by the segment's intra-segment centroid spread
+                    // (`2 * R_S`) so overlapping/unclustered segments (whose
+                    // centroids span the table distribution) are not pruned
+                    // while spatially disjoint segments remain prunable.
+                    let admit = indices.len() <= 1
+                        || *seg_best <= threshold
+                        || (metric != VectorMetric::InnerProduct
+                            && (*seg_best
+                                - 2.0 * segment_centroid_radius(metric, matrix, dim, indices))
+                            .max(0.0)
+                                <= threshold);
+                    if admit {
                         candidate_segments.insert((*seg_id).clone());
                         segment_clusters.insert((*seg_id).clone(), targeted.clone());
                     }
@@ -619,5 +669,122 @@ mod tests {
             let total: usize = plan.segment_clusters.values().map(|v| v.len()).sum();
             assert_eq!(total, k, "expected {k} clusters, got {total}");
         }
+    }
+
+    #[test]
+    fn test_adaptive_single_centroid_does_not_poison_multi_centroid_segment() {
+        let dim = 4;
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let mut records = Vec::new();
+
+        // Single-centroid segments close to the query (dist ~ 0.1).
+        for s in 0..5 {
+            records.push(CentroidRecord {
+                segment_id: format!("single_{s}"),
+                cluster_id: 0,
+                centroid: vec![0.9, 0.0, 0.0, 0.0],
+            });
+        }
+
+        // One multi-centroid compacted segment covering the unit sphere (dist ~ 0.90),
+        // plus one truly distant multi-centroid segment (dist ~ 99.0).
+        let compacted_centroids = [
+            vec![0.4, 0.4, 0.0, 0.0],
+            vec![-0.4, 0.4, 0.0, 0.0],
+            vec![0.0, -0.4, 0.4, 0.0],
+            vec![0.0, 0.0, -0.4, 0.4],
+        ];
+        for (cid, c) in compacted_centroids.into_iter().enumerate() {
+            records.push(CentroidRecord {
+                segment_id: "compacted_001".to_string(),
+                cluster_id: cid,
+                centroid: c,
+            });
+        }
+        for cid in 0..4 {
+            let b = 50.0 + cid as f32;
+            records.push(CentroidRecord {
+                segment_id: "distant_seg".to_string(),
+                cluster_id: cid,
+                centroid: vec![b, b, b, b],
+            });
+        }
+
+        let router = TableVectorRouter::new(dim, VectorMetric::L2, records);
+        let plan = router.route_with_policy(&query, 4, RoutingPolicy::Adaptive { factor: 1.35 });
+
+        assert!(
+            plan.candidate_segments.contains("compacted_001"),
+            "single-centroid segments must not prune compacted_001"
+        );
+        assert!(
+            !plan.candidate_segments.contains("distant_seg"),
+            "truly distant multi-centroid segment should still be pruned"
+        );
+        for s in 0..5 {
+            assert!(plan.candidate_segments.contains(&format!("single_{s}")));
+        }
+    }
+
+    #[test]
+    fn test_adaptive_retains_overlapping_isotropic_multi_centroid_segments() {
+        let dim = 4;
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let mut records = Vec::new();
+
+        // Segment A has a centroid slightly closer to query (dist = 0.55).
+        let seg_a = [
+            vec![0.45, 0.0, 0.0, 0.0],
+            vec![-0.45, 0.0, 0.0, 0.0],
+            vec![0.0, 0.45, 0.0, 0.0],
+            vec![0.0, -0.45, 0.0, 0.0],
+        ];
+        for (cid, c) in seg_a.into_iter().enumerate() {
+            records.push(CentroidRecord {
+                segment_id: "compacted_a".to_string(),
+                cluster_id: cid,
+                centroid: c,
+            });
+        }
+
+        // Segment B spans the same sphere around origin but its centroids sit
+        // along rotated axes (seg_best = sqrt(1 + 0.25) ~ 1.12 > 0.55 * 1.35 = 0.7425),
+        // while spread R_B = 0.50 -> 2*R_B = 1.00 discounts it below threshold.
+        let seg_b = [
+            vec![0.0, 0.5, 0.0, 0.0],
+            vec![0.0, -0.5, 0.0, 0.0],
+            vec![0.0, 0.0, 0.5, 0.0],
+            vec![0.0, 0.0, -0.5, 0.0],
+        ];
+        for (cid, c) in seg_b.into_iter().enumerate() {
+            records.push(CentroidRecord {
+                segment_id: "compacted_b".to_string(),
+                cluster_id: cid,
+                centroid: c,
+            });
+        }
+
+        // Segment C is spatially localized far away at [50..53].
+        for cid in 0..4 {
+            let b = 50.0 + cid as f32;
+            records.push(CentroidRecord {
+                segment_id: "far_clustered".to_string(),
+                cluster_id: cid,
+                centroid: vec![b, b, b, b],
+            });
+        }
+
+        let router = TableVectorRouter::new(dim, VectorMetric::L2, records);
+        let plan = router.route_with_policy(&query, 4, RoutingPolicy::Adaptive { factor: 1.35 });
+
+        assert!(plan.candidate_segments.contains("compacted_a"));
+        assert!(
+            plan.candidate_segments.contains("compacted_b"),
+            "overlapping isotropic multi-centroid segment must be retained"
+        );
+        assert!(
+            !plan.candidate_segments.contains("far_clustered"),
+            "spatially distant segment must still be pruned"
+        );
     }
 }

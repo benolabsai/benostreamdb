@@ -82,3 +82,10 @@ path = "fuzz_targets/connector_inputs.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "wal_segment"
+path = "fuzz_targets/wal_segment.rs"
+test = false
+doc = false
+bench = false

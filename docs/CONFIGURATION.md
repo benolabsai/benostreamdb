@@ -100,7 +100,7 @@ backward compatibility but ignored.
 | Variable | Description | Default |
 |:---|:---|:---|
 | `BSDB_WAL_DIR` | Directory for the Write-Ahead Log (WAL) used for streaming recovery. | `{table_uri}/_wal` |
-| `BSDB_WAL_DURABILITY` | WAL flush durability policy (`always`, `adaptive`, `periodic`). | `adaptive` |
+| `BSDB_WAL_DURABILITY` | WAL flush durability policy (`sync` for `fdatasync`/`fsync` per batch before ack; `async` for worker batch/interval sync). | `sync` |
 | `BSDB_WAL_COMPACT_MB` | File size threshold in MB before triggering WAL log segment compaction. | `1024` (1 GB) |
 | `BSDB_WAL_SYNC_BATCH_SIZE`| Appended operations batch size before triggering a WAL sync flush. | `10` |
 | `BSDB_WAL_SYNC_INTERVAL_MS`| Maximum elapsed milliseconds between background WAL sync flushes. | `100` |

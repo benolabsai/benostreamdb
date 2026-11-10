@@ -76,6 +76,15 @@ pub struct CommitMetadata {
     /// removing our remaining inputs without adding our replacement would lose
     /// rows. The only correct outcome is to discard this compaction entirely.
     pub discard_add_on_missing_remove: bool,
+    /// Optional OCC strict-version guard: when `Some(expected)`, the commit
+    /// fails with [`crate::core::error::BenoStreamError::ManifestVersionMismatch`] instead of
+    /// silently rebasing onto a newer version (used by V3 writers to guarantee
+    /// strictly contiguous non-overlapping `_row_id` ranges).
+    pub expected_version: Option<u64>,
+    /// WAL transaction UUIDs to merge atomically into the manifest's
+    /// `benostream.committed_wal_tx` property inside the OCC commit loop so
+    /// concurrent writers never overwrite one another's idempotency markers.
+    pub append_committed_wal_tx: Vec<String>,
 }
 
 impl ManifestManager {
@@ -126,6 +135,38 @@ impl ManifestManager {
         crate::core::cache::MANIFEST_CACHE.invalidate_all();
     }
 
+    /// Invalidate only the latest-version entry for this table directory.
+    pub(crate) async fn invalidate_latest_version_cache(&self) {
+        let dir_key = self.get_dir_cache_key();
+        crate::core::cache::LATEST_VERSION_CACHE
+            .invalidate(&dir_key)
+            .await;
+    }
+
+    /// Cache `manifest` at `version` and advance `LATEST_VERSION_CACHE`
+    /// monotonically so stale versions never regress newer in-process commits.
+    pub(crate) async fn update_version_cache_monotonic(&self, manifest: &Manifest, version: u64) {
+        let dir_key = self.get_dir_cache_key();
+        if version == 0 {
+            crate::core::cache::LATEST_VERSION_CACHE
+                .invalidate(&dir_key)
+                .await;
+            return;
+        }
+        let filename = format!("v{}.json", version);
+        let path = self.manifest_dir.child(filename);
+        let file_key = self.get_cache_key(&path);
+        crate::core::cache::MANIFEST_CACHE
+            .insert(file_key, Arc::new(manifest.clone()))
+            .await;
+        let current_cached = crate::core::cache::LATEST_VERSION_CACHE.get(&dir_key).await;
+        if current_cached.is_none_or(|c| version >= c) {
+            crate::core::cache::LATEST_VERSION_CACHE
+                .insert(dir_key, version)
+                .await;
+        }
+    }
+
     /// Check if any manifests exist in the directory
     pub async fn exists(&self) -> Result<bool> {
         let mut stream = self.store.list(Some(&self.manifest_dir));
@@ -150,49 +191,62 @@ impl ManifestManager {
     /// back the already-durable manifest commit: the next data commit re-syncs
     /// properties from the manifest in `write.rs`.
     pub(crate) async fn sync_metadata_properties(&self, manifest: &Manifest) -> Result<()> {
-        use crate::core::metadata::TableMetadata;
+        use crate::core::metadata::{MetadataUpdateOutcome, TableMetadata};
 
-        let mut metadata = match TableMetadata::load_latest(self.store.as_ref()).await {
-            Ok(metadata) => metadata,
-            Err(err) => {
-                // Metadata is normally created by the first data commit. For a
-                // properties-only table (e.g. `CREATE TABLE` + `SET
-                // TBLPROPERTIES`), synthesize a skeleton from the manifest so
-                // external readers can see the properties immediately.
-                let Some(schema) = manifest.schemas.last().cloned() else {
-                    tracing::debug!(
-                        error = %err,
-                        "no table schema available; skipping Iceberg metadata property sync"
-                    );
-                    return Ok(());
-                };
-                let mut metadata = TableMetadata::new(
-                    manifest.format_version,
-                    uuid::Uuid::new_v4().to_string(),
-                    self.root_uri.clone(),
-                    schema,
-                    manifest.partition_spec.clone(),
-                    manifest.sort_orders.first().cloned().unwrap_or_default(),
-                );
-                metadata.current_schema_id = manifest.current_schema_id;
-                metadata.default_spec_id = manifest.default_spec_id;
-                metadata.default_sort_order_id = manifest.default_sort_order_id;
-                metadata.last_column_id = manifest.last_column_id;
-                metadata.next_row_id = if manifest.format_version >= 3 {
-                    Some(0)
-                } else {
-                    None
-                };
-                metadata
-            }
+        let root_uri = self.root_uri.clone();
+        let manifest_clone = manifest.clone();
+
+        let Some(latest_schema) = manifest.schemas.last().cloned() else {
+            tracing::debug!("no table schema available; skipping Iceberg metadata property sync");
+            return Ok(());
         };
 
-        metadata.properties = manifest.properties.clone();
-        metadata.format_version = manifest.format_version;
-        metadata.last_updated_ms = manifest.timestamp_ms;
-        metadata
-            .save_to_store(self.store.as_ref(), manifest.version as i32)
-            .await?;
+        TableMetadata::commit_update_atomic(
+            self.store.as_ref(),
+            manifest.version as i32,
+            move |existing| {
+                let mut metadata = match existing {
+                    Some(meta) => {
+                        if meta.last_sequence_number > manifest_clone.version as i64 {
+                            return Ok(MetadataUpdateOutcome::AlreadyCurrent(meta));
+                        }
+                        meta
+                    }
+                    None => {
+                        let mut m = TableMetadata::new(
+                            manifest_clone.format_version,
+                            uuid::Uuid::new_v4().to_string(),
+                            root_uri.clone(),
+                            latest_schema.clone(),
+                            manifest_clone.partition_spec.clone(),
+                            manifest_clone
+                                .sort_orders
+                                .first()
+                                .cloned()
+                                .unwrap_or_default(),
+                        );
+                        m.current_schema_id = manifest_clone.current_schema_id;
+                        m.default_spec_id = manifest_clone.default_spec_id;
+                        m.default_sort_order_id = manifest_clone.default_sort_order_id;
+                        m.last_column_id = manifest_clone.last_column_id;
+                        m.next_row_id = if manifest_clone.format_version >= 3 {
+                            Some(0)
+                        } else {
+                            None
+                        };
+                        m
+                    }
+                };
+
+                metadata.properties = manifest_clone.properties.clone();
+                metadata.format_version =
+                    metadata.format_version.max(manifest_clone.format_version);
+                metadata.last_updated_ms =
+                    metadata.last_updated_ms.max(manifest_clone.timestamp_ms);
+                Ok(MetadataUpdateOutcome::Updated(metadata))
+            },
+        )
+        .await?;
         Ok(())
     }
 }

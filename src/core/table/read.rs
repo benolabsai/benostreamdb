@@ -38,6 +38,144 @@ fn default_probes(n_lists: usize) -> usize {
         .min(n_lists)
 }
 
+fn search_memory_buffer_batches(
+    batches: &[RecordBatch],
+    mem_idx: &crate::core::index::memory::InMemoryVectorIndex,
+    vs_params_list: &[VectorSearchParams],
+    expr: Option<&FilterExpr>,
+    columns: Option<&[&str]>,
+    table_schema: &arrow::datatypes::SchemaRef,
+) -> Result<Option<RecordBatch>> {
+    if batches.is_empty() {
+        return Ok(None);
+    }
+
+    let filter_bitmap = if let Some(e) = expr {
+        let mut bitmap = RoaringBitmap::new();
+        let mut offset = 0usize;
+        let planner = QueryPlanner::new();
+        for batch in batches {
+            let aligned = if batch.schema() == *table_schema {
+                batch.clone()
+            } else {
+                let mut cols = Vec::with_capacity(table_schema.fields().len());
+                for field in table_schema.fields() {
+                    let col = if let Some(c) = batch.column_by_name(field.name()) {
+                        c.clone()
+                    } else {
+                        arrow::array::new_null_array(field.data_type(), batch.num_rows())
+                    };
+                    cols.push(col);
+                }
+                RecordBatch::try_new(table_schema.clone(), cols).unwrap_or_else(|_| batch.clone())
+            };
+            if let Ok(mask) = planner.evaluate_expr(&aligned, e) {
+                for i in 0..aligned.num_rows() {
+                    if mask.value(i) {
+                        bitmap.insert((offset + i) as u32);
+                    }
+                }
+            }
+            offset += aligned.num_rows();
+        }
+        Some(bitmap)
+    } else {
+        None
+    };
+
+    let mut memory_hits = Vec::new();
+    for vs_params in vs_params_list {
+        let hits = mem_idx.search(&vs_params.query, vs_params.k, filter_bitmap.as_ref());
+        memory_hits.extend(hits);
+    }
+
+    if memory_hits.is_empty() {
+        return Ok(None);
+    }
+
+    let batch_offsets: Vec<usize> = batches
+        .iter()
+        .scan(0, |state, b| {
+            let start = *state;
+            *state += b.num_rows();
+            Some(start)
+        })
+        .collect();
+
+    let first_schema = batches[0].schema();
+    let schemas_differ = batches.iter().any(|b| b.schema() != first_schema);
+    let target_concat_schema = if schemas_differ {
+        table_schema.clone()
+    } else {
+        first_schema
+    };
+
+    let mut result_rows = Vec::new();
+    let mut kept_distances = Vec::with_capacity(memory_hits.len());
+    for (id, dist) in &memory_hits {
+        for (i, offset) in batch_offsets.iter().enumerate().rev() {
+            if *id >= *offset {
+                let row_idx = *id - offset;
+                if i < batches.len() && row_idx < batches[i].num_rows() {
+                    let slice = batches[i].slice(row_idx, 1);
+                    let aligned_slice = if slice.schema() == target_concat_schema {
+                        slice
+                    } else {
+                        let mut cols = Vec::with_capacity(target_concat_schema.fields().len());
+                        for field in target_concat_schema.fields() {
+                            let col = if let Some(c) = slice.column_by_name(field.name()) {
+                                c.clone()
+                            } else {
+                                arrow::array::new_null_array(field.data_type(), slice.num_rows())
+                            };
+                            cols.push(col);
+                        }
+                        RecordBatch::try_new(target_concat_schema.clone(), cols)
+                            .unwrap_or_else(|_| slice.clone())
+                    };
+                    result_rows.push(aligned_slice);
+                    kept_distances.push(*dist);
+                }
+                break;
+            }
+        }
+    }
+
+    if result_rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mem_batch = arrow::compute::concat_batches(
+        &target_concat_schema,
+        result_rows.iter().collect::<Vec<&RecordBatch>>(),
+    )?;
+
+    let projected_batch = if let Some(cols) = columns {
+        let indices: Vec<usize> = cols
+            .iter()
+            .filter_map(|name| mem_batch.schema().index_of(name).ok())
+            .collect();
+        mem_batch.project(&indices).unwrap_or(mem_batch.clone())
+    } else {
+        mem_batch
+    };
+
+    let projected_schema = projected_batch.schema();
+    let mut new_fields = projected_schema.fields().to_vec();
+    new_fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
+        "distance",
+        arrow::datatypes::DataType::Float32,
+        false,
+    )));
+    let new_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(new_fields));
+
+    let mut new_columns = projected_batch.columns().to_vec();
+    let distance_array = arrow::array::Float32Array::from(kept_distances);
+    new_columns.push(std::sync::Arc::new(distance_array));
+
+    Ok(RecordBatch::try_new(new_schema, new_columns).ok())
+}
+
 impl Table {
     pub fn read(
         &self,
@@ -480,16 +618,97 @@ impl Table {
         use futures::StreamExt;
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let (_manifest, all_entries, version) = match manifest_manager.load_latest_full().await {
-            Ok((m, e, v)) => (m, e, v),
-            Err(_) => {
-                if manifest_manager.exists().await.unwrap_or(false) {
-                    (crate::core::manifest::Manifest::default(), Vec::new(), 0)
+        let need_mem_index = vector_filters.is_some();
+        let mut force_direct = false;
+        let (_manifest, all_entries, version, staging_snap, active_snap) = {
+            let mut resolved = None;
+            for attempt in 0..8usize {
+                let epoch1 = self.buffer_epoch.load(std::sync::atomic::Ordering::SeqCst);
+                let (m, e, v) = if force_direct {
+                    match manifest_manager.load_latest_direct().await {
+                        Ok((m, v)) => {
+                            let entries = manifest_manager.load_all_entries(&m).await?;
+                            (m, entries, v)
+                        }
+                        Err(_) => {
+                            if manifest_manager.exists().await.unwrap_or(false) {
+                                (crate::core::manifest::Manifest::default(), Vec::new(), 0)
+                            } else {
+                                let segments =
+                                    self.list_segments_from_store().await.unwrap_or_default();
+                                (crate::core::manifest::Manifest::default(), segments, 0)
+                            }
+                        }
+                    }
                 } else {
-                    let segments = self.list_segments_from_store().await.unwrap_or_default();
-                    (crate::core::manifest::Manifest::default(), segments, 0)
+                    match manifest_manager.load_latest_full().await {
+                        Ok((m, e, v)) => (m, e, v),
+                        Err(_) => {
+                            if manifest_manager.exists().await.unwrap_or(false) {
+                                (crate::core::manifest::Manifest::default(), Vec::new(), 0)
+                            } else {
+                                let segments =
+                                    self.list_segments_from_store().await.unwrap_or_default();
+                                (crate::core::manifest::Manifest::default(), segments, 0)
+                            }
+                        }
+                    }
+                };
+
+                // Canonical lock order: pending_commit -> pending_writes -> indexing.memory_index.
+                let (staging, active, committed_ver) = {
+                    let pc_guard = self.pending_commit.lock();
+                    let pw_guard = self.pending_writes.read();
+                    let idx_guard = self.indexing.memory_index.read();
+
+                    let committed_ver = pc_guard
+                        .as_ref()
+                        .filter(|pc| pc.phase != super::CommitPhase::Staging)
+                        .and_then(|pc| pc.committed_manifest.as_ref().map(|cm| cm.version));
+
+                    let staging = pc_guard.as_ref().and_then(|pc| {
+                        if pc.phase == super::CommitPhase::Staging && !pc.batches.is_empty() {
+                            Some((
+                                pc.batches.clone(),
+                                if need_mem_index {
+                                    pc.frozen_memory_index.clone()
+                                } else {
+                                    None
+                                },
+                            ))
+                        } else {
+                            None
+                        }
+                    });
+
+                    let active = if !pw_guard.is_empty() {
+                        let batches: Vec<RecordBatch> =
+                            pw_guard.iter().map(|p| p.batch.clone()).collect();
+                        let idx = if need_mem_index {
+                            idx_guard.clone()
+                        } else {
+                            None
+                        };
+                        (batches, idx)
+                    } else {
+                        (Vec::new(), None)
+                    };
+
+                    (staging, active, committed_ver)
+                };
+
+                let epoch2 = self.buffer_epoch.load(std::sync::atomic::Ordering::SeqCst);
+                let stale_manifest = committed_ver.is_some_and(|cv| v < cv);
+                if (epoch2 != epoch1 || stale_manifest) && attempt < 7 {
+                    force_direct = true;
+                    continue;
                 }
+                resolved = Some((m, e, v, staging, active));
+                break;
             }
+            resolved.ok_or_else(|| {
+                anyhow::anyhow!("Failed to obtain linearizable snapshot during concurrent commit")
+            })?
         };
 
         // Table-level cluster index fast path.
@@ -499,9 +718,9 @@ impl Table {
         // artifact already holds every cluster whole, and its nodes carry
         // `(segment_id, row_id)`, so `fetch_results_by_id` hydrates the winners
         // unchanged. Restricted to a single vector filter with no scalar
-        // predicate, because the artifact has no scalar-filter support — a
-        // filtered query must stay on the per-segment path.
-        if expr.is_none() {
+        // predicate and no uncommitted/staging buffer rows, because the artifact
+        // has no scalar-filter support and covers only persisted segments.
+        if expr.is_none() && staging_snap.is_none() && active_snap.0.is_empty() {
             if let Some(ref vps) = vector_filters {
                 if vps.len() == 1 {
                     let vp = &vps[0];
@@ -546,8 +765,14 @@ impl Table {
                                     candidates = plan.candidate_segments.len(),
                                     "vector_router: routed query across global centroids"
                                 );
+                                let routed: std::collections::HashSet<String> = router
+                                    .segment_indices
+                                    .iter()
+                                    .map(|(seg, _)| seg.clone())
+                                    .collect();
                                 vp.candidate_segments =
                                     Some(std::sync::Arc::new(plan.candidate_segments));
+                                vp.routed_segments = Some(std::sync::Arc::new(routed));
                                 vp.targeted_clusters =
                                     Some(std::sync::Arc::new(plan.segment_clusters));
                             }
@@ -689,113 +914,33 @@ impl Table {
             )
             .await?;
 
-            // 2. Search Memory
-            let memory_hits = {
-                let idx = self.indexing.memory_index.read();
-                if let Some(mem_idx) = idx.as_ref() {
-                    let filter_bitmap = if let Some(ref e) = expr {
-                        let pending = self.pending_writes.read();
-                        let mut bitmap = RoaringBitmap::new();
-                        let mut offset = 0;
-                        let planner = QueryPlanner::new();
-                        for p in pending.iter() {
-                            let batch = &p.batch;
-                            if let Ok(mask) = planner.evaluate_expr(batch, e) {
-                                for i in 0..batch.num_rows() {
-                                    if mask.value(i) {
-                                        bitmap.insert((offset + i) as u32);
-                                    }
-                                }
-                            }
-                            offset += batch.num_rows();
-                        }
-                        Some(bitmap)
-                    } else {
-                        None
-                    };
-                    let mut all_mem_hits = Vec::new();
-                    for vs_params in vs_params_list {
-                        let hits =
-                            mem_idx.search(&vs_params.query, vs_params.k, filter_bitmap.as_ref());
-                        all_mem_hits.extend(hits);
-                    }
-                    all_mem_hits
-                } else {
-                    vec![]
+            // 2. Search Memory (linearizable snapshot of Staging PendingCommit + Active pending_writes)
+            let table_schema = self.arrow_schema();
+            if let Some((ref staging_batches, Some(ref staging_idx))) = staging_snap {
+                if let Some(dist_batch) = search_memory_buffer_batches(
+                    staging_batches,
+                    staging_idx,
+                    vs_params_list,
+                    expr.as_ref(),
+                    columns,
+                    &table_schema,
+                )? {
+                    results.push(("write_buffer_staging".to_string(), dist_batch));
                 }
-            };
-
-            if !memory_hits.is_empty() {
-                let pending = self.pending_writes.read();
-                if let Some(first) = pending.first() {
-                    let schema = first.batch.schema();
-                    let batch_offsets: Vec<usize> = pending
-                        .iter()
-                        .scan(0, |state, p| {
-                            let start = *state;
-                            *state += p.batch.num_rows();
-                            Some(start)
-                        })
-                        .collect();
-
-                    let mut result_rows = Vec::new();
-                    for (id, _dist) in &memory_hits {
-                        for (i, offset) in batch_offsets.iter().enumerate().rev() {
-                            if *id >= *offset {
-                                let row_idx = *id - offset;
-                                if i < pending.len() && row_idx < pending[i].batch.num_rows() {
-                                    result_rows.push(pending[i].batch.slice(row_idx, 1));
-                                }
-                                break;
-                            }
-                        }
-                    }
-
-                    if !result_rows.is_empty() {
-                        let mem_batch = arrow::compute::concat_batches(
-                            &schema,
-                            result_rows.iter().collect::<Vec<&RecordBatch>>(),
-                        )?;
-
-                        let projected_batch = if let Some(cols) = columns {
-                            let indices: Vec<usize> = cols
-                                .iter()
-                                .filter_map(|name| mem_batch.schema().index_of(name).ok())
-                                .collect();
-                            mem_batch.project(&indices).unwrap_or(mem_batch.clone())
-                        } else {
-                            mem_batch.clone()
-                        };
-
-                        let projected_schema = projected_batch.schema();
-
-                        // Append _distance column to match disk search schema
-                        let mut new_fields = projected_schema.fields().to_vec();
-                        new_fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
-                            "distance",
-                            arrow::datatypes::DataType::Float32,
-                            false,
-                        )));
-                        let new_schema =
-                            std::sync::Arc::new(arrow::datatypes::Schema::new(new_fields));
-
-                        let mut new_columns = projected_batch.columns().to_vec();
-                        let distance_array = arrow::array::Float32Array::from(
-                            memory_hits
-                                .iter()
-                                .map(|(_, dist)| *dist)
-                                .collect::<Vec<f32>>(),
-                        );
-                        new_columns.push(std::sync::Arc::new(distance_array));
-
-                        if let Ok(dist_batch) = RecordBatch::try_new(new_schema, new_columns) {
-                            results.push(("write_buffer".to_string(), dist_batch));
-                        }
-                    }
+            }
+            if let (ref active_batches, Some(ref active_idx)) = active_snap {
+                if let Some(dist_batch) = search_memory_buffer_batches(
+                    active_batches,
+                    active_idx,
+                    vs_params_list,
+                    expr.as_ref(),
+                    columns,
+                    &table_schema,
+                )? {
+                    results.push(("write_buffer".to_string(), dist_batch));
                 }
             }
 
-            let table_schema = self.arrow_schema();
             let mut expected_fields: Vec<std::sync::Arc<arrow::datatypes::Field>> =
                 if let Some(cols) = columns {
                     cols.iter()
@@ -921,16 +1066,20 @@ impl Table {
             Err(e) => futures::stream::once(async move { Err(e) }).boxed(),
         });
 
-        // --- Read from In-Memory Write Buffer ---
+        // --- Read from In-Memory Write Buffer (Staging PendingCommit + Active pending_writes snapshot) ---
         let mut mem_batches = Vec::new();
         {
-            let pending = self.pending_writes.read();
-            if !pending.is_empty() {
+            let mut combined = Vec::new();
+            if let Some((staging_batches, _)) = staging_snap {
+                combined.extend(staging_batches);
+            }
+            combined.extend(active_snap.0);
+
+            if !combined.is_empty() {
                 let table_schema = self.arrow_schema();
                 // Align batches to the full evolved schema first
-                let mut aligned_buffer = Vec::with_capacity(pending.len());
-                for p in pending.iter() {
-                    let b = &p.batch;
+                let mut aligned_buffer = Vec::with_capacity(combined.len());
+                for b in &combined {
                     let aligned = if b.schema() != table_schema {
                         let mut cols = Vec::with_capacity(table_schema.fields().len());
                         for field in table_schema.fields() {

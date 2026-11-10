@@ -186,6 +186,196 @@ impl BenoQuantEncoder {
             use_rademacher: true,
         })
     }
+
+    /// Precompute the rotated, un-clamped query state once for asymmetric
+    /// distance evaluation across encoded vectors.
+    pub fn prepare_query(
+        &self,
+        query_f32: &[f32],
+        metric: VectorMetric,
+    ) -> PreparedBenoQuantQuery<'_> {
+        if self.dim == 0 {
+            return PreparedBenoQuantQuery {
+                encoder: self,
+                rotated_query: Vec::new(),
+                q_norm_sq: 0.0,
+                inv_scale: 1.0,
+                inv_n: 1.0,
+                metric,
+            };
+        }
+
+        let mut rotated_query = vec![0.0f32; self.dim];
+        let copy_len = query_f32.len().min(self.dim);
+        rotated_query[..copy_len].copy_from_slice(&query_f32[..copy_len]);
+
+        if metric == VectorMetric::Cosine || self.metric == VectorMetric::Cosine {
+            let norm = rotated_query.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 1e-12 {
+                let inv = 1.0 / norm;
+                for x in &mut rotated_query {
+                    *x *= inv;
+                }
+            } else if !rotated_query.is_empty() {
+                let inv_sqrt_d = 1.0 / (rotated_query.len() as f32).sqrt();
+                rotated_query.fill(inv_sqrt_d);
+            }
+        }
+
+        let n = self.dim.next_power_of_two();
+        rotated_query.resize(n, 0.0);
+        for (j, val) in rotated_query.iter_mut().enumerate() {
+            *val *= rademacher_sign(j);
+        }
+        fwht(&mut rotated_query);
+
+        let q_norm_sq = rotated_query.iter().map(|x| x * x).sum::<f32>();
+        let inv_scale = if self.scale.abs() < 1e-10 {
+            1.0
+        } else {
+            1.0 / self.scale
+        };
+        let inv_n = 1.0 / (n.max(1) as f32);
+
+        PreparedBenoQuantQuery {
+            encoder: self,
+            rotated_query,
+            q_norm_sq,
+            inv_scale,
+            inv_n,
+            metric,
+        }
+    }
+}
+
+/// Pre-rotated, un-clamped query state for Asymmetric Distance Calculation (ADC)
+/// against [`BenoQuantEncoder`] codes.
+///
+/// Computing `distance` directly in the Walsh-Hadamard rotated space avoids
+/// per-candidate inverse FWHT transforms while returning calibrated Euclidean L2
+/// (`sqrt(dist_sq / N)`) or Cosine (`1 - cos`) distances comparable across
+/// segments with independent quantization ranges.
+#[derive(Debug, Clone)]
+pub struct PreparedBenoQuantQuery<'a> {
+    encoder: &'a BenoQuantEncoder,
+    rotated_query: Vec<f32>,
+    q_norm_sq: f32,
+    inv_scale: f32,
+    inv_n: f32,
+    metric: VectorMetric,
+}
+
+impl<'a> PreparedBenoQuantQuery<'a> {
+    /// Evaluate calibrated asymmetric distance against a stored BenoQuant code.
+    /// Guaranteed finite and non-negative.
+    #[inline]
+    pub fn distance(&self, encoded: &[u8]) -> f32 {
+        let n = self.rotated_query.len();
+        if n == 0 {
+            return 0.0;
+        }
+
+        let dist = if self.encoder.bits == 4 {
+            let packed_len = n.div_ceil(2);
+            let (nibble_bytes, alpha) = if encoded.len() >= packed_len + 2 {
+                let tail = encoded.len();
+                let alpha_bytes = [encoded[tail - 2], encoded[tail - 1]];
+                (&encoded[..packed_len], f16_bytes_to_f32(alpha_bytes))
+            } else if encoded.len() >= 2 && (encoded.len() - 2) * 2 >= self.encoder.dim {
+                let tail = encoded.len();
+                let alpha_bytes = [encoded[tail - 2], encoded[tail - 1]];
+                (&encoded[..tail - 2], f16_bytes_to_f32(alpha_bytes))
+            } else {
+                (encoded, 1.0f32)
+            };
+            let alpha = if alpha.is_finite() { alpha } else { 1.0 };
+            let step = alpha * self.inv_scale;
+            let base = alpha * self.encoder.offset;
+
+            match self.metric {
+                VectorMetric::Cosine | VectorMetric::InnerProduct => {
+                    let mut dot = 0.0f32;
+                    let mut v_norm_sq = 0.0f32;
+                    let mut idx = 0usize;
+                    for &b in nibble_bytes {
+                        if idx >= n {
+                            break;
+                        }
+                        let decoded_low = ((b & 0x0F) as f32) * step + base;
+                        dot += self.rotated_query[idx] * decoded_low;
+                        v_norm_sq += decoded_low * decoded_low;
+                        idx += 1;
+                        if idx < n {
+                            let decoded_high = (((b >> 4) & 0x0F) as f32) * step + base;
+                            dot += self.rotated_query[idx] * decoded_high;
+                            v_norm_sq += decoded_high * decoded_high;
+                            idx += 1;
+                        }
+                    }
+                    let denom = (self.q_norm_sq * v_norm_sq).sqrt();
+                    if denom > 1e-12 {
+                        (1.0 - (dot / denom).clamp(-1.0, 1.0)).max(0.0)
+                    } else {
+                        1.0
+                    }
+                }
+                _ => {
+                    let mut dist_sq = 0.0f32;
+                    let mut idx = 0usize;
+                    for &b in nibble_bytes {
+                        if idx >= n {
+                            break;
+                        }
+                        let decoded_low = ((b & 0x0F) as f32) * step + base;
+                        let diff_low = self.rotated_query[idx] - decoded_low;
+                        dist_sq += diff_low * diff_low;
+                        idx += 1;
+                        if idx < n {
+                            let decoded_high = (((b >> 4) & 0x0F) as f32) * step + base;
+                            let diff_high = self.rotated_query[idx] - decoded_high;
+                            dist_sq += diff_high * diff_high;
+                            idx += 1;
+                        }
+                    }
+                    (dist_sq * self.inv_n).max(0.0).sqrt()
+                }
+            }
+        } else {
+            let count = n.min(encoded.len());
+            match self.metric {
+                VectorMetric::Cosine | VectorMetric::InnerProduct => {
+                    let mut dot = 0.0f32;
+                    let mut v_norm_sq = 0.0f32;
+                    for (&q, &e) in self.rotated_query[..count].iter().zip(&encoded[..count]) {
+                        let decoded = (e as f32) * self.inv_scale + self.encoder.offset;
+                        dot += q * decoded;
+                        v_norm_sq += decoded * decoded;
+                    }
+                    let denom = (self.q_norm_sq * v_norm_sq).sqrt();
+                    if denom > 1e-12 {
+                        (1.0 - (dot / denom).clamp(-1.0, 1.0)).max(0.0)
+                    } else {
+                        1.0
+                    }
+                }
+                _ => {
+                    let mut dist_sq = 0.0f32;
+                    for (&q, &e) in self.rotated_query[..count].iter().zip(&encoded[..count]) {
+                        let decoded = (e as f32) * self.inv_scale + self.encoder.offset;
+                        let diff = q - decoded;
+                        dist_sq += diff * diff;
+                    }
+                    (dist_sq * self.inv_n).max(0.0).sqrt()
+                }
+            }
+        };
+
+        if dist.is_finite() {
+            dist.max(0.0)
+        } else {
+            f32::MAX
+        }
+    }
 }
 
 impl Quantizer for BenoQuantEncoder {
@@ -296,64 +486,7 @@ impl Quantizer for BenoQuantEncoder {
     }
 
     fn distance_adc(&self, query_f32: &[f32], encoded: &[u8]) -> f32 {
-        // Asymmetric Distance Calculation:
-        // Rotate the query once, then compare with quantized bytes in the rotated space.
-        let mut rotated_query = query_f32.to_vec();
-        if self.metric == VectorMetric::Cosine {
-            let norm = rotated_query.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if norm > 1e-12 {
-                let inv = 1.0 / norm;
-                for x in &mut rotated_query {
-                    *x *= inv;
-                }
-            } else if !rotated_query.is_empty() {
-                let inv_sqrt_d = 1.0 / (rotated_query.len() as f32).sqrt();
-                rotated_query.fill(inv_sqrt_d);
-            }
-        }
-        if !rotated_query.len().is_power_of_two() {
-            let next_pow2 = rotated_query.len().next_power_of_two();
-            rotated_query.resize(next_pow2, 0.0);
-        }
-        for (j, val) in rotated_query.iter_mut().enumerate() {
-            *val *= rademacher_sign(j);
-        }
-        fwht(&mut rotated_query);
-
-        // Calculate distance in rotated space (L2)
-        let mut dist_sq = 0.0;
-        let inv_scale = 1.0 / self.scale;
-
-        if self.bits == 4 {
-            let (nibble_bytes, alpha) = if encoded.len() >= 2 && (encoded.len() - 2) * 2 >= self.dim
-            {
-                let alpha_bytes = [encoded[encoded.len() - 2], encoded[encoded.len() - 1]];
-                (&encoded[..encoded.len() - 2], f16_bytes_to_f32(alpha_bytes))
-            } else {
-                (encoded, 1.0f32)
-            };
-            for (i, &b) in nibble_bytes.iter().enumerate() {
-                // Low nibble
-                let decoded_low = (((b & 0x0F) as f32 * inv_scale) + self.offset) * alpha;
-                if i * 2 < rotated_query.len() {
-                    let diff = rotated_query[i * 2] - decoded_low;
-                    dist_sq += diff * diff;
-                }
-                // High nibble
-                let decoded_high = ((((b >> 4) & 0x0F) as f32 * inv_scale) + self.offset) * alpha;
-                if i * 2 + 1 < rotated_query.len() {
-                    let diff = rotated_query[i * 2 + 1] - decoded_high;
-                    dist_sq += diff * diff;
-                }
-            }
-        } else {
-            for (q, &e) in rotated_query.iter().zip(encoded.iter()) {
-                let decoded = (e as f32 * inv_scale) + self.offset;
-                let diff = q - decoded;
-                dist_sq += diff * diff;
-            }
-        }
-        dist_sq
+        self.prepare_query(query_f32, self.metric).distance(encoded)
     }
 
     fn name(&self) -> String {
@@ -547,6 +680,75 @@ mod tests {
             overlap >= 6,
             "BenoQuant 4-bit L2 top-10 overlap should be >= 6 (got {})",
             overlap
+        );
+    }
+
+    #[test]
+    fn test_benoquant_adc_calibrated_l2_and_out_of_range_query() {
+        let dim = 8;
+        let seg1: Vec<Vec<f32>> = vec![vec![0.0; dim], vec![25.0; dim], vec![50.0; dim]];
+        let seg2: Vec<Vec<f32>> = vec![vec![194.0; dim], vec![197.0; dim], vec![200.0; dim]];
+        let query = vec![197.0f32; dim];
+
+        for bits in [8usize, 4usize] {
+            let enc1 = BenoQuantEncoder::train(&seg1, bits, VectorMetric::L2).unwrap();
+            let enc2 = BenoQuantEncoder::train(&seg2, bits, VectorMetric::L2).unwrap();
+
+            let code_0 = enc1.encode(&seg1[0]);
+            let code_50 = enc1.encode(&seg1[2]);
+            let code_197 = enc2.encode(&seg2[1]);
+
+            let prep1 = enc1.prepare_query(&query, VectorMetric::L2);
+            let d_0 = prep1.distance(&code_0);
+            let d_50 = prep1.distance(&code_50);
+            let d_197 = enc2
+                .prepare_query(&query, VectorMetric::L2)
+                .distance(&code_197);
+
+            let expected_50 = (197.0 - 50.0) * (dim as f32).sqrt();
+            let tol_far = if bits == 8 { 5.0 } else { 35.0 };
+            let max_exact = if bits == 8 { 3.0 } else { 45.0 };
+            assert!(
+                (d_50 - expected_50).abs() < tol_far,
+                "bits={bits}: out-of-range query to [50; 8] must stay calibrated near {expected_50}, got {d_50}"
+            );
+            assert!(
+                d_50 < d_0,
+                "bits={bits}: out-of-range ordering [50; 8] ({d_50}) must beat [0; 8] ({d_0})"
+            );
+            assert!(
+                d_197 < max_exact,
+                "bits={bits}: exact match [197; 8] must score < {max_exact}, got {d_197}"
+            );
+            assert!(
+                d_197 < d_50,
+                "bits={bits}: exact match {d_197} must beat out-of-range neighbor {d_50}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_benoquant_adc_cosine() {
+        let dim = 16;
+        let mut rng_state: u64 = 99;
+        let mut rand_f32 = || {
+            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((rng_state >> 33) as f32 / (1u32 << 31) as f32) - 1.0
+        };
+        let vectors: Vec<Vec<f32>> = (0..100)
+            .map(|_| (0..dim).map(|_| rand_f32() * 5.0).collect())
+            .collect();
+        let enc = BenoQuantEncoder::train(&vectors, 8, VectorMetric::Cosine).unwrap();
+        let q = vectors[7].clone();
+        let prep = enc.prepare_query(&q, VectorMetric::Cosine);
+        let self_dist = prep.distance(&enc.encode(&q));
+        assert!(self_dist < 0.02, "self cosine distance got {self_dist}");
+
+        let opp: Vec<f32> = q.iter().map(|x| -x).collect();
+        let opp_dist = prep.distance(&enc.encode(&opp));
+        assert!(
+            opp_dist > 1.8,
+            "opposite cosine distance should be ~2.0, got {opp_dist}"
         );
     }
 }

@@ -214,6 +214,187 @@ impl PqEncoder {
         }
         dist
     }
+
+    /// Precompute a flat asymmetric lookup table once per query for fast,
+    /// allocation-free HNSW graph scoring under `metric`.
+    pub fn prepare_query(
+        &self,
+        query_f32: &[f32],
+        metric: crate::core::index::VectorMetric,
+    ) -> PreparedPqQuery {
+        let m = self.config.m;
+        let k = self.config.k;
+        if m == 0 || k == 0 || self.codebooks.len() < m {
+            return PreparedPqQuery {
+                metric,
+                m: 0,
+                k: 0,
+                q_norm_sq: 0.0,
+                lut: Vec::new(),
+                v_norm_lut: Vec::new(),
+            };
+        }
+        let sub_dim = self.config.dim / m;
+        let mut q_buf = vec![0.0f32; self.config.dim];
+        let copy_len = query_f32.len().min(self.config.dim);
+        q_buf[..copy_len].copy_from_slice(&query_f32[..copy_len]);
+
+        match metric {
+            crate::core::index::VectorMetric::Cosine
+            | crate::core::index::VectorMetric::InnerProduct => {
+                let q_norm_sq = q_buf.iter().map(|x| x * x).sum::<f32>();
+                let mut dot_lut = Vec::with_capacity(m * k);
+                let mut v_norm_lut = Vec::with_capacity(m * k);
+                for i in 0..m {
+                    let sub_q = &q_buf[i * sub_dim..(i + 1) * sub_dim];
+                    for c in 0..k {
+                        if let Some(centroid) = self.codebooks[i].get(c) {
+                            let c_len = centroid.len().min(sub_dim);
+                            let dot: f32 = sub_q[..c_len]
+                                .iter()
+                                .zip(&centroid[..c_len])
+                                .map(|(a, b)| a * b)
+                                .sum();
+                            let v_sq: f32 = centroid[..c_len].iter().map(|x| x * x).sum();
+                            dot_lut.push(dot);
+                            v_norm_lut.push(v_sq);
+                        } else {
+                            dot_lut.push(0.0);
+                            v_norm_lut.push(0.0);
+                        }
+                    }
+                }
+                PreparedPqQuery {
+                    metric,
+                    m,
+                    k,
+                    q_norm_sq,
+                    lut: dot_lut,
+                    v_norm_lut,
+                }
+            }
+            crate::core::index::VectorMetric::L1 => {
+                let mut l1_lut = Vec::with_capacity(m * k);
+                for i in 0..m {
+                    let sub_q = &q_buf[i * sub_dim..(i + 1) * sub_dim];
+                    for c in 0..k {
+                        if let Some(centroid) = self.codebooks[i].get(c) {
+                            let c_len = centroid.len().min(sub_dim);
+                            let d: f32 = sub_q[..c_len]
+                                .iter()
+                                .zip(&centroid[..c_len])
+                                .map(|(a, b)| (a - b).abs())
+                                .sum();
+                            l1_lut.push(d);
+                        } else {
+                            l1_lut.push(0.0);
+                        }
+                    }
+                }
+                PreparedPqQuery {
+                    metric,
+                    m,
+                    k,
+                    q_norm_sq: 0.0,
+                    lut: l1_lut,
+                    v_norm_lut: Vec::new(),
+                }
+            }
+            _ => {
+                let mut sq_lut = Vec::with_capacity(m * k);
+                for i in 0..m {
+                    let sub_q = &q_buf[i * sub_dim..(i + 1) * sub_dim];
+                    for c in 0..k {
+                        if let Some(centroid) = self.codebooks[i].get(c) {
+                            let c_len = centroid.len().min(sub_dim);
+                            sq_lut.push(l2_distance_squared(&sub_q[..c_len], &centroid[..c_len]));
+                        } else {
+                            sq_lut.push(0.0);
+                        }
+                    }
+                }
+                PreparedPqQuery {
+                    metric,
+                    m,
+                    k,
+                    q_norm_sq: 0.0,
+                    lut: sq_lut,
+                    v_norm_lut: Vec::new(),
+                }
+            }
+        }
+    }
+}
+
+/// Precomputed flat lookup tables for Asymmetric Distance Calculation (ADC)
+/// against [`PqEncoder`] codes.
+#[derive(Debug, Clone)]
+pub struct PreparedPqQuery {
+    metric: crate::core::index::VectorMetric,
+    m: usize,
+    k: usize,
+    q_norm_sq: f32,
+    lut: Vec<f32>,
+    v_norm_lut: Vec<f32>,
+}
+
+impl PreparedPqQuery {
+    /// Evaluate calibrated asymmetric distance against a stored PQ code.
+    /// Guaranteed finite and non-negative.
+    #[inline]
+    pub fn distance(&self, encoded: &[u8]) -> f32 {
+        if self.m == 0 || self.k == 0 {
+            return 0.0;
+        }
+        let n_sub = self.m.min(encoded.len());
+        let dist = match self.metric {
+            crate::core::index::VectorMetric::Cosine
+            | crate::core::index::VectorMetric::InnerProduct => {
+                let mut dot = 0.0f32;
+                let mut v_norm_sq = 0.0f32;
+                for (i, &code) in encoded[..n_sub].iter().enumerate() {
+                    let c = (code as usize).min(self.k - 1);
+                    let idx = i * self.k + c;
+                    if let (Some(&d), Some(&v2)) = (self.lut.get(idx), self.v_norm_lut.get(idx)) {
+                        dot += d;
+                        v_norm_sq += v2;
+                    }
+                }
+                let denom = (self.q_norm_sq * v_norm_sq).sqrt();
+                if denom > 1e-12 {
+                    (1.0 - (dot / denom).clamp(-1.0, 1.0)).max(0.0)
+                } else {
+                    1.0
+                }
+            }
+            crate::core::index::VectorMetric::L1 => {
+                let mut total = 0.0f32;
+                for (i, &code) in encoded[..n_sub].iter().enumerate() {
+                    let c = (code as usize).min(self.k - 1);
+                    if let Some(&val) = self.lut.get(i * self.k + c) {
+                        total += val;
+                    }
+                }
+                total
+            }
+            _ => {
+                let mut dist_sq = 0.0f32;
+                for (i, &code) in encoded[..n_sub].iter().enumerate() {
+                    let c = (code as usize).min(self.k - 1);
+                    if let Some(&val) = self.lut.get(i * self.k + c) {
+                        dist_sq += val;
+                    }
+                }
+                dist_sq.max(0.0).sqrt()
+            }
+        };
+
+        if dist.is_finite() {
+            dist.max(0.0)
+        } else {
+            f32::MAX
+        }
+    }
 }
 
 impl crate::core::index::Quantizer for PqEncoder {
@@ -231,16 +412,28 @@ impl crate::core::index::Quantizer for PqEncoder {
     }
 
     fn distance_adc(&self, query: &[f32], encoded: &[u8]) -> f32 {
+        if self.config.m == 0 || self.codebooks.len() < self.config.m {
+            return 0.0;
+        }
         let sub_dim = self.config.dim / self.config.m;
-        let mut dist = 0.0;
-        for i in 0..self.config.m {
+        let mut dist_sq = 0.0f32;
+        for (i, &code_byte) in encoded.iter().take(self.config.m).enumerate() {
             let start = i * sub_dim;
             let end = (i + 1) * sub_dim;
+            if end > query.len() {
+                break;
+            }
             let sub_query = &query[start..end];
-            let code = encoded[i] as usize;
-            dist += l2_distance_squared(sub_query, &self.codebooks[i][code]);
+            if let Some(centroid) = self.codebooks[i].get(code_byte as usize) {
+                dist_sq += l2_distance_squared(sub_query, centroid);
+            }
         }
-        dist
+        let dist = dist_sq.max(0.0).sqrt();
+        if dist.is_finite() {
+            dist
+        } else {
+            f32::MAX
+        }
     }
 
     fn name(&self) -> String {
@@ -338,4 +531,38 @@ unsafe fn pq_sdc_avx2(a: &[u8], b: &[u8], lut: &[f32], m: usize) -> f32 {
     }
 
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::index::VectorMetric;
+
+    #[test]
+    fn test_pq_prepared_query_l2_and_cosine() {
+        let dim = 8;
+        let vectors: Vec<Vec<f32>> = (0..32)
+            .map(|i| (0..dim).map(|d| (i * dim + d) as f32 * 0.1).collect())
+            .collect();
+        let pq = PqEncoder::train(&vectors, PqConfig { m: 2, k: 16, dim }).unwrap();
+
+        let query = vec![25.0f32; dim];
+        let p_l2 = pq.prepare_query(&query, VectorMetric::L2);
+        let code0 = pq.encode(&vectors[0]);
+        let code_last = pq.encode(&vectors[31]);
+        let d0 = p_l2.distance(&code0);
+        let d_last = p_l2.distance(&code_last);
+        assert!(
+            d_last < d0,
+            "expected closer vector ({d_last}) < far ({d0})"
+        );
+        assert!(
+            d_last < 3.0 && d0 > 50.0,
+            "calibrated L2 bounds failed: d_last={d_last}, d0={d0}"
+        );
+
+        let p_cos = pq.prepare_query(&vectors[5], VectorMetric::Cosine);
+        let self_cos = p_cos.distance(&pq.encode(&vectors[5]));
+        assert!((0.0..0.25).contains(&self_cos), "got {self_cos}");
+    }
 }

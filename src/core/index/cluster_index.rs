@@ -1076,7 +1076,11 @@ impl ClusterIndex {
             .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let probes = n_probe.clamp(1, cluster_distances.len());
-        let effective_query = self.quantize_query(query);
+        let prepared_query = self
+            .quantizer
+            .as_ref()
+            .map(|q| q.prepare_query(query, self.metric));
+        let fallback_query = VectorValue::Float32(query.to_vec());
         let ef = ef_search.unwrap_or(40);
         let cluster_k = (k * 4).max(ef.min(k * 8));
 
@@ -1087,7 +1091,13 @@ impl ClusterIndex {
             };
             let (graph, node_meta) = cluster.as_ref();
             let cluster_ef = ef.min((node_meta.len() * 3) / 4).max(cluster_k);
-            for neighbour in graph.search(&effective_query, cluster_k, cluster_ef, None) {
+            for neighbour in graph.search_with_quantizer(
+                &fallback_query,
+                prepared_query.as_ref(),
+                cluster_k,
+                cluster_ef,
+                None,
+            ) {
                 let local_id = neighbour.d_id;
                 let Some(meta) = node_meta.get(local_id) else {
                     continue;
@@ -1146,29 +1156,6 @@ impl ClusterIndex {
         let arc = Arc::new((graph, node_meta));
         self.cache.insert(cluster_id, arc.clone());
         Some(arc)
-    }
-
-    /// Quantize the query the same way the graph codes were quantized.
-    fn quantize_query(&self, query: &[f32]) -> VectorValue {
-        match self.quantizer {
-            Some(QuantizerImpl::BenoQuant(ref q)) => {
-                let mut q_vec = query.to_vec();
-                if self.metric == VectorMetric::Cosine {
-                    normalize(&mut q_vec);
-                }
-                VectorValue::Binary(q.encode(&q_vec))
-            }
-            Some(QuantizerImpl::Sq(ref q)) => VectorValue::Binary(q.encode(query)),
-            Some(QuantizerImpl::Pq(ref q)) => {
-                let mut q_vec = query.to_vec();
-                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
-                {
-                    normalize(&mut q_vec);
-                }
-                VectorValue::Binary(q.encode(&q_vec))
-            }
-            None => VectorValue::Float32(query.to_vec()),
-        }
     }
 }
 
@@ -1945,16 +1932,6 @@ fn cluster_slices_from_container(container: &Bytes) -> Result<HashMap<usize, Clu
 // Small helpers
 // ---------------------------------------------------------------------------
 
-fn normalize(v: &mut [f32]) {
-    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-12 {
-        let inv = 1.0 / norm;
-        for x in v.iter_mut() {
-            *x *= inv;
-        }
-    }
-}
-
 /// Distance under the artifact's metric, "smaller is closer".
 fn metric_distance(metric: VectorMetric, q: &[f32], c: &[f32]) -> f32 {
     use crate::core::index::distance;
@@ -2101,6 +2078,42 @@ mod tests {
         assert_eq!(file.source_manifest_version, 7);
         assert!(file.covers_segments(&segments()));
         assert!(!file.covers_segments(&["seg_0".to_string()]));
+    }
+
+    #[test]
+    fn quantized_cluster_index_calibrated_search_round_trip() {
+        let records: Vec<(u32, u32, Vec<f32>)> = (0..120usize)
+            .map(|i| {
+                let seg = (i % 3) as u32;
+                let row = i as u32;
+                let v = vec![i as f32; 8];
+                (seg, row, v)
+            })
+            .collect();
+
+        for algo in [IndexAlgorithm::hnsw_tq8(), IndexAlgorithm::hnsw_sq8()] {
+            let index = ClusterIndex::build_from_records(
+                records.clone(),
+                segments(),
+                "embedding",
+                &algo,
+                4,
+                16,
+                100,
+            )
+            .unwrap();
+
+            let query = vec![119.0f32; 8];
+            let results = index.search(&query, 5, 4, Some(64)).unwrap();
+            assert!(!results.is_empty(), "quantized cluster search empty");
+            assert!(
+                results.iter().any(|r| r.row_id == 119),
+                "expected nearest row 119 in top-5 for {algo:?}, got {results:?}"
+            );
+            for pair in results.windows(2) {
+                assert!(pair[0].score <= pair[1].score + 1e-6);
+            }
+        }
     }
 
     /// Wrap a single blob in a minimal Puffin container for reader tests.

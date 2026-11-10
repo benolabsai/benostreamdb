@@ -342,9 +342,25 @@ impl TableBuilder {
         };
 
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
-        let (manifest, version) = manifest_manager.load_latest().await.unwrap_or_default();
+        manifest_manager.invalidate_latest_version_cache().await;
+        let (manifest, version) = manifest_manager
+            .load_latest_direct()
+            .await
+            .unwrap_or_default();
+        manifest_manager
+            .update_version_cache_monotonic(&manifest, version)
+            .await;
         let schema_val = if version > 0 {
-            Table::load_initial_schema(store.clone(), &uri).await
+            if let Some(latest) = manifest
+                .schemas
+                .iter()
+                .find(|s| s.schema_id == manifest.current_schema_id)
+                .or_else(|| manifest.schemas.last())
+            {
+                Arc::new(latest.to_arrow())
+            } else {
+                Table::load_initial_schema(store.clone(), &uri).await
+            }
         } else {
             Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new()))
         };
@@ -380,8 +396,9 @@ impl TableBuilder {
         let mut wal = WriteAheadLog::new(wal_dir);
         let _ = wal.spawn_worker();
 
-        // Replay WAL (Recovery) - single pass to avoid double reads
-        let (recovered_batches, recovered_paths) = wal.replay().map_err(|e| {
+        // Replay WAL (Recovery) - single pass to avoid double reads while preserving
+        // segment membership for safe watermark pruning after commit.
+        let (_, recovered_segments) = wal.replay_with_segments().map_err(|e| {
             anyhow::anyhow!("WAL Recovery Error: {}. The WAL is corrupted. Manual intervention required to prevent silent data loss.", e)
         })?;
 
@@ -400,39 +417,41 @@ impl TableBuilder {
                     .collect()
             })
             .unwrap_or_default();
-        let recovered_batches: Vec<RecordBatch> = if committed_tx.is_empty() {
-            recovered_batches
-        } else {
-            let before = recovered_batches.len();
-            let filtered: Vec<RecordBatch> = recovered_batches
-                .into_iter()
-                .filter(|b| match crate::core::wal::extract_wal_tx(b) {
-                    Some(h) => !committed_tx.contains(&h.tx_id),
-                    None => true,
-                })
-                .collect();
-            if filtered.len() != before {
-                tracing::info!(
-                    "WAL recovery: skipped {} already-committed record(s) (idempotent replay)",
-                    before - filtered.len()
-                );
-            }
-            filtered
-        };
 
-        // Track the tx ids of the recovered (uncommitted) WAL records. Their rows
-        // are now in the write buffer, so the *next* commit must record them as
-        // committed — otherwise a later crash would re-replay them and duplicate
-        // the rows (the recovered batch is committed as part of the buffer, but
-        // its tx id would not be in `benostream.committed_wal_tx`).
-        let recovered_tx_ids: Vec<uuid::Uuid> = recovered_batches
-            .iter()
-            .map(|b| {
-                crate::core::wal::extract_wal_tx(b)
+        // Assign or extract tx_ids per recovered segment so already-committed
+        // and legacy untagged WAL files can be pruned safely by watermark after
+        // commit without touching concurrent writes.
+        let mut recovered_batches = Vec::new();
+        let mut recovered_tx_ids = Vec::new();
+        let mut recovered_paths = Vec::new();
+        let mut skipped_committed = 0usize;
+
+        for seg in recovered_segments {
+            if let Some(p) = seg.path.to_str() {
+                recovered_paths.push(p.to_string());
+            }
+            let mut seg_txs = std::collections::HashSet::new();
+            for b in seg.batches {
+                let tx_id = crate::core::wal::extract_wal_tx(&b)
                     .map(|h| h.tx_id)
-                    .unwrap_or_else(uuid::Uuid::new_v4)
-            })
-            .collect();
+                    .unwrap_or_else(uuid::Uuid::new_v4);
+                seg_txs.insert(tx_id);
+                if committed_tx.contains(&tx_id) {
+                    skipped_committed += 1;
+                } else {
+                    recovered_batches.push(b);
+                    recovered_tx_ids.push(tx_id);
+                }
+            }
+            wal.register_recovered_segment(seg.path, seg_txs);
+        }
+
+        if skipped_committed > 0 {
+            tracing::info!(
+                "WAL recovery: skipped {} already-committed record(s) (idempotent replay)",
+                skipped_committed
+            );
+        }
 
         let recovered_stream = Box::new(recovered_batches.into_iter().map(Ok));
 
@@ -510,6 +529,10 @@ impl TableBuilder {
                     .map(|(batch, tx_id)| crate::core::table::PendingWrite { batch, tx_id })
                     .collect(),
             )),
+            commit_lock: Arc::new(Mutex::new(())),
+            pending_commit: Arc::new(parking_lot::Mutex::new(None)),
+            committed_wal_txs: Arc::new(parking_lot::Mutex::new(committed_tx)),
+            buffer_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             maintenance_lock: Arc::new(tokio::sync::RwLock::new(())),
             wal: Arc::new(Mutex::new(wal)),
             background_tasks: Arc::new(Mutex::new(Vec::new())),

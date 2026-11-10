@@ -72,6 +72,20 @@ pub trait Catalog: Send + Sync {
         table_name: &str,
         updates: Vec<serde_json::Value>,
     ) -> Result<()>;
+
+    /// Commit table updates with Iceberg REST `requirements` assertions (e.g.
+    /// `assert-table-uuid`, `assert-ref-snapshot-id`). Default implementation
+    /// delegates to [`Catalog::commit_table`] for catalogs without native
+    /// requirement checking.
+    async fn commit_table_with_requirements(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        updates: Vec<serde_json::Value>,
+        _requirements: Vec<serde_json::Value>,
+    ) -> Result<()> {
+        self.commit_table(namespace, table_name, updates).await
+    }
 }
 
 use crate::core::metadata::TableMetadata;

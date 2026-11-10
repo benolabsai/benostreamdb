@@ -1418,8 +1418,13 @@ impl SchemaField {
             "binary" => arrow::datatypes::DataType::Binary,
             "largebinary" => arrow::datatypes::DataType::LargeBinary,
             "largeutf8" => arrow::datatypes::DataType::LargeUtf8,
-            // Handle all timestamp variants: "timestamp", "timestamptz", "timestamp(unit, tz)"
-            s if s == "timestamp" || s == "timestamptz" || s.starts_with("timestamp(") => {
+            // Handle all timestamp variants: Iceberg `timestamp`/`timestamptz`/`timestamp_ns`/`timestamptz_ns`
+            // and Arrow `timestamp(unit, tz)`.
+            s if matches!(
+                s,
+                "timestamp" | "timestamptz" | "timestamp_ns" | "timestamptz_ns"
+            ) || s.starts_with("timestamp(") =>
+            {
                 if s == "timestamptz" {
                     arrow::datatypes::DataType::Timestamp(
                         arrow::datatypes::TimeUnit::Microsecond,
@@ -1428,6 +1433,16 @@ impl SchemaField {
                 } else if s == "timestamp" {
                     arrow::datatypes::DataType::Timestamp(
                         arrow::datatypes::TimeUnit::Microsecond,
+                        None,
+                    )
+                } else if s == "timestamptz_ns" {
+                    arrow::datatypes::DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Nanosecond,
+                        Some("UTC".into()),
+                    )
+                } else if s == "timestamp_ns" {
+                    arrow::datatypes::DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Nanosecond,
                         None,
                     )
                 } else {
@@ -1450,6 +1465,7 @@ impl SchemaField {
                     arrow::datatypes::DataType::Timestamp(unit, tz)
                 }
             }
+            "time" => arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             s if s.contains("time32") => {
                 if s.contains("millisecond") {
                     arrow::datatypes::DataType::Time32(arrow::datatypes::TimeUnit::Millisecond)

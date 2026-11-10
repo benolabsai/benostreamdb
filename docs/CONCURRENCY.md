@@ -18,23 +18,24 @@ When a client (writer) wants to commit changes:
 ### Conflict Resolution
 If another client successfully committed `v101.json` while the first client was preparing its changes:
 - The first client's write operation will fail with an `AlreadyExists` or conflict error.
-- BenoStreamDB automatically **retries** the commit (up to 100 times).
+- BenoStreamDB automatically **retries** the commit inside the `ManifestManager` / `TableMetadata` CAS loops (and up to 64 attempts on strict V3 row-lineage OCC conflicts, cleaning up obsolete staged Parquet files before retrying).
 - In each retry, the client re-reads the *new* latest version, merges its changes again, and attempts to commit the *next* version (e.g., `v102`).
-- A randomized **exponential backoff** is used between retries to reduce contention.
+- Randomized backoff is used between retries to reduce contention. For concurrent writes buffered inside a single handle, commits transition explicitly through `PendingCommit` (`Staging -> ManifestCommitted -> IcebergPublished`); see [ADR-010](https://www.benostreamdb.org/guides/adr_010.html).
 
 ## Distributed Locking (`FileBasedLock`)
 
 In addition to catalog-level atomicity, BenoStreamDB includes a built-in cloud-agnostic distributed lock mechanism (`FileBasedLock`):
 - **Object Storage CAS**: Uses atomic conditional object creation (`PutMode::Create`) on S3, GCS, Azure Blob, and local filesystems.
 - **Heartbeats & Expiration**: Automatically manages lock leases with configurable TTL and proactive heartbeat renewals.
-- **Maintenance Locking**: Compaction and snapshot expiration acquire dedicated maintenance locks to prevent concurrent mutations while active queries proceed with zero disruption.
+- **Maintenance Locking**: Compaction and snapshot expiration acquire dedicated maintenance locks to prevent concurrent mutations while active queries proceed cleanly.
 
 ## Write-Ahead Log (WAL) Durability Modes
 
-BenoStreamDB provides configurable durability policies for streaming writes (`BSDB_WAL_DURABILITY`):
-- **`always`**: Strict fsync on every append before acknowledging write.
-- **`adaptive` (Default)**: Dynamically batches flushes based on incoming request velocity, maintaining sub-millisecond write latency while preserving crash recovery guarantees.
-- **`periodic`**: Asynchronously flushes WAL buffers on a timer (configured via `BSDB_SEARCH_AUTO_REFRESH_SECS`).
+BenoStreamDB writes each incoming batch as a transaction-tagged Arrow IPC record (`benostream:tx_id`, `benostream:seq`) into rotated WAL segment files (`log_<timestamp>_<pid>_<seq>.arrow` under `BSDB_WAL_DIR` or `{table_uri}/_wal`). Before committing a snapshot, the active segment is flushed and sealed via `rotate_async()` so concurrent writes open a fresh segment, and `prune_committed_segments()` removes sealed segments only once every transaction ID in that file appears in the durable manifest (`benostream.committed_wal_tx`).
+
+Two `WalDurability` policies are supported via `BSDB_WAL_DURABILITY` or `TableBuilder::with_durability(...)`:
+- **`sync` (Default, `WalDurability::Sync`)**: Runs `fdatasync` (`File::sync_data`, falling back to `File::sync_all`) on the WAL segment before acknowledging the write to the caller (`RPO = 0` for acknowledged writes). Failed syncs propagate as write errors rather than false acknowledgements.
+- **`async` (`WalDurability::Async`)**: Enqueues batches to the dedicated WAL worker channel and returns without waiting for disk sync. The worker flushes and syncs on either `BSDB_WAL_SYNC_BATCH_SIZE` (`10` batches) or `BSDB_WAL_SYNC_INTERVAL_MS` (`100` ms). Individual segments compact automatically above `BSDB_WAL_COMPACT_MB` (`1024` MiB).
 
 ## Read Isolation
 

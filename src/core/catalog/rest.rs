@@ -250,6 +250,40 @@ impl RestCatalogClient {
             format!("{}/v1/{}{}", self.base_url, self.prefix, path)
         }
     }
+
+    async fn commit_table_internal(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        updates: Vec<serde_json::Value>,
+        requirements: Option<Vec<serde_json::Value>>,
+    ) -> Result<()> {
+        let url = self.build_url(&format!("/namespaces/{}/tables/{}", namespace, table_name));
+
+        let req = UpdateTableRequest {
+            updates,
+            requirements,
+        };
+
+        let builder = self
+            .prepare_request(self.client.post(&url).json(&req))
+            .await?;
+        let resp = builder.send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error = resp.text().await?;
+            return Err(anyhow::Error::new(
+                crate::core::error::BenoStreamError::CatalogRequest {
+                    catalog: "rest".to_string(),
+                    status: Some(status.as_u16()),
+                    reason: error,
+                },
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -336,29 +370,24 @@ impl Catalog for RestCatalogClient {
         table_name: &str,
         updates: Vec<serde_json::Value>,
     ) -> Result<()> {
-        let url = self.build_url(&format!("/namespaces/{}/tables/{}", namespace, table_name));
+        self.commit_table_internal(namespace, table_name, updates, None)
+            .await
+    }
 
-        let req = UpdateTableRequest {
-            updates,
-            requirements: None,
+    async fn commit_table_with_requirements(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        updates: Vec<serde_json::Value>,
+        requirements: Vec<serde_json::Value>,
+    ) -> Result<()> {
+        let reqs = if requirements.is_empty() {
+            None
+        } else {
+            Some(requirements)
         };
-
-        let builder = self
-            .prepare_request(self.client.post(&url).json(&req))
-            .await?;
-        let resp = builder.send().await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!(
-                "Failed to commit table update ({}): {}",
-                status,
-                error
-            ));
-        }
-
-        Ok(())
+        self.commit_table_internal(namespace, table_name, updates, reqs)
+            .await
     }
 
     async fn create_branch(&self, _branch_name: &str, _source_ref: Option<&str>) -> Result<()> {

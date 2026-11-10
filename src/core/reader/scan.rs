@@ -545,6 +545,11 @@ impl HybridReader {
         if rg_matches.len() > k {
             rg_matches.truncate(k);
         }
+        if metric == VectorMetric::L2 {
+            for (_, dist) in &mut rg_matches {
+                *dist = dist.max(0.0).sqrt();
+            }
+        }
 
         Ok(rg_matches)
     }
@@ -947,6 +952,12 @@ impl HybridReader {
                 topk = batch_matches;
             }
             current_row_offset += rows;
+        }
+
+        if metric == VectorMetric::L2 {
+            for (_, dist) in &mut topk {
+                *dist = dist.max(0.0).sqrt();
+            }
         }
 
         Ok(topk)

@@ -820,16 +820,26 @@ impl Table {
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
         let mut result = Vec::new();
-        let pending = self.pending_writes.read();
+        let batches: Vec<RecordBatch> = {
+            let pc_guard = self.pending_commit.lock();
+            let pending = self.pending_writes.read();
+            let mut combined = Vec::new();
+            if let Some(pc) = pc_guard.as_ref() {
+                if pc.phase == super::CommitPhase::Staging {
+                    combined.extend(pc.batches.iter().cloned());
+                }
+            }
+            combined.extend(pending.iter().map(|p| p.batch.clone()));
+            combined
+        };
 
-        if pending.is_empty() {
+        if batches.is_empty() {
             return Ok(result);
         }
 
         let planner = QueryPlanner::new();
 
-        for p in pending.iter() {
-            let batch = &p.batch;
+        for batch in &batches {
             // Apply projection first
             let batch_to_filter = if let Some(cols) = columns {
                 let indices: Vec<usize> = cols

@@ -10,15 +10,13 @@ use crate::core::manifest::ManifestManager;
 use crate::telemetry::metrics::INGEST_ROWS_TOTAL;
 use crate::SegmentConfig;
 
-use super::Table;
+use super::{CommitPhase, PendingCommit, PendingIndexBuild, PendingWrite, Table};
 use crate::core::index::memory::InMemoryVectorIndex;
-use crate::core::metadata::TableMetadata;
 use crate::core::segment::HybridSegmentWriter;
-use crate::core::storage::create_object_store;
 use arrow::datatypes::Schema;
 use futures::StreamExt;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Resident set size in bytes, or `0` when the platform cannot report it.
 ///
@@ -83,6 +81,7 @@ impl Table {
     #[tracing::instrument(skip(self))]
     pub async fn truncate_async(&self) -> Result<()> {
         let _maintenance_guard = self.maintenance_lock.write().await;
+        let _commit_guard = self.commit_lock.lock().await;
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
 
@@ -100,28 +99,33 @@ impl Table {
                 crate::core::manifest::CommitMetadata::default(),
             )
             .await?;
+
+        // Step 3: Clear in-memory buffers & indexes in canonical lock order before WAL reset.
+        {
+            let mut pc = self.pending_commit.lock();
+            let mut pending = self.pending_writes.write();
+            let mut idx = self.indexing.memory_index.write();
+            *pc = None;
+            pending.clear();
+            *idx = None;
+        }
+        self.committed_wal_txs.lock().clear();
+        self.indexing.cluster_indexes.write().clear();
+        self.indexing.vector_routers.write().clear();
+        self.bump_buffer_epoch();
+
+        // Step 4: Truncate WAL cleanly via the WAL worker.
+        {
+            let wal = self.wal.lock().await;
+            wal.truncate_all_async()
+                .await
+                .context("Failed to truncate WAL during table truncate")?;
+        }
+        self.recovered_wal_paths.lock().clear();
+
         // Manifest commits are invisible to external readers until the snapshot
         // is published in the table metadata.
         self.publish_snapshot_async(&new_manifest, "delete").await?;
-
-        // Step 3: Truncate WAL
-        {
-            let mut wal = self.wal.lock().await;
-            wal.truncate()
-                .context("Failed to truncate WAL during table truncate")?;
-        }
-
-        // Step 4: Clear memory index
-        {
-            let mut idx = self.indexing.memory_index.write();
-            *idx = None;
-        }
-
-        // Step 5: Clear pending writes
-        {
-            let mut pending = self.pending_writes.write();
-            pending.clear();
-        }
 
         tracing::info!(
             "Table truncated: metadata reset, all {} segments removed, buffers cleared.",
@@ -132,14 +136,14 @@ impl Table {
 
     /// Compact the WAL (consolidate log entries)
     pub fn checkpoint(&self) -> Result<()> {
-        let mut wal = self.wal.blocking_lock();
-        wal.compact()
+        self.block_on_io(self.checkpoint_async())
+            .and_then(|res| res)
     }
 
     /// Async WAL checkpoint, safe to call from within a Tokio runtime.
     pub async fn checkpoint_async(&self) -> Result<()> {
-        let mut wal = self.wal.lock().await;
-        wal.compact()
+        let wal = self.wal.lock().await;
+        wal.compact_async().await
     }
 
     // Schema evolution logic moved to schema.rs
@@ -359,10 +363,15 @@ impl Table {
                 let mut seen_keys = std::collections::HashSet::new();
 
                 {
+                    let pc_guard = self.pending_commit.lock();
                     let pending = self.pending_writes.read();
-                    // 1. Pre-populate seen keys from the in-memory write buffer
-                    for p in pending.iter() {
-                        let b_batch = &p.batch;
+                    // 1. Pre-populate seen keys from any Staging commit + active write buffer
+                    let staging_iter = pc_guard
+                        .as_ref()
+                        .filter(|pc| pc.phase == CommitPhase::Staging)
+                        .into_iter()
+                        .flat_map(|pc| pc.batches.iter());
+                    for b_batch in staging_iter.chain(pending.iter().map(|p| &p.batch)) {
                         if let Some(b_col) = b_batch.column_by_name(pk_col) {
                             for j in 0..b_batch.num_rows() {
                                 let b_val =
@@ -415,7 +424,18 @@ impl Table {
                     }
                 }
             } else {
-                let pending = self.pending_writes.read();
+                let buffered_batches: Vec<RecordBatch> = {
+                    let pc_guard = self.pending_commit.lock();
+                    let pending = self.pending_writes.read();
+                    let mut combined = Vec::new();
+                    if let Some(pc) = pc_guard.as_ref() {
+                        if pc.phase == CommitPhase::Staging {
+                            combined.extend(pc.batches.iter().cloned());
+                        }
+                    }
+                    combined.extend(pending.iter().map(|p| p.batch.clone()));
+                    combined
+                };
                 // Fallback for multi-column PKs (O(N*M) check for now)
                 for batch in &batches {
                     for pk_col in &pk_cols {
@@ -433,8 +453,7 @@ impl Table {
                                 }
 
                                 // Check against buffer
-                                for p in pending.iter() {
-                                    let b_batch = &p.batch;
+                                for b_batch in &buffered_batches {
                                     if let Some(b_col) = b_batch.column_by_name(pk_col) {
                                         for j in 0..b_batch.num_rows() {
                                             let b_val =
@@ -705,11 +724,6 @@ impl Table {
             }
         }
 
-        let buffer_len_before = {
-            let pending = self.pending_writes.read();
-            pending.iter().map(|p| p.batch.num_rows()).sum::<usize>()
-        };
-
         let tx_id = uuid::Uuid::new_v4();
         let batches_for_wal: Vec<RecordBatch> = batches
             .iter()
@@ -751,64 +765,47 @@ impl Table {
                 );
                 Ok::<(), anyhow::Error>(())
             },
-            // Indexing Task
+            // Lock-free vector extraction task — merged into memory_index atomically with pending_writes
             async move {
-                let _t_idx = std::time::Instant::now();
                 let t_idx_task = std::time::Instant::now();
+                let mut prepared: Option<crate::core::index::memory::PreparedVectors> = None;
                 if let Some(col_name) = target_col {
-                    let mut idx_lock = memory_index.write();
-
-                    if idx_lock.is_none() {
-                        if let Some(first) = batches_for_idx.first() {
-                            if let Some(col) = first.column_by_name(&col_name) {
-                                if let Some(fsl) = col
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::FixedSizeListArray>()
-                                {
-                                    let dim = fsl.value_length() as usize;
-                                    *idx_lock = Some(InMemoryVectorIndex::new(dim));
-                                } else if let Some(list) =
-                                    col.as_any().downcast_ref::<arrow::array::ListArray>()
-                                {
-                                    let mut dim = 0;
-                                    for i in 0..list.len() {
-                                        if !list.is_null(i) {
-                                            dim = list.value(i).len();
-                                            break;
-                                        }
-                                    }
-                                    if dim > 0 {
-                                        *idx_lock = Some(InMemoryVectorIndex::new(dim));
-                                    }
-                                } else if matches!(
-                                    col.data_type(),
-                                    arrow::datatypes::DataType::Time32(_)
-                                        | arrow::datatypes::DataType::Time64(_)
-                                ) {
-                                    // Time datatypes are not vectorizable; safely
-                                    // skip in-memory vector indexing for them.
-                                    tracing::debug!(
-                                        "Skipping in-memory vector index for Time datatype column '{}'",
-                                        col_name
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    if let Some(idx) = idx_lock.as_mut() {
-                        let mut current_offset = buffer_len_before;
-                        for batch in &batches_for_idx {
-                            let _ = idx.insert_batch(batch, &col_name, current_offset);
-                            current_offset += batch.num_rows();
-                        }
+                    let is_time_col = batches_for_idx
+                        .first()
+                        .and_then(|b| b.column_by_name(&col_name))
+                        .is_some_and(|col| {
+                            matches!(
+                                col.data_type(),
+                                arrow::datatypes::DataType::Time32(_)
+                                    | arrow::datatypes::DataType::Time64(_)
+                            )
+                        });
+                    if is_time_col {
+                        // Time datatypes are not vectorizable; safely skip in-memory vector indexing.
+                        tracing::debug!(
+                            "Skipping in-memory vector index for Time datatype column '{}'",
+                            col_name
+                        );
+                    } else {
+                        let existing_dim = memory_index.read().as_ref().map(|idx| idx.dim());
+                        let inferred_dim = batches_for_idx
+                            .iter()
+                            .find_map(|b| InMemoryVectorIndex::infer_column_dim(b, &col_name));
+                        // Prefer the batch's own vector dimension so dim mismatches fail
+                        // cleanly in append_prepared instead of mis-slicing FixedSizeList values.
+                        let target_dim = inferred_dim.or(existing_dim);
+                        prepared = InMemoryVectorIndex::extract_prepared(
+                            &batches_for_idx,
+                            &col_name,
+                            target_dim,
+                        )?;
                     }
                 }
                 tracing::debug!(
                     idx_task_ms = t_idx_task.elapsed().as_millis(),
                     "idx_task timing"
                 );
-                Ok::<(), anyhow::Error>(())
+                Ok::<Option<crate::core::index::memory::PreparedVectors>, anyhow::Error>(prepared)
             }
         );
 
@@ -816,7 +813,7 @@ impl Table {
         // WS2 crash boundary: WAL is durable, but the manifest has not been
         // committed yet. On reopen the WAL replay must recover these rows.
         crate::core::fault_injection::check(crate::core::fault_injection::CrashPoint::WalFlush)?;
-        idx_res?;
+        let prepared_vectors = idx_res?;
         let wal_idx_ms = t_wal.elapsed().as_millis();
         // -----------------------------
         tracing::debug!(
@@ -827,15 +824,32 @@ impl Table {
             "write_with_durability_async phase timing"
         );
 
-        let _write_buffer_len = {
+        // Canonical lock order: pending_writes -> indexing.memory_index.
+        {
             let mut pending = self.pending_writes.write();
+            let mut idx_lock = self.indexing.memory_index.write();
+            if let Some(prep) = prepared_vectors {
+                match idx_lock.as_mut() {
+                    Some(existing) => {
+                        if let Err(e) = existing.append_prepared(prep) {
+                            tracing::warn!(
+                                "Skipping in-memory vector index append due to error: {}",
+                                e
+                            );
+                        }
+                    }
+                    None => {
+                        *idx_lock = Some(InMemoryVectorIndex::from_prepared(prep));
+                    }
+                }
+            }
             pending.extend(
                 batches
                     .into_iter()
-                    .map(|batch| crate::core::table::PendingWrite { batch, tx_id }),
+                    .map(|batch| PendingWrite { batch, tx_id }),
             );
-            pending.len()
-        };
+        }
+        self.bump_buffer_epoch();
 
         // Release the maintenance read guard now that the WAL, memory index, and
         // pending_writes have been updated. This prevents deadlocks when autocommit/spillover
@@ -882,52 +896,349 @@ impl Table {
     /// Internal flush implementation without acquiring `maintenance_lock.read()`.
     /// Used by operations that already hold `maintenance_lock.write()` (such as compaction).
     pub(crate) async fn flush_unlocked_async(&self) -> Result<()> {
-        // Extract batches from buffer. The WAL tx ids are taken under the same
-        // lock so they stay paired with the rows they tag.
-        let (batches_to_write, tx_ids): (Vec<RecordBatch>, Vec<uuid::Uuid>) = {
+        let _commit_guard = self.commit_lock.lock().await;
+
+        // Resume or clean up any interrupted in-flight PendingCommit before starting a new flush.
+        let prior = {
+            let pc_guard = self.pending_commit.lock();
+            pc_guard.as_ref().map(|pc| (pc.id, pc.phase))
+        };
+        if let Some((prior_id, prior_phase)) = prior {
+            match prior_phase {
+                CommitPhase::Staging => {
+                    self.restore_staging_pending_commit_to_buffer(prior_id);
+                }
+                CommitPhase::ManifestCommitted | CommitPhase::IcebergPublished => {
+                    self.finish_pending_commit_tail_async().await?;
+                }
+            }
+        }
+
+        let commit_id = uuid::Uuid::new_v4();
+        // Canonical sync lock order: pending_commit -> pending_writes -> indexing.memory_index.
+        let (batches_to_write, wal_tx_ids): (Vec<RecordBatch>, Vec<uuid::Uuid>) = {
+            let mut pc_guard = self.pending_commit.lock();
             let mut pending = self.pending_writes.write();
+            let mut mem_idx_guard = self.indexing.memory_index.write();
+
             if pending.is_empty() {
                 return Ok(());
             }
+
             let taken = std::mem::take(&mut *pending);
+            let frozen_memory_index = mem_idx_guard.take();
             let mut batches = Vec::with_capacity(taken.len());
             let mut tx_ids = Vec::with_capacity(taken.len());
             for p in taken {
                 batches.push(p.batch);
                 tx_ids.push(p.tx_id);
             }
+
+            *pc_guard = Some(PendingCommit {
+                id: commit_id,
+                phase: CommitPhase::Staging,
+                batches: batches.clone(),
+                wal_tx_ids: tx_ids.clone(),
+                frozen_memory_index,
+                segment_entries: Vec::new(),
+                v3_row_id_base: 0,
+                added_rows_total: 0,
+                committed_manifest: None,
+                metadata_location: None,
+                published_snapshot: None,
+                should_update_schema: false,
+                pending_builds: Vec::new(),
+                subscribers_notified: false,
+            });
+
             (batches, tx_ids)
         };
+        self.bump_buffer_epoch();
 
-        // If flush fails at any point (upload, network, catalog lock), restore batches back into pending_writes
-        // so in-memory visibility is preserved and subsequent calls can retry!
-        let flush_res = self.flush_internal_async(&batches_to_write, &tx_ids).await;
-        if let Err(e) = flush_res {
-            let mut pending = self.pending_writes.write();
-            let mut restored = batches_to_write
-                .into_iter()
-                .zip(tx_ids)
-                .map(|(batch, tx_id)| crate::core::table::PendingWrite { batch, tx_id })
-                .collect::<Vec<_>>();
-            restored.extend(std::mem::take(&mut *pending));
-            *pending = restored;
+        // Seal the active WAL segment so subsequent concurrent writes land in a fresh
+        // segment file and post-commit watermark pruning never drops un-flushed rows.
+        let rotate_res = {
+            let wal = self.wal.lock().await;
+            wal.rotate_async().await
+        };
+        if let Err(e) = rotate_res {
+            self.restore_staging_pending_commit_to_buffer(commit_id);
+            return Err(e);
+        }
+        if let Err(e) =
+            crate::core::fault_injection::check(crate::core::fault_injection::CrashPoint::WalRotate)
+        {
+            self.restore_staging_pending_commit_to_buffer(commit_id);
             return Err(e);
         }
 
-        // Publish the committed rows to any `Table::subscribe()` consumers.
-        // Only after the commit succeeded, so subscribers never observe data
-        // that was rolled back.
-        self.publish_committed(&batches_to_write);
+        // Stage Parquet files and atomically commit the manifest. On pre-manifest failure,
+        // restore the Staging buffer so in-memory visibility and retryability remain intact.
+        let staged = match self
+            .stage_and_commit_manifest_async(&batches_to_write, &wal_tx_ids)
+            .await
+        {
+            Ok(res) => res,
+            Err(e) => {
+                self.restore_staging_pending_commit_to_buffer(commit_id);
+                return Err(e);
+            }
+        };
+
+        // Transition Staging -> ManifestCommitted atomically under pending_commit,
+        // clearing cluster artifacts before bumping buffer_epoch so concurrent readers
+        // force-reload the newly committed manifest instead of serving stale indexes.
+        {
+            let mut pc_guard = self.pending_commit.lock();
+            if let Some(pc) = pc_guard.as_mut() {
+                if pc.id == commit_id {
+                    pc.phase = CommitPhase::ManifestCommitted;
+                    pc.frozen_memory_index = None;
+                    pc.segment_entries = staged.segment_entries;
+                    pc.v3_row_id_base = staged.v3_row_id_base;
+                    pc.added_rows_total = staged.added_rows_total;
+                    pc.committed_manifest = Some(staged.new_manifest);
+                    pc.should_update_schema = staged.should_update_schema;
+                    pc.pending_builds = staged.pending_builds;
+                }
+            }
+        }
+        {
+            let mut committed = self.committed_wal_txs.lock();
+            for tx in &wal_tx_ids {
+                committed.insert(*tx);
+            }
+        }
+        self.indexing.cluster_indexes.write().clear();
+        self.indexing.vector_routers.write().clear();
+        self.bump_buffer_epoch();
+
+        // WS2 crash boundary: the manifest is committed (visible) but tail publication
+        // (metadata/catalog/WAL pruning/subscriber notification) has not completed yet.
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::ManifestVisible,
+        )?;
+
+        self.finish_pending_commit_tail_async().await
+    }
+
+    /// Restore a `Staging` `PendingCommit` back into `pending_writes` and `memory_index`
+    /// after a pre-manifest failure or cancellation, preserving arrival order when
+    /// newer concurrent writes have arrived while staging was in flight.
+    fn restore_staging_pending_commit_to_buffer(&self, expected_id: uuid::Uuid) {
+        let restored_any = {
+            let mut pc_guard = self.pending_commit.lock();
+            let mut pending = self.pending_writes.write();
+            let mut idx_guard = self.indexing.memory_index.write();
+
+            let matches_staging = pc_guard
+                .as_ref()
+                .is_some_and(|pc| pc.id == expected_id && pc.phase == CommitPhase::Staging);
+            if !matches_staging {
+                false
+            } else if let Some(pc) = pc_guard.take() {
+                let mut restored: Vec<PendingWrite> = pc
+                    .batches
+                    .into_iter()
+                    .zip(pc.wal_tx_ids)
+                    .map(|(batch, tx_id)| PendingWrite { batch, tx_id })
+                    .collect();
+                let current_pending = std::mem::take(&mut *pending);
+                restored.extend(current_pending);
+                *pending = restored;
+
+                let current_idx = idx_guard.take();
+                match (pc.frozen_memory_index, current_idx) {
+                    (Some(mut frozen), Some(current)) => {
+                        if let Err(e) = frozen.extend_from(&current) {
+                            tracing::warn!(
+                                "Failed to merge concurrent memory_index during staging rollback: {}",
+                                e
+                            );
+                        }
+                        *idx_guard = Some(frozen);
+                    }
+                    (Some(frozen), None) => {
+                        *idx_guard = Some(frozen);
+                    }
+                    (None, Some(current)) => {
+                        *idx_guard = Some(current);
+                    }
+                    (None, None) => {
+                        *idx_guard = None;
+                    }
+                }
+                true
+            } else {
+                false
+            }
+        };
+
+        if restored_any {
+            self.bump_buffer_epoch();
+        }
+    }
+
+    async fn cleanup_staged_segment_files(&self, entries: &[crate::core::manifest::ManifestEntry]) {
+        let base_local = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
+        let is_remote = self.uri.contains("://") && !self.uri.starts_with("file://");
+        let root_prefix = self.uri.trim_end_matches('/');
+        for entry in entries {
+            let rel = entry
+                .file_path
+                .strip_prefix(root_prefix)
+                .unwrap_or(&entry.file_path)
+                .trim_start_matches('/');
+            if !rel.is_empty() {
+                let _ = self
+                    .store
+                    .delete(&object_store::path::Path::from(rel))
+                    .await;
+            }
+            if !is_remote {
+                let full = std::path::Path::new(base_local).join(&entry.file_path);
+                let _ = tokio::fs::remove_file(&full).await;
+            }
+        }
+    }
+
+    async fn spawn_pending_index_builds(
+        &self,
+        pending_builds: Vec<PendingIndexBuild>,
+    ) -> Result<()> {
+        if pending_builds.is_empty() {
+            return Ok(());
+        }
+
+        let base_path_cap = self
+            .uri
+            .strip_prefix("file://")
+            .unwrap_or(&self.uri)
+            .to_string();
+        let index_cols_cap = self.indexing.index_columns.read().clone();
+        let index_all_flag = self.indexing.index_all;
+        let index_configs_cap = self.indexing.index_configs.read().clone();
+        let default_device_cap = self.indexing.default_device.read().clone();
+        let pk_cap = self.primary_key.read().clone();
+        let table_store_cap = self.store.clone();
+        let spec_cap = self.partition_spec.clone();
+        let memory_reclaimed_cap = self.memory_reclaimed.clone();
+        let manifest_manager_cap = ManifestManager::new(self.store.clone(), "", &self.uri);
+
+        for (entry, batch, partition_values, segment_id) in pending_builds {
+            let index_cols_c = index_cols_cap.clone();
+            let base_path_c = base_path_cap.clone();
+            let segment_id_c = segment_id.clone();
+            let batch_c = batch.clone();
+            let partition_values_c = partition_values.clone();
+            let index_configs_c = index_configs_cap.clone();
+            let default_device_c = default_device_cap.clone();
+            let entry_c = entry.clone();
+            let pk_c = pk_cap.clone();
+            let table_store_c = table_store_cap.clone();
+            let spec_c = spec_cap.clone();
+            let memory_reclaimed_c = memory_reclaimed_cap.clone();
+            let manifest_manager_c = manifest_manager_cap.clone();
+
+            // Bound concurrent index builds (see `Table::index_build_gate`).
+            let permit = self.acquire_index_build_permit().await?;
+
+            let handle = tokio::spawn(async move {
+                let _permit = permit;
+                let hive_path = spec_c.partition_to_path(&partition_values_c);
+                let full_base_path = if hive_path.is_empty() {
+                    base_path_c
+                } else {
+                    format!("{}/{}", base_path_c, hive_path)
+                };
+                let parquet_path_rel = if hive_path.is_empty() {
+                    format!("{}.parquet", segment_id_c)
+                } else {
+                    format!("{}/{}.parquet", hive_path, segment_id_c)
+                };
+                let config_index = SegmentConfig::new(&full_base_path, &segment_id_c)
+                    .with_index_all(index_all_flag)
+                    .with_columns_to_index(index_cols_c)
+                    .with_partition_values(partition_values_c.clone())
+                    .with_column_devices(
+                        index_configs_c
+                            .iter()
+                            .filter_map(|(c, cfg)| {
+                                cfg.device.as_ref().map(|d| (c.clone(), d.clone()))
+                            })
+                            .collect(),
+                    )
+                    .with_default_device(default_device_c)
+                    .with_parquet_path(parquet_path_rel);
+
+                let index_res = tokio::spawn(async move {
+                    let mut index_writer =
+                        HybridSegmentWriter::new(config_index).with_index_configs(index_configs_c);
+                    index_writer.primary_key = pk_c;
+                    index_writer.set_store(table_store_c);
+                    index_writer.build_indexes(&batch_c, 0)?;
+                    index_writer.finish_indexing().await?;
+                    crate::core::fault_injection::check(
+                        crate::core::fault_injection::CrashPoint::IndexUpload,
+                    )?;
+                    index_writer.upload_to_store().await?;
+                    let files = index_writer.get_generated_files();
+                    let updated_entry_info = index_writer.to_manifest_entry();
+                    Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((
+                        updated_entry_info,
+                        files,
+                    ))
+                })
+                .await;
+
+                match index_res {
+                    Ok(Ok((updated_entry, _files))) => {
+                        let mut merged_entry = entry_c;
+                        let mut updated_index_files = updated_entry.index_files;
+                        let hive_path = spec_c.partition_to_path(&partition_values_c);
+                        if !hive_path.is_empty() {
+                            for idx in &mut updated_index_files {
+                                idx.file_path = format!("{}/{}", hive_path, idx.file_path);
+                            }
+                        }
+                        merged_entry.index_files = updated_index_files;
+                        let commit_metadata = crate::core::manifest::CommitMetadata::default();
+                        let file_path = merged_entry.file_path.clone();
+                        let index_count = merged_entry.index_files.len();
+                        let remove_paths = vec![merged_entry.file_path.clone()];
+                        match manifest_manager_c
+                            .commit(&[merged_entry], &remove_paths, commit_metadata)
+                            .await
+                        {
+                            Ok(_) => tracing::info!(
+                                "Successfully attached {} indexes to manifest for segment {}",
+                                index_count,
+                                file_path
+                            ),
+                            Err(e) => tracing::error!(
+                                "Failed to attach indexes for segment {}: {}",
+                                file_path,
+                                e
+                            ),
+                        }
+                    }
+                    _ => {
+                        tracing::error!("Index building failed for segment {}", segment_id_c);
+                    }
+                }
+                memory_reclaimed_c.notify_waiters();
+            });
+            self.background_tasks.lock().await.push(handle);
+        }
 
         Ok(())
     }
 
-    async fn flush_internal_async(
+    async fn stage_and_commit_manifest_async(
         &self,
         batches_to_write: &[RecordBatch],
         wal_tx_ids: &[uuid::Uuid],
-    ) -> Result<()> {
-        // Type alias for stream results to avoid complex type annotation
+    ) -> Result<StagedManifestResult> {
         type PartitionSegment = (
             crate::core::manifest::ManifestEntry,
             Vec<String>,
@@ -936,752 +1247,727 @@ impl Table {
             HashMap<String, Value>,
         );
 
-        // Reset memory index
-        {
-            let mut idx = self.indexing.memory_index.write();
-            *idx = None;
-        }
-
-        if batches_to_write.is_empty() {
-            return Ok(());
-        }
-
+        const MAX_V3_RETRIES: usize = 64;
         let spec = self.partition_spec.clone();
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let base_path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
+        std::fs::create_dir_all(base_path)?;
 
-        // Add V3 metadata columns if format_version >= 3 (Iceberg V3 Row Lineage).
-        // `load_latest_full` (not `load_latest`) so sharded manifest entries are
-        // included — `row_id_base` must see every existing data file.
-        let (manifest, existing_entries, _) = manifest_manager.load_latest_full().await?;
-        let sequence_number = manifest.version as i64;
-        let format_version = self.get_format_version();
+        for v3_attempt in 0..MAX_V3_RETRIES {
+            let (head_manifest, head_ver) = manifest_manager.load_latest_direct().await?;
+            let existing_entries = if head_ver > 0 {
+                manifest_manager.load_all_entries(&head_manifest).await?
+            } else {
+                Vec::new()
+            };
 
-        // Iceberg V3 row lineage: the next `_row_id` to assign is one past the
-        // highest row ID already present in the table. Derive it from the
-        // manifest entries' `first_row_id` + `record_count` so it is monotonic
-        // and collision-free across snapshots.
-        let row_id_base: i64 = existing_entries
-            .iter()
-            .filter_map(|e| e.first_row_id.map(|f| f + e.record_count))
-            .max()
-            .unwrap_or(0);
+            let head_committed: HashSet<uuid::Uuid> = head_manifest
+                .properties
+                .get("benostream.committed_wal_tx")
+                .map(|s| {
+                    s.split(',')
+                        .filter_map(|t| uuid::Uuid::parse_str(t.trim()).ok())
+                        .collect()
+                })
+                .unwrap_or_default();
 
-        // Consolidate batches of compatible schemas before partitioning/writing
-        // so single-row inserts from streaming/REST ingest don't create thousands of 1-row files!
-        let consolidated_batches: Vec<RecordBatch> = {
-            let mut groups: Vec<(arrow::datatypes::SchemaRef, Vec<RecordBatch>)> = Vec::new();
-            for b in batches_to_write {
+            let row_id_base: i64 = existing_entries
+                .iter()
+                .filter_map(|e| e.first_row_id.map(|f| f + e.record_count))
+                .max()
+                .unwrap_or(0);
+
+            // Idempotency guard: if every WAL tx in this Staging commit is already
+            // recorded in the durable manifest head (e.g., retry after an ambiguous
+            // commit ack), converge on head_manifest without writing duplicate files.
+            let uncommitted_batches: Vec<RecordBatch> =
+                if !wal_tx_ids.is_empty() && wal_tx_ids.len() == batches_to_write.len() {
+                    batches_to_write
+                        .iter()
+                        .zip(wal_tx_ids.iter())
+                        .filter(|(_, tx)| !head_committed.contains(tx))
+                        .map(|(b, _)| b.clone())
+                        .collect()
+                } else {
+                    batches_to_write.to_vec()
+                };
+
+            if !wal_tx_ids.is_empty() && uncommitted_batches.is_empty() {
+                tracing::debug!(
+                    "All {} WAL transaction(s) already committed in manifest v{}; converging without rewrite",
+                    wal_tx_ids.len(),
+                    head_ver
+                );
+                manifest_manager
+                    .update_version_cache_monotonic(&head_manifest, head_ver)
+                    .await;
+                return Ok(StagedManifestResult {
+                    new_manifest: head_manifest,
+                    segment_entries: existing_entries,
+                    v3_row_id_base: row_id_base,
+                    added_rows_total: 0,
+                    should_update_schema: false,
+                    pending_builds: Vec::new(),
+                });
+            }
+
+            let raw_fv = self.get_format_version().max(head_manifest.format_version);
+            let effective_fv = if raw_fv == 0 { 2 } else { raw_fv };
+            let sequence_number = (head_ver + 1) as i64;
+
+            // Consolidate batches of compatible schemas before partitioning/writing
+            let consolidated_batches: Vec<RecordBatch> = {
+                let mut groups: Vec<(arrow::datatypes::SchemaRef, Vec<RecordBatch>)> = Vec::new();
+                for b in &uncommitted_batches {
+                    if b.num_rows() == 0 {
+                        continue;
+                    }
+                    let mut placed = false;
+                    for (schema, list) in groups.iter_mut() {
+                        if schema == &b.schema() {
+                            list.push(b.clone());
+                            placed = true;
+                            break;
+                        }
+                    }
+                    if !placed {
+                        groups.push((b.schema(), vec![b.clone()]));
+                    }
+                }
+                let mut res = Vec::new();
+                for (schema, list) in groups {
+                    if list.len() == 1 {
+                        if let Some(first) = list.into_iter().next() {
+                            res.push(first);
+                        }
+                    } else if let Ok(merged) = arrow::compute::concat_batches(&schema, &list) {
+                        res.push(merged);
+                    } else {
+                        res.extend(list);
+                    }
+                }
+                res
+            };
+
+            // Align every batch to the table's full evolved schema so that
+            // schema-evolved columns are present in EVERY segment.
+            let table_schema = self.arrow_schema();
+            let aligned_batches: Vec<RecordBatch> = consolidated_batches
+                .into_iter()
+                .map(|b| {
+                    if b.schema() == table_schema {
+                        b
+                    } else {
+                        let mut cols = Vec::with_capacity(table_schema.fields().len());
+                        for field in table_schema.fields() {
+                            let col = if let Some(c) = b.column_by_name(field.name()) {
+                                c.clone()
+                            } else {
+                                arrow::array::new_null_array(field.data_type(), b.num_rows())
+                            };
+                            cols.push(col);
+                        }
+                        match RecordBatch::try_new(table_schema.clone(), cols) {
+                            Ok(aligned) => aligned,
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "flush: failed to align batch to table schema; writing as-is"
+                                );
+                                b
+                            }
+                        }
+                    }
+                })
+                .collect();
+
+            let mut partitioned_batches = Vec::new();
+            for batch in &aligned_batches {
+                let sorted_batch = self.apply_sort_order(batch)?;
+                let mut pb = spec.partition_batch(&sorted_batch)?;
+                partitioned_batches.append(&mut pb);
+            }
+
+            let mut grouped_partitions: Vec<(HashMap<String, Value>, Vec<RecordBatch>)> =
+                Vec::new();
+            for (pv, b) in partitioned_batches {
                 if b.num_rows() == 0 {
                     continue;
                 }
                 let mut placed = false;
-                for (schema, list) in groups.iter_mut() {
-                    if schema == &b.schema() {
-                        list.push(b.clone());
+                for (p_key, b_list) in grouped_partitions.iter_mut() {
+                    if p_key == &pv {
+                        b_list.push(b.clone());
                         placed = true;
                         break;
                     }
                 }
                 if !placed {
-                    groups.push((b.schema(), vec![b.clone()]));
+                    grouped_partitions.push((pv, vec![b]));
                 }
             }
-            let mut res = Vec::new();
-            for (schema, list) in groups {
-                if list.len() == 1 {
-                    if let Some(first) = list.into_iter().next() {
-                        res.push(first);
-                    }
-                } else if let Ok(merged) = arrow::compute::concat_batches(&schema, &list) {
-                    res.push(merged);
-                } else {
-                    res.extend(list);
-                }
-            }
-            res
-        };
-
-        // Align every batch to the table's full evolved schema so that
-        // schema-evolved columns (e.g. a column added by a later doc) are
-        // present in EVERY segment — with NULLs where a doc didn't have the
-        // field. Without this, docs written before the column existed produce
-        // segments missing the column, and reads concatenate the segments
-        // dropping the column's values (data loss on schema evolution).
-        let table_schema = self.arrow_schema();
-        let aligned_batches: Vec<RecordBatch> = consolidated_batches
-            .into_iter()
-            .map(|b| {
-                if b.schema() == table_schema {
-                    b
-                } else {
-                    let mut cols = Vec::with_capacity(table_schema.fields().len());
-                    for field in table_schema.fields() {
-                        let col = if let Some(c) = b.column_by_name(field.name()) {
-                            c.clone()
+            let coalesced_partitions: Vec<(HashMap<String, Value>, RecordBatch)> = {
+                let mut res = Vec::new();
+                for (pv, list) in grouped_partitions {
+                    if list.len() == 1 {
+                        if let Some(first) = list.into_iter().next() {
+                            res.push((pv, first));
+                        }
+                    } else {
+                        let schema = list[0].schema();
+                        if let Ok(merged) = arrow::compute::concat_batches(&schema, &list) {
+                            res.push((pv, merged));
                         } else {
-                            arrow::array::new_null_array(field.data_type(), b.num_rows())
-                        };
-                        cols.push(col);
-                    }
-                    match RecordBatch::try_new(table_schema.clone(), cols) {
-                        Ok(aligned) => aligned,
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "flush: failed to align batch to table schema; writing as-is"
-                            );
-                            b
+                            for b in list {
+                                res.push((pv.clone(), b));
+                            }
                         }
                     }
                 }
-            })
-            .collect();
-
-        let mut partitioned_batches = Vec::new();
-        for batch in &aligned_batches {
-            let sorted_batch = self.apply_sort_order(batch)?;
-            let mut pb = spec.partition_batch(&sorted_batch)?;
-            partitioned_batches.append(&mut pb);
-        }
-
-        // Group by partition_values so multiple batches going to the same partition are coalesced
-        let mut grouped_partitions: Vec<(HashMap<String, Value>, Vec<RecordBatch>)> = Vec::new();
-        for (pv, b) in partitioned_batches {
-            if b.num_rows() == 0 {
-                continue;
-            }
-            let mut placed = false;
-            for (p_key, b_list) in grouped_partitions.iter_mut() {
-                if p_key == &pv {
-                    b_list.push(b.clone());
-                    placed = true;
-                    break;
-                }
-            }
-            if !placed {
-                grouped_partitions.push((pv, vec![b]));
-            }
-        }
-        let coalesced_partitions: Vec<(HashMap<String, Value>, RecordBatch)> = {
-            let mut res = Vec::new();
-            for (pv, list) in grouped_partitions {
-                if list.len() == 1 {
-                    if let Some(first) = list.into_iter().next() {
-                        res.push((pv, first));
-                    }
-                } else {
-                    let schema = list[0].schema();
-                    if let Ok(merged) = arrow::compute::concat_batches(&schema, &list) {
-                        res.push((pv, merged));
-                    } else {
-                        for b in list {
-                            res.push((pv.clone(), b));
-                        }
-                    }
-                }
-            }
-            res
-        };
-
-        // Iceberg V3 row lineage: assign a contiguous `_row_id` block to each
-        // data file, starting from `row_id_base`. Doing this after partitioning
-        // keeps row IDs contiguous within a file, so `_row_id` equals
-        // `first_row_id + row_position` as the spec requires.
-        let mut next_row_id = row_id_base;
-        let mut partitions_with_lineage: Vec<(HashMap<String, Value>, RecordBatch, Option<i64>)> =
-            Vec::with_capacity(coalesced_partitions.len());
-        for (pv, batch) in coalesced_partitions {
-            if format_version >= 3 {
-                let first_row_id = next_row_id;
-                let batch = self.add_v3_metadata_columns(&batch, sequence_number, first_row_id)?;
-                next_row_id += batch.num_rows() as i64;
-                partitions_with_lineage.push((pv, batch, Some(first_row_id)));
-            } else {
-                partitions_with_lineage.push((pv, batch, None));
-            }
-        }
-
-        // Extract local path from URI for writer
-        let base_path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
-        std::fs::create_dir_all(base_path)?;
-
-        let mut all_new_entries = Vec::new();
-        let mut files_to_upload: Vec<(String, String)> = Vec::new();
-        // Index-build inputs are collected here and the builds are spawned
-        // AFTER the manifest commit below. Spawning during the flush made the
-        // background index-attach commit race the flush's own commit (both
-        // wrote the next manifest version), causing a ~30ms retry per insert.
-        let mut pending_builds: Vec<(
-            crate::core::manifest::ManifestEntry,
-            arrow::record_batch::RecordBatch,
-            std::collections::HashMap<String, serde_json::Value>,
-            String,
-        )> = Vec::new();
-        let index_cols = self.indexing.index_columns.read().clone();
-        let index_all_flag = self.indexing.index_all;
-
-        let index_configs_map: HashMap<String, crate::core::table::ColumnIndexConfig> =
-            { self.indexing.index_configs.read().clone() };
-        let default_device = self.indexing.default_device.read().clone();
-        let default_device_for_stream = default_device.clone();
-
-        // Parallelize partition writing using futures stream
-        let concurrency = self
-            .query_config
-            .max_parallel_segments
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(|p| p.get())
-                    .unwrap_or(16)
-            })
-            .min(64); // Cap to prevent resource exhaustion
-        let stream = futures::stream::iter(partitions_with_lineage.into_iter().map(
-            |(partition_values, batch, first_row_id)| {
-                let base_path = base_path.to_string();
-                let spec = spec.clone();
-                let default_device_inner = default_device_for_stream.clone();
-                async move {
-                    let segment_id = format!("seg_{}", uuid::Uuid::new_v4());
-                    let hive_path = spec.partition_to_path(&partition_values);
-                    let full_base_path = if hive_path.is_empty() {
-                        base_path
-                    } else {
-                        format!("{}/{}", base_path, hive_path)
-                    };
-                    let _ = std::fs::create_dir_all(&full_base_path);
-
-                    // 1. Create writer for data write (no index building yet)
-                    let config_write = SegmentConfig::new(&full_base_path, &segment_id)
-                        .with_index_all(false)
-                        .with_columns_to_index(Vec::new())
-                        .with_partition_values(partition_values.clone())
-                        .with_default_device(default_device_inner);
-                    let mut writer_write = HybridSegmentWriter::new(config_write);
-                    writer_write.primary_key = self.primary_key.read().clone();
-                    writer_write.set_store(self.store.clone());
-
-                    let batch_inner = batch.clone();
-                    let (mut entry, generated_files) = tokio::task::spawn_blocking(move || {
-                        writer_write.write_batch(&batch_inner)?;
-                        let entry = writer_write.to_manifest_entry();
-                        let files = writer_write.get_generated_files();
-                        Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((
-                            entry, files,
-                        ))
-                    })
-                    .await
-                    .context("Flush task panicked")??;
-                    // Iceberg V3 row lineage: record the first `_row_id` in this
-                    // data file so readers can derive `_row_id` from position.
-                    entry.first_row_id = first_row_id;
-
-                    Ok::<PartitionSegment, anyhow::Error>((
-                        entry,
-                        generated_files,
-                        segment_id,
-                        batch,
-                        partition_values,
-                    ))
-                }
-            },
-        ))
-        .buffer_unordered(concurrency);
-
-        let results: Vec<Result<PartitionSegment>> = stream.collect().await;
-
-        for res in results {
-            let spec = spec.clone();
-            let (mut entry, generated_files, segment_id, batch, partition_values): PartitionSegment = res?;
-
-            // Adjust paths relative to Table Root (Hive style)
-            let hive_path = spec.partition_to_path(&partition_values);
-            if !hive_path.is_empty() {
-                entry.file_path = format!("{}/{}", hive_path, entry.file_path);
-                for idx in &mut entry.index_files {
-                    idx.file_path = format!("{}/{}", hive_path, idx.file_path);
-                }
-            }
-
-            for local_path in generated_files {
-                let filename = local_path
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(&local_path)
-                    .to_string();
-                let remote_path = if hive_path.is_empty() {
-                    filename
-                } else {
-                    format!("{}/{}", hive_path, filename)
-                };
-                files_to_upload.push((local_path, remote_path));
-            }
-            all_new_entries.push(entry.clone());
-
-            // 2. Queue index building asynchronously (if needed). The build is
-            // spawned AFTER the manifest commit below so the index-attach
-            // commit does not race the flush's own commit (which caused a
-            // ~30ms retry per insert).
-            let has_pks = !self.primary_key.read().is_empty();
-            if index_all_flag || !index_cols.is_empty() || has_pks {
-                pending_builds.push((
-                    entry.clone(),
-                    batch.clone(),
-                    partition_values.clone(),
-                    segment_id.clone(),
-                ));
-            }
-        }
-
-        // WS2 crash boundary: data files are staged on disk but the manifest has
-        // not been committed, so they are not yet referenced by any snapshot.
-        crate::core::fault_injection::check(crate::core::fault_injection::CrashPoint::DataUpload)?;
-
-        // 3. Upload data files synchronously BEFORE committing manifest/metadata.
-        // Invariant: A published manifest may reference only immutable artifacts that
-        // have already been successfully uploaded and verified.
-        if self.uri.contains("://") && !self.uri.starts_with("file://") {
-            let store_clone = self.store.clone();
-            for (local_path_str, remote_path_str) in files_to_upload {
-                let local_path = std::path::Path::new(&local_path_str);
-                let mut file = tokio::fs::File::open(&local_path).await.with_context(|| {
-                    format!(
-                        "Failed to open local staged file for upload: {}",
-                        local_path_str
-                    )
-                })?;
-                let remote_path = object_store::path::Path::from(remote_path_str.as_str());
-                let mut upload =
-                    store_clone
-                        .put_multipart(&remote_path)
-                        .await
-                        .with_context(|| {
-                            format!("Failed to initiate multipart upload to {}", remote_path_str)
-                        })?;
-                use tokio::io::AsyncReadExt;
-                let mut buf = vec![0; 8 * 1024 * 1024]; // 8MB chunk buffer
-                let mut total_uploaded = 0;
-                loop {
-                    let n = file.read(&mut buf).await.with_context(|| {
-                        format!("Failed to read local staged file: {}", local_path_str)
-                    })?;
-                    if n == 0 {
-                        break;
-                    }
-                    upload
-                        .put_part(buf[..n].to_vec().into())
-                        .await
-                        .with_context(|| format!("Failed to upload part to {}", remote_path_str))?;
-                    total_uploaded += n;
-                }
-                upload.complete().await.with_context(|| {
-                    format!("Failed to complete multipart upload to {}", remote_path_str)
-                })?;
-                tracing::info!(
-                    "Successfully uploaded staged file {} ({} bytes) to {}",
-                    local_path_str,
-                    total_uploaded,
-                    remote_path_str
-                );
-                // Cleanup local staging file only after verified upload
-                let _ = tokio::fs::remove_file(&local_path).await;
-            }
-        }
-
-        // Detect if schema has evolved since last manifest load
-        let manifest = manifest_manager
-            .load_latest()
-            .await
-            .map(|(m, _)| m)
-            .unwrap_or_default();
-        let current_schema = self.arrow_schema();
-
-        let should_update_schema = if let Some(last_schema) = manifest.schemas.last() {
-            let latest_schema = last_schema.to_arrow();
-            // Compare schemas, but ignore metadata if necessary.
-            // Simple != check works for basic evolution.
-            latest_schema != *current_schema
-        } else {
-            true
-        };
-
-        let (final_schemas, final_schema_id) = if should_update_schema {
-            let mut new_schemas = manifest.schemas.clone();
-            let new_id = if manifest.schemas.is_empty() {
-                0
-            } else {
-                manifest.current_schema_id + 1
+                res
             };
-            let mut manifest_schema =
-                crate::core::manifest::Schema::from_arrow(&current_schema, new_id);
-            // Persist the table's index configuration into the schema so it is
-            // inherited by every future open — including other writer processes.
-            // Without this, `add_index` on a fresh table (before the first
-            // commit) lived only in memory and segments written by a later
-            // process were silently unindexed.
-            {
-                let cfgs = self.indexing.index_configs.read();
-                for field in &mut manifest_schema.fields {
-                    if let Some(cfg) = cfgs.get(&field.name) {
-                        if !cfg.algorithms.is_empty() {
-                            field.indexes = cfg.algorithms.clone();
-                        }
-                    }
+
+            let mut next_row_id = row_id_base;
+            let mut partitions_with_lineage: Vec<(
+                HashMap<String, Value>,
+                RecordBatch,
+                Option<i64>,
+            )> = Vec::with_capacity(coalesced_partitions.len());
+            for (pv, batch) in coalesced_partitions {
+                if effective_fv >= 3 {
+                    let first_row_id = next_row_id;
+                    let batch =
+                        self.add_v3_metadata_columns(&batch, sequence_number, first_row_id)?;
+                    next_row_id += batch.num_rows() as i64;
+                    partitions_with_lineage.push((pv, batch, Some(first_row_id)));
+                } else {
+                    partitions_with_lineage.push((pv, batch, None));
                 }
             }
-            new_schemas.push(manifest_schema);
-            (Some(new_schemas), Some(new_id))
-        } else {
-            (None, None)
-        };
 
-        let (final_sort_orders, final_sort_order_id) = if let Some(order) = self.get_sort_order() {
-            (Some(vec![order.clone()]), Some(order.order_id))
-        } else {
-            (None, None)
-        };
+            let mut all_new_entries = Vec::new();
+            let mut files_to_upload: Vec<(String, String)> = Vec::new();
+            let mut pending_builds: Vec<PendingIndexBuild> = Vec::new();
+            let index_cols = self.indexing.index_columns.read().clone();
+            let index_all_flag = self.indexing.index_all;
+            let default_device = self.indexing.default_device.read().clone();
 
-        // Final commit for all data segments (with possible schema update)
-        // Record the WAL transaction ids being committed so that recovery can
-        // skip them if the process dies before the WAL is truncated (the
-        // review's "manifest-before-WAL-truncation" case). Without this, WAL
-        // replay would re-apply an already-committed batch and duplicate rows.
-        let updated_properties = if wal_tx_ids.is_empty() {
-            None
-        } else {
-            let joined = wal_tx_ids
-                .iter()
-                .map(|t| t.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            Some(HashMap::from([(
-                "benostream.committed_wal_tx".to_string(),
-                joined,
-            )]))
-        };
+            let concurrency = self
+                .query_config
+                .max_parallel_segments
+                .unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|p| p.get())
+                        .unwrap_or(16)
+                })
+                .min(64);
+            let stream = futures::stream::iter(partitions_with_lineage.into_iter().map(
+                |(partition_values, batch, first_row_id)| {
+                    let base_path = base_path.to_string();
+                    let spec = spec.clone();
+                    let default_device_inner = default_device.clone();
+                    async move {
+                        let segment_id = format!("seg_{}", uuid::Uuid::new_v4());
+                        let hive_path = spec.partition_to_path(&partition_values);
+                        let full_base_path = if hive_path.is_empty() {
+                            base_path
+                        } else {
+                            format!("{}/{}", base_path, hive_path)
+                        };
+                        let _ = std::fs::create_dir_all(&full_base_path);
 
-        let commit_metadata = crate::core::manifest::CommitMetadata {
-            updated_schemas: final_schemas,
-            updated_schema_id: final_schema_id,
-            updated_partition_specs: None,
-            updated_default_spec_id: None,
-            updated_properties,
-            removed_properties: None,
-            updated_sort_orders: final_sort_orders,
-            updated_default_sort_order_id: final_sort_order_id,
-            updated_last_column_id: None,
-            format_version: Some(format_version),
-            is_fast_append: false,
-            ..Default::default()
-        };
+                        let config_write = SegmentConfig::new(&full_base_path, &segment_id)
+                            .with_index_all(false)
+                            .with_columns_to_index(Vec::new())
+                            .with_partition_values(partition_values.clone())
+                            .with_default_device(default_device_inner);
+                        let mut writer_write = HybridSegmentWriter::new(config_write);
+                        writer_write.primary_key = self.primary_key.read().clone();
+                        writer_write.set_store(self.store.clone());
 
-        // Calculate total rows being added from all new manifest entries
-        let added_rows_total: i64 = all_new_entries.iter().map(|e| e.record_count).sum();
+                        let batch_inner = batch.clone();
+                        let (mut entry, generated_files) =
+                            tokio::task::spawn_blocking(move || {
+                                writer_write.write_batch(&batch_inner)?;
+                                let entry = writer_write.to_manifest_entry();
+                                let files = writer_write.get_generated_files();
+                                Ok::<
+                                    (crate::core::manifest::ManifestEntry, Vec<String>),
+                                    anyhow::Error,
+                                >((entry, files))
+                            })
+                            .await
+                            .context("Flush task panicked")??;
+                        entry.first_row_id = first_row_id;
 
-        // WS2 crash boundary: immediately before the atomic publish point.
-        crate::core::fault_injection::check(
-            crate::core::fault_injection::CrashPoint::ManifestCommit,
-        )?;
-        let new_manifest = manifest_manager
-            .commit(&all_new_entries, &[], commit_metadata)
-            .await?;
-        // WS2 crash boundary: the manifest is committed (visible) but the caller
-        // has not yet observed success — a "delayed visibility" crash.
-        crate::core::fault_injection::check(
-            crate::core::fault_injection::CrashPoint::ManifestVisible,
-        )?;
-
-        // 3b. Spawn the queued index builds now that the manifest is committed.
-        // Spawning them during the flush made the index-attach commit race the
-        // flush's own commit (both wrote the next manifest version), causing a
-        // ~30ms retry per insert.
-        if !pending_builds.is_empty() {
-            let index_cols_cap = index_cols.clone();
-            let base_path_cap = base_path.to_string();
-            let index_configs_cap = index_configs_map.clone();
-            let default_device_cap = default_device.clone();
-            let pk_cap = self.primary_key.read().clone();
-            let table_store_cap = self.store.clone();
-            let spec_cap = spec.clone();
-            let memory_reclaimed_cap = self.memory_reclaimed.clone();
-            let manifest_manager_cap = manifest_manager.clone();
-
-            for (entry, batch, partition_values, segment_id) in pending_builds {
-                let index_cols_c = index_cols_cap.clone();
-                let base_path_c = base_path_cap.clone();
-                let segment_id_c = segment_id.clone();
-                let batch_c = batch.clone();
-                let partition_values_c = partition_values.clone();
-                let index_configs_c = index_configs_cap.clone();
-                let default_device_c = default_device_cap.clone();
-                let entry_c = entry.clone();
-                let pk_c = pk_cap.clone();
-                let table_store_c = table_store_cap.clone();
-                let spec_c = spec_cap.clone();
-                let memory_reclaimed_c = memory_reclaimed_cap.clone();
-                let manifest_manager_c = manifest_manager_cap.clone();
-
-                // Bound concurrent index builds (see `Table::index_build_gate`).
-                let permit = self.acquire_index_build_permit().await?;
-
-                let handle = tokio::spawn(async move {
-                    let _permit = permit;
-                    let hive_path = spec_c.partition_to_path(&partition_values_c);
-                    let full_base_path = if hive_path.is_empty() {
-                        base_path_c
-                    } else {
-                        format!("{}/{}", base_path_c, hive_path)
-                    };
-                    let parquet_path_rel = if hive_path.is_empty() {
-                        format!("{}.parquet", segment_id_c)
-                    } else {
-                        format!("{}/{}.parquet", hive_path, segment_id_c)
-                    };
-                    let config_index = SegmentConfig::new(&full_base_path, &segment_id_c)
-                        .with_index_all(index_all_flag)
-                        .with_columns_to_index(index_cols_c)
-                        .with_partition_values(partition_values_c.clone())
-                        .with_column_devices(
-                            index_configs_c
-                                .iter()
-                                .filter_map(|(c, cfg)| {
-                                    cfg.device.as_ref().map(|d| (c.clone(), d.clone()))
-                                })
-                                .collect(),
-                        )
-                        .with_default_device(default_device_c)
-                        .with_parquet_path(parquet_path_rel);
-
-                    let index_res = tokio::spawn(async move {
-                        let mut index_writer = HybridSegmentWriter::new(config_index)
-                            .with_index_configs(index_configs_c);
-                        index_writer.primary_key = pk_c;
-                        index_writer.set_store(table_store_c);
-                        index_writer.build_indexes(&batch_c, 0)?;
-                        index_writer.finish_indexing().await?;
-                        crate::core::fault_injection::check(
-                            crate::core::fault_injection::CrashPoint::IndexUpload,
-                        )?;
-                        index_writer.upload_to_store().await?;
-                        let files = index_writer.get_generated_files();
-                        let updated_entry_info = index_writer.to_manifest_entry();
-                        Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((
-                            updated_entry_info,
-                            files,
+                        Ok::<PartitionSegment, anyhow::Error>((
+                            entry,
+                            generated_files,
+                            segment_id,
+                            batch,
+                            partition_values,
                         ))
-                    })
-                    .await;
-
-                    match index_res {
-                        Ok(Ok((updated_entry, _files))) => {
-                            let mut merged_entry = entry_c;
-                            let mut updated_index_files = updated_entry.index_files;
-                            let hive_path = spec_c.partition_to_path(&partition_values_c);
-                            if !hive_path.is_empty() {
-                                for idx in &mut updated_index_files {
-                                    idx.file_path = format!("{}/{}", hive_path, idx.file_path);
-                                }
-                            }
-                            merged_entry.index_files = updated_index_files;
-                            let commit_metadata = crate::core::manifest::CommitMetadata::default();
-                            let file_path = merged_entry.file_path.clone();
-                            let index_count = merged_entry.index_files.len();
-                            let remove_paths = vec![merged_entry.file_path.clone()];
-                            match manifest_manager_c
-                                .commit(&[merged_entry], &remove_paths, commit_metadata)
-                                .await
-                            {
-                                Ok(_) => tracing::info!(
-                                    "Successfully attached {} indexes to manifest for segment {}",
-                                    index_count,
-                                    file_path
-                                ),
-                                Err(e) => tracing::error!(
-                                    "Failed to attach indexes for segment {}: {}",
-                                    file_path,
-                                    e
-                                ),
-                            }
-                        }
-                        _ => {
-                            tracing::error!("Index building failed for segment {}", segment_id_c);
-                        }
                     }
-                    memory_reclaimed_c.notify_waiters();
-                });
-                self.background_tasks.lock().await.push(handle);
-            }
-        }
+                },
+            ))
+            .buffer_unordered(concurrency);
 
-        // 4. Update Table Metadata (Iceberg v2 Spec)
-        // Determine the root for metadata. If we have a catalog, use its reported location.
-        let meta_location = if let Some(catalog) = &self.catalog_state.catalog {
-            if let (Some(ns), Some(t)) = (
-                &self.catalog_state.namespace,
-                &self.catalog_state.table_name,
-            ) {
-                catalog
-                    .load_table(ns, t)
-                    .await
-                    .map(|m| m.location)
-                    .unwrap_or_else(|_| self.uri.clone())
-            } else {
-                self.uri.clone()
-            }
-        } else {
-            self.uri.clone()
-        };
+            let results: Vec<Result<PartitionSegment>> = stream.collect().await;
+            let has_pks = !self.primary_key.read().is_empty();
+            for res in results {
+                let (mut entry, generated_files, segment_id, batch, partition_values): PartitionSegment =
+                    res?;
 
-        let meta_store_arc = create_object_store(&meta_location)?;
-        let meta_store = meta_store_arc.as_ref();
-
-        let mut table_meta = match TableMetadata::load_latest(meta_store).await {
-            Ok(mut meta) => {
-                if should_update_schema {
-                    if let Some(schema) = new_manifest.schemas.last() {
-                        meta.add_schema(schema.clone());
+                let hive_path = spec.partition_to_path(&partition_values);
+                if !hive_path.is_empty() {
+                    entry.file_path = format!("{}/{}", hive_path, entry.file_path);
+                    for idx in &mut entry.index_files {
+                        idx.file_path = format!("{}/{}", hive_path, idx.file_path);
                     }
                 }
-                meta.sort_orders = new_manifest.sort_orders.clone();
-                meta.default_sort_order_id = new_manifest.default_sort_order_id;
-                meta.format_version = format_version;
-                meta
+
+                for local_path in generated_files {
+                    let filename = local_path
+                        .split('/')
+                        .next_back()
+                        .unwrap_or(&local_path)
+                        .to_string();
+                    let remote_path = if hive_path.is_empty() {
+                        filename
+                    } else {
+                        format!("{}/{}", hive_path, filename)
+                    };
+                    files_to_upload.push((local_path, remote_path));
+                }
+                all_new_entries.push(entry.clone());
+
+                if index_all_flag || !index_cols.is_empty() || has_pks {
+                    pending_builds.push((entry, batch, partition_values, segment_id));
+                }
             }
-            Err(_) => {
-                // Initialize skeleton if not found
-                TableMetadata::new(
-                    format_version,
-                    uuid::Uuid::new_v4().to_string(),
-                    self.uri.clone(),
-                    new_manifest.schemas.last().cloned().unwrap_or_else(|| {
-                        crate::core::manifest::Schema::from_arrow(&current_schema, 0)
-                    }),
-                    new_manifest.partition_spec.clone(),
-                    new_manifest
-                        .sort_orders
-                        .first()
-                        .cloned()
-                        .unwrap_or_default(),
-                )
+
+            // WS2 crash boundary: data files are staged on disk before manifest commit.
+            if let Err(e) = crate::core::fault_injection::check(
+                crate::core::fault_injection::CrashPoint::DataUpload,
+            ) {
+                self.cleanup_staged_segment_files(&all_new_entries).await;
+                return Err(e);
             }
-        };
 
-        // Iceberg metadata is the only view external readers get, so keep its
-        // properties in lock-step with the manifest. This also repairs a
-        // metadata-only property commit whose mirror write failed.
-        table_meta.properties = new_manifest.properties.clone();
+            // Upload data files synchronously BEFORE committing manifest/metadata.
+            if self.uri.contains("://") && !self.uri.starts_with("file://") {
+                let store_clone = self.store.clone();
+                for (local_path_str, remote_path_str) in files_to_upload {
+                    let local_path = std::path::Path::new(&local_path_str);
+                    let mut file = tokio::fs::File::open(&local_path).await.with_context(|| {
+                        format!(
+                            "Failed to open local staged file for upload: {}",
+                            local_path_str
+                        )
+                    })?;
+                    let remote_path = object_store::path::Path::from(remote_path_str.as_str());
+                    let mut upload =
+                        store_clone
+                            .put_multipart(&remote_path)
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "Failed to initiate multipart upload to {}",
+                                    remote_path_str
+                                )
+                            })?;
+                    use tokio::io::AsyncReadExt;
+                    let mut buf = vec![0; 8 * 1024 * 1024];
+                    let mut total_uploaded = 0;
+                    loop {
+                        let n = file.read(&mut buf).await.with_context(|| {
+                            format!("Failed to read local staged file: {}", local_path_str)
+                        })?;
+                        if n == 0 {
+                            break;
+                        }
+                        upload
+                            .put_part(buf[..n].to_vec().into())
+                            .await
+                            .with_context(|| {
+                                format!("Failed to upload part to {}", remote_path_str)
+                            })?;
+                        total_uploaded += n;
+                    }
+                    upload.complete().await.with_context(|| {
+                        format!("Failed to complete multipart upload to {}", remote_path_str)
+                    })?;
+                    tracing::info!(
+                        "Successfully uploaded staged file {} ({} bytes) to {}",
+                        local_path_str,
+                        total_uploaded,
+                        remote_path_str
+                    );
+                    let _ = tokio::fs::remove_file(&local_path).await;
+                }
+            }
 
-        // Add a new snapshot pointing to the latest manifest.
-        //
-        // Iceberg V3 row lineage: the snapshot's `first-row-id` is the lowest row
-        // ID assigned in this snapshot, and `next-row-id` advances past every row
-        // ID assigned so far.
-        let snapshot_first_row_id = all_new_entries
-            .iter()
-            .filter_map(|e| e.first_row_id)
-            .min()
-            .or(table_meta.next_row_id);
-        // The Iceberg spec requires the snapshot's `manifest-list` to be an
-        // absolute path (external readers such as PyIceberg resolve a relative
-        // path against the *process CWD*, not the table location, and fail).
-        // The manifest manager stores it relative to the table root, so qualify
-        // it with the table location here.
-        let manifest_list_abs = match new_manifest.manifest_list_path.clone() {
-            Some(p) if p.contains("://") || p.starts_with('/') => p,
-            Some(p) => format!(
-                "{}/{}",
-                self.uri.trim_end_matches('/'),
-                p.trim_start_matches('/')
-            ),
-            None => String::new(),
-        };
-        let snapshot = crate::core::metadata::Snapshot {
-            snapshot_id: new_manifest.version as i64,
-            parent_snapshot_id: table_meta.current_snapshot_id,
-            timestamp_ms: new_manifest.timestamp_ms,
-            sequence_number: Some(new_manifest.version as i64),
-            summary: HashMap::from([("operation".to_string(), "append".to_string())]),
-            manifest_list: manifest_list_abs,
-            schema_id: Some(new_manifest.current_schema_id),
-            first_row_id: snapshot_first_row_id,
-            added_rows: Some(added_rows_total),
-        };
-        table_meta.add_snapshot(snapshot);
+            let current_schema = self.arrow_schema();
+            let should_update_schema = if let Some(last_schema) = head_manifest.schemas.last() {
+                let latest_schema = last_schema.to_arrow();
+                latest_schema != *current_schema
+            } else {
+                true
+            };
 
-        if format_version >= 3 {
-            let advanced = row_id_base + added_rows_total;
-            table_meta.next_row_id = Some(table_meta.next_row_id.unwrap_or(0).max(advanced));
+            let (final_schemas, final_schema_id) = if should_update_schema {
+                let mut new_schemas = head_manifest.schemas.clone();
+                let new_id = if head_manifest.schemas.is_empty() {
+                    0
+                } else {
+                    head_manifest.current_schema_id + 1
+                };
+                let mut manifest_schema =
+                    crate::core::manifest::Schema::from_arrow(&current_schema, new_id);
+                {
+                    let cfgs = self.indexing.index_configs.read();
+                    for field in &mut manifest_schema.fields {
+                        if let Some(cfg) = cfgs.get(&field.name) {
+                            if !cfg.algorithms.is_empty() {
+                                field.indexes = cfg.algorithms.clone();
+                            }
+                        }
+                    }
+                }
+                new_schemas.push(manifest_schema);
+                (Some(new_schemas), Some(new_id))
+            } else {
+                (None, None)
+            };
+
+            let (final_sort_orders, final_sort_order_id) =
+                if let Some(order) = self.get_sort_order() {
+                    (Some(vec![order.clone()]), Some(order.order_id))
+                } else {
+                    (None, None)
+                };
+
+            let append_committed_wal_tx: Vec<String> =
+                wal_tx_ids.iter().map(|t| t.to_string()).collect();
+
+            let commit_metadata = crate::core::manifest::CommitMetadata {
+                updated_schemas: final_schemas,
+                updated_schema_id: final_schema_id,
+                updated_partition_specs: None,
+                updated_default_spec_id: None,
+                updated_properties: None,
+                removed_properties: None,
+                updated_sort_orders: final_sort_orders,
+                updated_default_sort_order_id: final_sort_order_id,
+                updated_last_column_id: None,
+                format_version: Some(effective_fv),
+                is_fast_append: false,
+                expected_version: if effective_fv >= 3 {
+                    Some(head_ver)
+                } else {
+                    None
+                },
+                append_committed_wal_tx,
+                ..Default::default()
+            };
+
+            let added_rows_total: i64 = all_new_entries.iter().map(|e| e.record_count).sum();
+
+            // WS2 crash boundary: immediately before the atomic manifest publish point.
+            if let Err(e) = crate::core::fault_injection::check(
+                crate::core::fault_injection::CrashPoint::ManifestCommit,
+            ) {
+                self.cleanup_staged_segment_files(&all_new_entries).await;
+                return Err(e);
+            }
+
+            match manifest_manager
+                .commit(&all_new_entries, &[], commit_metadata)
+                .await
+            {
+                Ok(new_manifest) => {
+                    return Ok(StagedManifestResult {
+                        new_manifest,
+                        segment_entries: all_new_entries,
+                        v3_row_id_base: row_id_base,
+                        added_rows_total,
+                        should_update_schema,
+                        pending_builds,
+                    });
+                }
+                Err(err)
+                    if effective_fv >= 3
+                        && matches!(
+                            err.downcast_ref::<BenoStreamError>(),
+                            Some(BenoStreamError::ManifestVersionMismatch { .. })
+                        ) =>
+                {
+                    tracing::debug!(
+                        v3_attempt,
+                        "V3 row-lineage OCC conflict; removing stale staged Parquet files and retrying"
+                    );
+                    self.cleanup_staged_segment_files(&all_new_entries).await;
+                    if v3_attempt + 1 == MAX_V3_RETRIES {
+                        return Err(err);
+                    }
+                    let delay_ms = 2 + (rand::random::<u64>() % 14);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+                Err(err) => return Err(err),
+            }
         }
 
-        // Save metadata file (vX.metadata.json)
-        let new_meta_version = (new_manifest.version) as i32; // Sync with manifest version for simplicity
-                                                              // `save_to_store` returns the relative path it wrote. Capture it so we
-                                                              // can hand catalogs the authoritative location instead of making them
-                                                              // reconstruct it (AWS Glue cannot be told by its server, unlike REST).
-        let written_metadata_path = table_meta
-            .save_to_store(meta_store, new_meta_version)
-            .await?;
-        let metadata_location = format!(
-            "{}/{}",
-            self.uri.trim_end_matches('/'),
-            written_metadata_path.trim_start_matches('/')
-        );
+        anyhow::bail!(
+            "Failed to stage and commit V3 manifest after {} concurrent attempts",
+            MAX_V3_RETRIES
+        )
+    }
 
-        // 5. Commit to Catalog if configured (Iceberg Atomic Swap)
-        if let Some(catalog) = &self.catalog_state.catalog {
-            if let (Some(ns), Some(table)) = (
+    async fn finish_pending_commit_tail_async(&self) -> Result<()> {
+        let (
+            phase,
+            new_manifest,
+            v3_row_id_base,
+            added_rows_total,
+            segment_entries,
+            existing_meta_loc,
+            existing_snap,
+            should_update_schema,
+            wal_tx_ids,
+            pending_builds,
+        ) = {
+            let mut pc_guard = self.pending_commit.lock();
+            let Some(pc) = pc_guard.as_mut() else {
+                return Ok(());
+            };
+            if pc.phase == CommitPhase::Staging {
+                return Ok(());
+            }
+            let Some(manifest) = pc.committed_manifest.clone() else {
+                anyhow::bail!("PendingCommit in {:?} missing committed_manifest", pc.phase);
+            };
+            let builds = std::mem::take(&mut pc.pending_builds);
+            (
+                pc.phase,
+                manifest,
+                pc.v3_row_id_base,
+                pc.added_rows_total,
+                pc.segment_entries.clone(),
+                pc.metadata_location.clone(),
+                pc.published_snapshot.clone(),
+                pc.should_update_schema,
+                pc.wal_tx_ids.clone(),
+                builds,
+            )
+        };
+
+        // Spawn background index builds once (drained from PendingCommit above).
+        self.spawn_pending_index_builds(pending_builds).await?;
+
+        if phase < CommitPhase::IcebergPublished {
+            let effective_fv = if new_manifest.format_version == 0 {
+                self.get_format_version().max(2)
+            } else {
+                new_manifest.format_version
+            };
+            let v3_first_row_id = if effective_fv >= 3 {
+                segment_entries
+                    .iter()
+                    .filter_map(|e| e.first_row_id)
+                    .min()
+                    .or(Some(v3_row_id_base))
+            } else {
+                None
+            };
+            let v3_added_rows = if effective_fv >= 3 {
+                Some(added_rows_total)
+            } else {
+                None
+            };
+            let v3_next_row_id = if effective_fv >= 3 {
+                Some(
+                    segment_entries
+                        .iter()
+                        .filter_map(|e| e.first_row_id.map(|f| f + e.record_count))
+                        .max()
+                        .unwrap_or(v3_row_id_base + added_rows_total),
+                )
+            } else {
+                None
+            };
+
+            let catalog_tuple = match (
+                &self.catalog_state.catalog,
                 &self.catalog_state.namespace,
                 &self.catalog_state.table_name,
             ) {
-                let snapshot = table_meta
-                    .snapshots
-                    .last()
-                    .ok_or_else(|| anyhow::anyhow!("No snapshot available in table metadata"))?;
-                let updates = vec![
-                    // Authoritative metadata location for catalogs that cannot
-                    // return it themselves (Glue). Other catalogs ignore it.
-                    serde_json::json!({
-                        "action": "set-metadata-location",
-                        "metadata-location": metadata_location
-                    }),
-                    serde_json::json!({
-                        "action": "add-snapshot",
-                        "snapshot": snapshot
-                    }),
-                    serde_json::json!({
-                        "action": "set-current-snapshot",
-                        "snapshot-id": table_meta.current_snapshot_id
-                    }),
-                ];
-                catalog.commit_table(ns, table, updates).await?;
-                tracing::info!(
-                    "Committed snapshot {} to catalog {}.{}",
-                    new_manifest.version,
-                    ns,
-                    table
-                );
+                (Some(cat), Some(ns), Some(tbl)) => Some((cat.clone(), ns.clone(), tbl.clone())),
+                _ => None,
+            };
+
+            let prior_catalog_meta = if let Some((ref cat, ref ns, ref tbl)) = catalog_tuple {
+                cat.load_table(ns, tbl).await.ok()
+            } else {
+                None
+            };
+
+            let snapshot_id = new_manifest.version as i64;
+            let already_in_catalog = prior_catalog_meta.as_ref().and_then(|cm| {
+                cm.snapshots
+                    .iter()
+                    .find(|s| s.snapshot_id == snapshot_id)
+                    .cloned()
+            });
+
+            if let Some(catalog_snap) = already_in_catalog {
+                let mut pc_guard = self.pending_commit.lock();
+                if let Some(pc) = pc_guard.as_mut() {
+                    if pc.published_snapshot.is_none() {
+                        pc.published_snapshot = Some(catalog_snap);
+                    }
+                    pc.phase = CommitPhase::IcebergPublished;
+                }
+            } else {
+                let meta_location_root = prior_catalog_meta
+                    .as_ref()
+                    .map(|m| m.location.clone())
+                    .unwrap_or_else(|| self.uri.clone());
+                let meta_store_arc = self.resolve_metadata_store(&meta_location_root)?;
+
+                let (written_loc, published_snap) =
+                    if let (Some(loc), Some(snap)) = (existing_meta_loc, existing_snap) {
+                        (loc, snap)
+                    } else {
+                        crate::core::fault_injection::check(
+                            crate::core::fault_injection::CrashPoint::MetadataSave,
+                        )?;
+                        let (loc, snap) = self
+                            .publish_metadata_step_async(
+                                &meta_location_root,
+                                meta_store_arc.as_ref(),
+                                &new_manifest,
+                                "append",
+                                prior_catalog_meta.as_ref().map(|m| m.table_uuid.as_str()),
+                                prior_catalog_meta
+                                    .as_ref()
+                                    .and_then(|m| m.current_snapshot_id),
+                                v3_first_row_id,
+                                v3_added_rows,
+                                v3_next_row_id,
+                                should_update_schema,
+                            )
+                            .await?;
+                        {
+                            let mut pc_guard = self.pending_commit.lock();
+                            if let Some(pc) = pc_guard.as_mut() {
+                                pc.metadata_location = Some(loc.clone());
+                                pc.published_snapshot = Some(snap.clone());
+                            }
+                        }
+                        (loc, snap)
+                    };
+
+                if let Some((ref cat, ref ns, ref tbl)) = catalog_tuple {
+                    crate::core::fault_injection::check(
+                        crate::core::fault_injection::CrashPoint::CatalogCommit,
+                    )?;
+                    let (cat_loc, cat_snap) = self
+                        .commit_catalog_step_async(
+                            cat.as_ref(),
+                            ns,
+                            tbl,
+                            &meta_location_root,
+                            meta_store_arc.as_ref(),
+                            &new_manifest,
+                            "append",
+                            v3_first_row_id,
+                            v3_added_rows,
+                            v3_next_row_id,
+                            should_update_schema,
+                            written_loc,
+                            published_snap,
+                        )
+                        .await?;
+                    let mut pc_guard = self.pending_commit.lock();
+                    if let Some(pc) = pc_guard.as_mut() {
+                        pc.metadata_location = Some(cat_loc);
+                        pc.published_snapshot = Some(cat_snap);
+                    }
+                }
+
+                let mut pc_guard = self.pending_commit.lock();
+                if let Some(pc) = pc_guard.as_mut() {
+                    pc.phase = CommitPhase::IcebergPublished;
+                }
             }
         }
 
-        // 5. Truncate WAL (Durability Checkpoint)
-        {
-            // WS2 crash boundary: manifest committed but WAL not yet truncated.
-            // On reopen the WAL replay must be idempotent (no duplicate rows).
-            crate::core::fault_injection::check(
-                crate::core::fault_injection::CrashPoint::WalTruncate,
-            )?;
-            let mut wal = self.wal.lock().await;
-            wal.truncate().context("Failed to truncate WAL")?;
+        self.indexing.cluster_indexes.write().clear();
+        self.indexing.vector_routers.write().clear();
 
-            // 5b. Cleanup recovered files
+        // WS2 crash boundary: manifest + metadata committed, WAL segments not yet pruned.
+        crate::core::fault_injection::check(crate::core::fault_injection::CrashPoint::WalTruncate)?;
+        let mut committed_set = {
+            let mut guard = self.committed_wal_txs.lock();
+            for tx in &wal_tx_ids {
+                guard.insert(*tx);
+            }
+            guard.clone()
+        };
+        if let Some(csv) = new_manifest.properties.get("benostream.committed_wal_tx") {
+            for token in csv.split(',') {
+                if let Ok(uuid) = uuid::Uuid::parse_str(token.trim()) {
+                    committed_set.insert(uuid);
+                }
+            }
+        }
+        let pruned_paths = {
+            let wal = self.wal.lock().await;
+            wal.prune_committed_segments(&committed_set)
+                .context("Failed to prune committed WAL segments")?
+        };
+        if !pruned_paths.is_empty() {
+            let pruned_set: HashSet<String> = pruned_paths
+                .iter()
+                .filter_map(|p| p.to_str().map(str::to_string))
+                .collect();
             let mut recovered = self.recovered_wal_paths.lock();
-            if !recovered.is_empty() {
-                let paths: Vec<std::path::PathBuf> =
-                    recovered.iter().map(std::path::PathBuf::from).collect();
-                wal.cleanup_files(&paths).unwrap_or_default();
-                recovered.clear();
-            }
+            recovered.retain(|p| !pruned_set.contains(p));
         }
+
+        // Publish committed batches to `Table::subscribe()` consumers at most once.
+        let notify_batches: Option<Vec<RecordBatch>> = {
+            let mut pc_guard = self.pending_commit.lock();
+            if let Some(pc) = pc_guard.as_mut() {
+                if !pc.subscribers_notified {
+                    pc.subscribers_notified = true;
+                    Some(pc.batches.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(ref batches_to_notify) = notify_batches {
+            self.publish_committed(batches_to_notify);
+        }
+
+        {
+            let mut pc_guard = self.pending_commit.lock();
+            *pc_guard = None;
+        }
+        self.bump_buffer_epoch();
 
         Ok(())
     }
+}
+
+struct StagedManifestResult {
+    new_manifest: crate::core::manifest::Manifest,
+    segment_entries: Vec<crate::core::manifest::ManifestEntry>,
+    v3_row_id_base: i64,
+    added_rows_total: i64,
+    should_update_schema: bool,
+    pending_builds: Vec<PendingIndexBuild>,
 }
