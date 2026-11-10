@@ -5,9 +5,7 @@
 # BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
-**Links:** [Docs](https://www.benostreamdb.org) · [Benchmarks](benchmarks/results/BENCHMARK_REPORT.md) · [Changelog](CHANGELOG.md) · [Beno Labs](https://www.benolabsai.com)
-
-**Links:** [Docs](https://www.benostreamdb.org) · [Benchmarks](benchmarks/results/BENCHMARK_REPORT.md) · [Changelog](CHANGELOG.md) · [Beno Labs](https://www.benolabsai.com)
+**Links:** [Docs](https://www.benostreamdb.org) · [Benchmarks](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/results/BENCHMARK_REPORT.md) · [Changelog](https://github.com/benolabsai/benostreamdb/blob/main/CHANGELOG.md) · [Beno Labs](https://www.benolabsai.com)
 
 > ⚠️ **Developer Preview (v0.15.1)**
 > BenoStreamDB is an early-stage database engine intended for evaluation, benchmarking, and community feedback. 
@@ -1142,8 +1140,8 @@ benostreamdb/
 ## 🔗 Links
 
 - **Documentation:** [benostreamdb.org](https://www.benostreamdb.org)
-- **Benchmarks:** [BENCHMARK_REPORT.md](benchmarks/results/BENCHMARK_REPORT.md)
-- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
+- **Benchmarks:** [BENCHMARK_REPORT.md](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/results/BENCHMARK_REPORT.md)
+- **Changelog:** [CHANGELOG.md](https://github.com/benolabsai/benostreamdb/blob/main/CHANGELOG.md)
 - **Engineering Blog:** [benolabsai.com/blog](https://www.benolabsai.com/blog/)
 - **Beno Labs:** [benolabsai.com](https://www.benolabsai.com)
 
