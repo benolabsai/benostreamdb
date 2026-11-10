@@ -31,7 +31,7 @@ BenoStreamDB supports all six pgvector distance operators for computing vector s
 | `<~>` | Hamming | Bit difference count | `::vector` *(enhanced)* | `bit` only | Binary vectors / bitsets |
 | `<%>` | Jaccard | Set similarity | `::vector` *(enhanced)* | `bit` only | Categorical / indicator sets |
 
-> **Note on `<~>` and `<%>`:** In upstream PostgreSQL `pgvector`, `<~>` and `<%>` only accept the native PostgreSQL `bit` type (e.g. `'101'::bit(3)`). In BenoStreamDB, these operators are extended to execute directly on standard `::vector` (Arrow Float32) columns without requiring casting or binary conversion functions. See [Compatibility Notes & Conversions](#compatibility-notes) below for exact PostgreSQL translation syntax.
+> **Note on `<~>` and `<%>`:** In upstream PostgreSQL `pgvector`, `<~>` and `<%>` only accept the native PostgreSQL `bit` type (e.g. `'101'::bit(3)`). In BenoStreamDB, these operators are extended to execute directly on standard `::vector` (Arrow Float32) columns without requiring casting or binary conversion functions. See [Compatibility Notes & Conversions](#compatibility-notes-and-conversions) below for exact PostgreSQL translation syntax.
 
 ### Basic Usage
 
@@ -644,7 +644,7 @@ SELECT vector_avg(embedding) FROM mixed_dimension_table;
 
 ---
 
-## Compatibility Notes & Conversions
+## Compatibility Notes and Conversions
 
 ### pgvector Compatibility Matrix
 
@@ -729,7 +729,7 @@ LIMIT 10;
 
 ## Additional Resources
 
-- [BenoStreamDB Architecture](architecture.md)
+- [BenoStreamDB Architecture](ARCHITECTURE.md)
 - [DataFusion SQL Reference](https://arrow.apache.org/datafusion/user-guide/sql/index.html)
 - [pgvector Documentation](https://github.com/pgvector/pgvector)
-- [Vector Search Best Practices](architecture.md)
+- [Vector Search Best Practices](ARCHITECTURE.md)

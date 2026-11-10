@@ -196,7 +196,7 @@ at `/opt/bench/data/clickbench.parquet`; the query is a group-by aggregate.
 
 The lexical suite lives in `benchmarks/beir/` and benchmarks BM25 vs Tantivy vs
 Hybrid RRF on BEIR datasets (`scifact`, `nfcorpus`, `arguana`). See
-[`../benchmarks/beir/`](../benchmarks/beir/).
+[`../benchmarks/beir/`](https://github.com/benolabsai/benostreamdb/tree/main/benchmarks/beir).
 
 ---
 
@@ -230,7 +230,7 @@ DATASET_DIR=/path/to/bigann \
   docker compose -f benchmarks/docker-compose.neurips.yml run --rm neurips
 ```
 
-[`run_neurips_bigann.py`](../benchmarks/run_neurips_bigann.py) reads the cgroup
+[`run_neurips_bigann.py`](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/run_neurips_bigann.py) reads the cgroup
 limits itself (`--hardware auto`) and derives:
 
 | Knob | Derivation |
@@ -261,7 +261,7 @@ python benchmarks/run_neurips_bigann.py --dataset 100m --stage query --all-modes
 fastest operating point that clears recall ≥ 0.90 / 0.95 / 0.98 — the row the
 leaderboard compares against.
 
-Results are written to [`benchmarks/results/neurips_bigann/`](../benchmarks/results/neurips_bigann):
+Results are written to [`benchmarks/results/neurips_bigann/`](https://github.com/benolabsai/benostreamdb/tree/main/benchmarks/results/neurips_bigann):
 
 - `<tag>.json` — every operating point with full provenance: dataset paths, the
   ground-truth source, engine version + git revision, the envelope, and the grid.
@@ -360,9 +360,9 @@ These are enforced by tests, not by inspection:
 
 | Index | Oracle | Test |
 |---|---|---|
-| Scalar bitmap, inverted/BM25, composite | indexed result **identical** to full scan | [`tests/test_differential_index_oracle.rs`](../tests/test_differential_index_oracle.rs) |
+| Scalar bitmap, inverted/BM25, composite | indexed result **identical** to full scan | [`tests/test_differential_index_oracle.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_differential_index_oracle.rs) |
 | HNSW / IVF / TurboQuant / PQ | exact nearest neighbour appears in indexed top-k (recall) | same file |
-| JSON-path | indexed result identical to full scan; unindexed path falls back to scan | [`tests/test_json_path_index.rs`](../tests/test_json_path_index.rs) |
+| JSON-path | indexed result identical to full scan; unindexed path falls back to scan | [`tests/test_json_path_index.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_json_path_index.rs) |
 | cuGraph | PageRank matches NetworkX (max abs diff < 1e-5, identical top-5) | `results/cugraph_correct.txt` |
 
 Run them with:
@@ -381,7 +381,7 @@ cargo test --test test_json_path_index
 previous dataset or device are never double-counted. The rollup uses
 `pure_index_qps` for BenoStreamDB (see §4.1).
 
-The narrative report is [`benchmarks/results/BENCHMARK_REPORT.md`](../benchmarks/results/BENCHMARK_REPORT.md);
+The narrative report is [`benchmarks/results/BENCHMARK_REPORT.md`](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/results/BENCHMARK_REPORT.md);
 `benchmarks/generate_summary.py` renders the summary tables.
 
 ```bash

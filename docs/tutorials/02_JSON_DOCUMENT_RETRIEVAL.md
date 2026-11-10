@@ -1,6 +1,6 @@
 # Tutorial 2 — JSON / document retrieval with a JSON-path index
 
-> The runnable Python version is [`examples/tutorials/02_json_document_retrieval.ipynb`](../../examples/tutorials/02_json_document_retrieval.ipynb).
+> The runnable Python version is [`examples/tutorials/02_json_document_retrieval.ipynb`](https://github.com/benolabsai/benostreamdb/blob/main/examples/tutorials/02_json_document_retrieval.ipynb).
 > This page is the SQL / connector form.
 
 Store semi-structured documents in a `Utf8` JSON column, add a **JSON-path

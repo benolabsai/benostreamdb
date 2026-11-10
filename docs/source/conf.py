@@ -71,6 +71,9 @@ myst_enable_extensions = [
 # render as diagrams instead of unhighlighted code blocks.
 myst_fence_as_directive = ["mermaid"]
 
+# Emit stable anchors for headings so `#section` links resolve.
+myst_heading_anchors = 4
+
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 

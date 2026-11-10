@@ -5,10 +5,10 @@
 - **Authors**: BenoStreamDB Core Team
 - **Target Version**: v0.13.0+
 - **Companion Documents**:
-  - [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) (Lakehouse Storage Architecture)
-  - [`docs/ICEBERG_COMPATIBILITY.md`](../ICEBERG_COMPATIBILITY.md) (Iceberg Specification Conformance)
-  - [`docs/CONCURRENCY.md`](../CONCURRENCY.md) (Multi-Writer Transaction Model)
-  - [`docs/BENCHMARKING_PLAN.md`](../BENCHMARKING_PLAN.md) (Production Verification Framework)
+  - [`docs/ARCHITECTURE.md`](https://www.benostreamdb.org/guides/architecture.html) (Lakehouse Storage Architecture)
+  - [`docs/ICEBERG_COMPATIBILITY.md`](https://www.benostreamdb.org/guides/iceberg_compatibility.html) (Iceberg Specification Conformance)
+  - [`docs/CONCURRENCY.md`](https://www.benostreamdb.org/guides/concurrency.html) (Multi-Writer Transaction Model)
+  - [`docs/BENCHMARKING_PLAN.md`](https://www.benostreamdb.org/guides/benchmarking_plan.html) (Production Verification Framework)
 
 ---
 

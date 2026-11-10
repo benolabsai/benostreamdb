@@ -29,7 +29,7 @@ topology.
 Reviewed-and-accepted advisories (unmaintained or low-reachability transitive
 dependencies) are tracked with an owner, dependency chain, reachability
 assessment, migration path, and review date in
-[docs/DEPENDENCY_RISK.md](docs/DEPENDENCY_RISK.md). `cargo audit` and
+[docs/DEPENDENCY_RISK.md](docs/governance/DEPENDENCY_RISK.md). `cargo audit` and
 `cargo deny` run in CI; a new advisory fails the build unless it is added to
 both allow-lists and to that document.
 

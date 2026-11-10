@@ -24,7 +24,7 @@ DataFusion has no logical plan for `CREATE INDEX`, `OPTIMIZE`, `VACUUM`,
 `MERGE`, `DELETE` (for custom providers), or `ALTER TABLE ... EXECUTE`. The
 established pattern is to parse with DataFusion's re-exported `sqlparser` and
 dispatch to the `Table` API *before* planning — see
-[`merge_into::try_parse_and_execute()`](../../src/core/sql/merge_into.rs:57).
+[`merge_into::try_parse_and_execute()`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/sql/merge_into.rs#L57).
 
 DataFusion 52 pins `sqlparser` 0.59, which already parses every statement we
 need. So no DataFusion changes are required; the work is entirely in our
@@ -33,7 +33,7 @@ interception layer.
 ### Dialect
 
 The session sets `datafusion.sql_parser.dialect = PostgreSQL`
-([`session.rs:29`](../../src/core/sql/session.rs:29)). This matters:
+([`session.rs:29`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/sql/session.rs#L29)). This matters:
 
 | Statement | Parses under PostgreSQL? |
 |---|---|
@@ -61,7 +61,7 @@ flowchart TD
 ```
 
 A single new module `src/core/sql/catalog_ddl.rs` owns the interception. It is
-called first in [`session.sql_to_df()`](../../src/core/sql/session.rs:144), before
+called first in [`session.sql_to_df()`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/sql/session.rs#L144), before
 `merge_into`. It returns `Ok(Some(batch))` when it handled the statement, else
 `Ok(None)` so the existing pipeline runs.
 

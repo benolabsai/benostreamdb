@@ -170,7 +170,7 @@ python benchmarks/ann_benchmarks/run.py \
 
 ### 4.2 Competitor adapters: `benchmarks/competitors/`
 
-[`run_competitor.py`](../benchmarks/competitors/run_competitor.py) is the single
+[`run_competitor.py`](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/competitors/run_competitor.py) is the single
 runner; each engine is an adapter accepting the same `--cores`, `--ram-gb`,
 `--m`, `--ef-construction`, `--ef-search`, `--metric`, `--dataset`, `--queries`
 arguments and emitting the JSON schema of §6. Implemented so far:
@@ -186,7 +186,7 @@ arguments and emitting the JSON schema of §6. Implemented so far:
 
 Adapters report `{"available": false, "error": ...}` when the client library or
 server is missing, so a partial environment still produces a clear report. See
-[`benchmarks/competitors/README.md`](../benchmarks/competitors/README.md).
+[`benchmarks/competitors/README.md`](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/competitors/README.md).
 
 ### 4.3 Production workload harness (to build)
 
@@ -216,7 +216,7 @@ For the competitor, enforce the same envelope with the process's cgroup, or
 whether the data is warm (page cache) or cold.
 
 **Containerized runs (one profile for everyone).**
-[`benchmarks/competitors/docker_bench.sh`](../benchmarks/competitors/docker_bench.sh)
+[`benchmarks/competitors/docker_bench.sh`](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/competitors/docker_bench.sh)
 applies a single envelope (`--cpus` / `--mem`) to **every** participant — the
 server engines *and* the runner that executes each client, including
 BenoStreamDB — so no one gets more resources than another. It records the host

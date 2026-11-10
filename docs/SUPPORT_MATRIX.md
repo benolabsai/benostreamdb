@@ -3,7 +3,7 @@
 Status: living document. Owner: BenoStreamDB core.
 
 This document is the authoritative map between **what we ship** (the release
-workflow in [`.github/workflows/release.yml`](../.github/workflows/release.yml))
+workflow in [`.github/workflows/release.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/release.yml))
 and **what we support**, so documentation, the feature matrix, and limitations
 stay aligned with the actual build. It also marks the boundary between the
 **supported core** and **experimental / deferred** surfaces.
@@ -42,11 +42,11 @@ These surfaces are covered by CI and are the ones we stand behind:
   pgvector operators, JSON path, graph UDAFs) and the catalog DDL layer
   (`CREATE INDEX`, `ALTER TABLE`, `OPTIMIZE`, `VACUUM`, `ALTER … EXECUTE`).
 - **Python** — `benostreamdb.Table` / `Session`, `FlightClient`, `SearchClient`
-  (see [`docs/integrations/PYTHON.md`](integrations/PYTHON.md)).
+  (see [`docs/integrations/PYTHON.md`](https://www.benostreamdb.org/integrations/python.html)).
 - **Flight SQL** — trusted server-mode surface (see §4).
-- **Untrusted connectors** — MCP server ([`contrib/benostreamdb-mcp`](../contrib/benostreamdb-mcp))
+- **Untrusted connectors** — MCP server ([`contrib/benostreamdb-mcp`](https://github.com/benolabsai/benostreamdb/tree/main/contrib/benostreamdb-mcp))
   and the OpenSearch/Qdrant-compatible search gateway
-  ([`contrib/benostreamdb-search`](../contrib/benostreamdb-search)). Both enforce
+  ([`contrib/benostreamdb-search`](https://github.com/benolabsai/benostreamdb/tree/main/contrib/benostreamdb-search)). Both enforce
   the catalog storage policy.
 
 ---
@@ -57,7 +57,7 @@ Not part of the supported-core guarantee:
 
 | Surface | Where | Status |
 |---|---|---|
-| Spark connector (`spark-benostreamdb`) | subproject | Native (Iceberg-free) path; see [`plans/connector_native_udf_plan.md`](../plans/connector_native_udf_plan.md) |
+| Spark connector (`spark-benostreamdb`) | subproject | Native (Iceberg-free) path; see [`plans/connector_native_udf_plan.md`](https://github.com/benolabsai/benostreamdb/blob/main/plans/connector_native_udf_plan.md) |
 | Trino connector (`trino-benostreamdb`) | subproject | Native path; typed set-returning table functions still open |
 | Flink | — | **No bespoke connector.** Integrate via the Iceberg Flink connector + Flight SQL/JDBC |
 | GPU backends (CUDA / ROCm / Metal / Intel) | feature-gated + `benostream-gpu-ann` | Batch-oriented acceleration only; not end-to-end resident GPU search ([`docs/GPU_SETUP_GUIDE.md`](GPU_SETUP_GUIDE.md)) |
@@ -85,7 +85,7 @@ default build is CPU-only and Python/JVM-free.
     policy, writes are allowed only to schemas listed `read-write` (there is no
     default `scratch` namespace) and reads are the read-only floor / policy
     allowlist. A `no_access_schemas` list denies **both** read and write. This is
-    [`SchemaPermissions::for_server_connector`](../src/core/catalog/policy.rs).
+    [`SchemaPermissions::for_server_connector`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/policy.rs).
   - **MCP (local agent)** — same lists, but a local agent keeps a writable
     `scratch` scratchpad by default.
   Enforcement is identical across MCP and the gateway APIs: the OpenSearch API
@@ -94,7 +94,7 @@ default build is CPU-only and Python/JVM-free.
   route).
 
 See [`docs/CATALOG_USAGE.md`](CATALOG_USAGE.md) and
-[`SECURITY.md`](../SECURITY.md).
+[`SECURITY.md`](https://github.com/benolabsai/benostreamdb/blob/main/SECURITY.md).
 
 ---
 
@@ -102,7 +102,7 @@ See [`docs/CATALOG_USAGE.md`](CATALOG_USAGE.md) and
 
 - **Iceberg deviations** are enumerated in
   [`docs/ICEBERG_COMPATIBILITY.md`](ICEBERG_COMPATIBILITY.md) and the pgvector
-  notes in the [`README`](../README.md).
+  notes in the [`README`](https://github.com/benolabsai/benostreamdb/blob/main/README.md).
 - **The search gateway has no `scratch` write namespace** and never creates a
   schema: writes require a policy grant naming the schema. For MCP (a local
   agent) `scratch` is a single shared schema name, not per-tenant — a scratch
@@ -121,6 +121,6 @@ See [`docs/CATALOG_USAGE.md`](CATALOG_USAGE.md) and
 
 Update this file in the same PR that changes:
 
-- the release matrix in [`.github/workflows/release.yml`](../.github/workflows/release.yml),
+- the release matrix in [`.github/workflows/release.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/release.yml),
 - the set of cargo features, or
 - the trusted/untrusted connector boundary.

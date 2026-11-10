@@ -45,6 +45,9 @@ jobs:
 
       - uses: actions/checkout@v5
 
+      - name: Check documentation links
+        run: python3 scripts/check_docs_links.py
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -371,7 +374,7 @@ jobs:
   # Two things drive the matrix:
   #   * Trino publishes no LTS and no SPI compatibility, so each supported band
   #     is compiled and fully tested against its own SPI. See
-  #     plans/trino_version_bands.md.
+  #     docs/integrations/TRINO_VERSION_BANDS.md.
   #   * Trino 482+ compiles to release 23, while Spark compiles to release 17,
   #     so the toolchains differ per connector.
   #########################

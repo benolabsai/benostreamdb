@@ -1,1 +1,0 @@
-../../governance/ARCHITECTURE_REVIEW_RESPONSE.md

@@ -117,7 +117,7 @@ Once Iceberg is gone, the only real axis is **Scala**:
   APIs are stable across 4.x; we no longer touch version-specific Iceberg).
   Add the `spark-4.2` profile (done) for compile/CI targeting.
 - **Trino**: two SPI builds, band `d` (482-483) and band `e` (484+); see
-  `trino_version_bands.md`.
+  `docs/integrations/TRINO_VERSION_BANDS.md`.
 Net: 2 Spark artifacts (2.12, 2.13) + 1 Trino, not per-minor.
 
 ## Sequenced milestones

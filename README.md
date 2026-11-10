@@ -18,7 +18,7 @@
 | Tier | Capabilities | Status |
 | :--- | :--- | :--- |
 | **Preview-Ready** | Embedded Python & Rust engine, Apache Iceberg (V2/V3) Parquet read/write, HNSW (Float32, BQ8, BQ4, SQ8) vector search, Voronoi Puffin sharding compaction, in-process CSR graph analytics (PageRank, shortest path), DuckDB/DataFusion SQL compatibility, Puffin sidecar management | ✅ Fully supported & tested for evaluation |
-| **Connectors** | [Apache Spark](docs/integrations/SPARK.md) (3.5 & 4.x, exactly-once writes), [Trino](docs/integrations/TRINO.md) (bands 482–483 and 484+), [dbt](docs/integrations/DBT.md) adapter, [MCP](docs/integrations/MCP.md) server (stdio + HTTP/SSE), [Flight SQL](docs/integrations/FLIGHT_SQL.md) | ⚠️ Functional; each guide lists the supported versions |
+| **Connectors** | [Apache Spark](https://www.benostreamdb.org/integrations/spark.html) (3.5 & 4.x, exactly-once writes), [Trino](https://www.benostreamdb.org/integrations/trino.html) (bands 482–483 and 484+), [dbt](https://www.benostreamdb.org/integrations/dbt.html) adapter, [MCP](https://www.benostreamdb.org/integrations/mcp.html) server (stdio + HTTP/SSE), [Flight SQL](https://www.benostreamdb.org/integrations/flight_sql.html) | ⚠️ Functional; each guide lists the supported versions |
 | **Experimental** | OpenSearch 7.10 & Qdrant REST gateway compatibility, Arrow Flight SQL server | ⚠️ Functional; APIs and performance tuning are actively evolving |
 
 > **Serverless by default.** BenoStreamDB runs directly against object storage and does not require a database server or always-on cluster. For applications that prefer a network-accessible database endpoint, BenoStreamDB also provides an optional Arrow Flight SQL server interface.
@@ -115,7 +115,7 @@ BenoStreamDB sits between two categories of system that do not overlap. Vector/g
 | **Deployment** | Managed cluster | Cluster | Embedded library / scale-to-zero |
 
 > **Supported platforms, cargo feature gates, the trusted/untrusted boundary, and
-> known limitations** are enumerated in [`docs/SUPPORT_MATRIX.md`](docs/SUPPORT_MATRIX.md).
+> known limitations** are enumerated in [`docs/SUPPORT_MATRIX.md`](https://www.benostreamdb.org/guides/support_matrix.html).
 
 ## ⚡ Iceberg V2/V3 Compatibility
 
@@ -429,7 +429,7 @@ LOAD flight;
 SELECT * FROM flight_sql_query('grpc://127.0.0.1:50051', 'SELECT * FROM documents');
 ```
 
-Full setup for each connector: [Flight SQL](docs/integrations/FLIGHT_SQL.md) · [Trino](docs/integrations/TRINO.md) · [Spark](docs/integrations/SPARK.md) · [dbt](docs/integrations/DBT.md).
+Full setup for each connector: [Flight SQL](https://www.benostreamdb.org/integrations/flight_sql.html) · [Trino](https://www.benostreamdb.org/integrations/trino.html) · [Spark](https://www.benostreamdb.org/integrations/spark.html) · [dbt](https://www.benostreamdb.org/integrations/dbt.html).
 
 
 ### Python Installation
@@ -475,7 +475,7 @@ Intel Arc and Data Center GPUs are supported natively on Linux.
 clinfo | grep Intel
 ```
 
-See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GPU setup instructions.
+See [Python Vector API Documentation](https://www.benostreamdb.org/guides/python_vector_api.html) for detailed GPU setup instructions.
 
 ### pgvector SQL Compatibility
 
@@ -512,7 +512,7 @@ LIMIT 10;
 > SELECT * FROM documents ORDER BY binary_quantize(embedding) <~> binary_quantize('[1, 0, 1]'::vector) LIMIT 10;
 > ```
 
-See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation and conversion guide.
+See [pgvector SQL Guide](https://www.benostreamdb.org/guides/pgvector_sql_guide.html) for complete documentation and conversion guide.
 
 ### Basic Usage
 
@@ -697,7 +697,7 @@ distance = bsdb.hamming_packed(binary1, binary2)
 **Supported Distance Metrics:**
 - L2 (Euclidean), Cosine, Inner Product, L1 (Manhattan), Hamming, Jaccard
 
-See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for complete API reference and GPU installation instructions
+See [Python Vector API Documentation](https://www.benostreamdb.org/guides/python_vector_api.html) for complete API reference and GPU installation instructions
 
 ### SQL queries (full DataFusion support with pgvector syntax)
 
@@ -737,13 +737,13 @@ table.compact()
 
 ## 📊 Performance
 
-We maintain reproducible benchmark suites under [`benchmarks/`](benchmarks/): an
+We maintain reproducible benchmark suites under [`benchmarks/`](https://github.com/benolabsai/benostreamdb/tree/main/benchmarks): an
 ANN-Benchmarks competitor matrix (FAISS, hnswlib, pgvector, LanceDB, OpenSearch,
 Neo4j+GDS, DuckDB, cuGraph), BEIR lexical/hybrid search, ClickBench SQL OLAP,
 graph analytics, and production workload/concurrency/recovery drills. They roll
 up into
-[`benchmarks/results/BENCHMARK_REPORT.md`](benchmarks/results/BENCHMARK_REPORT.md),
-and [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) gives the commands to
+[`benchmarks/results/BENCHMARK_REPORT.md`](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/results/BENCHMARK_REPORT.md),
+and [`docs/BENCHMARKING.md`](https://www.benostreamdb.org/guides/benchmarking.html) gives the commands to
 reproduce every number. Treat any figure that is not in one of those files as
 unverified.
 
@@ -973,7 +973,7 @@ table.add_index("transcript", "bm25")
 # Keep synchronized when Snowflake commits new data
 table.start_detached_sync_worker(interval_seconds=60)
 ```
-See the [Snowflake Integration Guide](docs/integrations/SNOWFLAKE.md) for full configuration and External Volume walkthrough.
+See the [Snowflake Integration Guide](https://www.benostreamdb.org/integrations/snowflake.html) for full configuration and External Volume walkthrough.
 
 ## 🔨 Building Connectors
 
@@ -1007,8 +1007,8 @@ Everything in this section is **optional**. The core engine and the Spark, Trino
 
 `bsdb-search` (`contrib/benostreamdb-search`, crate `benostreamdb-search`) serves an **OpenSearch 1.x / Elasticsearch 7.10**-compatible REST API — plus a **Qdrant**-compatible vector API — on top of the engine. It targets website search, document catalogs, and knowledge bases where a 50–200 ms query envelope is acceptable and object-storage-native, scale-to-zero hosting is desired.
 
-* **OpenSearch / Elasticsearch 7.10 (`:9200`)**: text indexing, bulk writes, and keyword search. See the [OpenSearch compatibility matrix](contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md).
-* **Qdrant (`:6333`)**: collections, point upsert/retrieve, payload and vector edits, aliases, and the universal query API. See the [Qdrant compatibility matrix](contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md).
+* **OpenSearch / Elasticsearch 7.10 (`:9200`)**: text indexing, bulk writes, and keyword search. See the [OpenSearch compatibility matrix](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md).
+* **Qdrant (`:6333`)**: collections, point upsert/retrieve, payload and vector edits, aliases, and the universal query API. See the [Qdrant compatibility matrix](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md).
 
 Both APIs are hosted concurrently from a single binary, share the same `AppState` and data files, and require zero data duplication.
 
@@ -1042,7 +1042,7 @@ results = search.hybrid_search(
 
 **Not supported (v1):** ILM (index lifecycle), multi-node sharding/replicas, and Kibana. Stateless authentication (API key / JWT, admin-only writes) *is* supported.
 
-**Background service:** `sudo benostreamdb install-service` installs the gateway as a `systemd`/`launchd` daemon. See [scripts/services/README.md](scripts/services/README.md) for configuration and uninstallation.
+**Background service:** `sudo benostreamdb install-service` installs the gateway as a `systemd`/`launchd` daemon. See [scripts/services/README.md](https://github.com/benolabsai/benostreamdb/blob/main/scripts/services/README.md) for configuration and uninstallation.
 
 ### MCP Server (AI Agent Tools)
 
@@ -1053,7 +1053,7 @@ results = search.hybrid_search(
 uvx benostreamdb-mcp --warehouse /path/to/warehouse
 ```
 
-MCP is treated as an **untrusted connector**: if `.benostream-policy.json` is absent, it is locked to read-only across persistent schemas (writes are limited to `scratch.*`). See [`contrib/benostreamdb-mcp/README.md`](contrib/benostreamdb-mcp/README.md) and [`docs/integrations/MCP.md`](docs/integrations/MCP.md).
+MCP is treated as an **untrusted connector**: if `.benostream-policy.json` is absent, it is locked to read-only across persistent schemas (writes are limited to `scratch.*`). See [`contrib/benostreamdb-mcp/README.md`](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-mcp/README.md) and [`docs/integrations/MCP.md`](https://www.benostreamdb.org/integrations/mcp.html).
 
 ## 🧪 Development
 
@@ -1135,7 +1135,7 @@ benostreamdb/
 - [ ] **Domain-Specific BM25 Analyzers**: Configurable table tokenizers (CamelCase code tokenizer, multilingual Snowball stemmers, CJK segmentation).
 - [x] **AI Agent Tools & Client Ecosystem**: Dedicated Model Context Protocol (MCP) server (`contrib/benostreamdb-mcp`) shipped. LangChain/LlamaIndex vector store adapters remain.
 
-*For the complete detailed roadmap and architecture status, see [docs/ROADMAP.md](docs/ROADMAP.md).*
+*For the complete detailed roadmap and architecture status, see [docs/ROADMAP.md](https://www.benostreamdb.org/guides/roadmap.html).*
 
 ## 🔗 Links
 
@@ -1151,7 +1151,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## 📄 License
 
-The crate is dual-licensed under **MIT AND Apache-2.0** (see [`Cargo.toml`](Cargo.toml)).
+The crate is dual-licensed under **MIT AND Apache-2.0** (see [`Cargo.toml`](https://github.com/benolabsai/benostreamdb/blob/main/Cargo.toml)).
 
 This project contains modified source code from various upstream open-source projects (including `hnsw_rs` for pre-filtering support), which were originally licensed under Apache 2.0. BenoStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.
 

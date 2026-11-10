@@ -37,7 +37,7 @@ length, together with the Rust soak harness (`cargo test --test soak -- --ignore
 
 ## Relationship to `test_oom.py`
 
-[`test_oom.py`](../../test_oom.py) was the one-off script that originally
+`test_oom.py` was the one-off script that originally
 surfaced the unbounded-concurrency OOM (it wrote 25 M vectors with no guard).
 `test_memory_backpressure.py` is the maintained, assertion-bearing successor: it
 exercises the same failure mode but asserts graceful degradation and is part of

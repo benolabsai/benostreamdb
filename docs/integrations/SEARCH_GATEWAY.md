@@ -11,8 +11,8 @@ The search gateway runs as a standalone daemon (`bsdb-search`) and exposes two d
 2. **Qdrant Vector REST Protocol (Port 6333)**: Compatibility for vector collections, point upserts, payload filtering, and nearest-neighbor search.
 
 > **Compatibility Scope:** The gateway implements a targeted **compatibility subset** covering mainstream ingestion, point lookups, and search endpoints. It does not replicate entire distributed cluster management features (e.g. cross-cluster replication, scripting, or Lucene plugin architectures). Review the specific compatibility matrices below for exact supported APIs:
-> - [OpenSearch / Elasticsearch 7.10 Compatibility Matrix](../OPENSEARCH_COMPATIBILITY.md)
-> - [Qdrant Compatibility Matrix](../QDRANT_COMPATIBILITY.md)
+> - [OpenSearch / Elasticsearch 7.10 Compatibility Matrix](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md)
+> - [Qdrant Compatibility Matrix](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md)
 
 ---
 

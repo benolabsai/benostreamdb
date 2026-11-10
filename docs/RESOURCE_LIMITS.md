@@ -191,7 +191,7 @@ in the service's `environment:` block.
 ## Validation
 
 Memory and disk behaviour under saturation is asserted by
-[`tests/stress/`](../tests/stress/README.md) — a low ingest high-water mark must
+[`tests/stress/`](https://github.com/benolabsai/benostreamdb/blob/main/tests/stress/README.md) — a low ingest high-water mark must
 pause and resume rather than OOM, and many commit cycles must stay durable. The
 long-running variants run on push via
-[`.github/workflows/soak.yml`](../.github/workflows/soak.yml).
+[`.github/workflows/soak.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/soak.yml).

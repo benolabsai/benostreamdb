@@ -6,9 +6,9 @@ markdown pages under [`docs/tutorials/`](../../docs/tutorials/).
 
 | Workflow | Python notebook | SQL / connector guide |
 | :--- | :--- | :--- |
-| AI / semantic retrieval via MCP | [`01_ai_retrieval_mcp.ipynb`](01_ai_retrieval_mcp.ipynb) | [`docs/tutorials/01_ai_retrieval_mcp.md`](../../docs/tutorials/01_ai_retrieval_mcp.md) |
-| JSON / document retrieval with a JSON-path index | [`02_json_document_retrieval.ipynb`](02_json_document_retrieval.ipynb) | [`docs/tutorials/02_json_document_retrieval.md`](../../docs/tutorials/02_json_document_retrieval.md) |
-| Graph traversal via `graph_neighbors(...)` | [`03_graph_traversal.ipynb`](03_graph_traversal.ipynb) | [`docs/tutorials/03_graph_traversal.md`](../../docs/tutorials/03_graph_traversal.md) |
+| AI / semantic retrieval via MCP | [`01_ai_retrieval_mcp.ipynb`](01_ai_retrieval_mcp.ipynb) | [`docs/tutorials/01_ai_retrieval_mcp.md`](../../docs/tutorials/01_AI_RETRIEVAL_MCP.md) |
+| JSON / document retrieval with a JSON-path index | [`02_json_document_retrieval.ipynb`](02_json_document_retrieval.ipynb) | [`docs/tutorials/02_json_document_retrieval.md`](../../docs/tutorials/02_JSON_DOCUMENT_RETRIEVAL.md) |
+| Graph traversal via `graph_neighbors(...)` | [`03_graph_traversal.ipynb`](03_graph_traversal.ipynb) | [`docs/tutorials/03_graph_traversal.md`](../../docs/tutorials/03_GRAPH_TRAVERSAL.md) |
 
 ## Running the notebooks
 

@@ -16,7 +16,7 @@ binary-compatible between releases, so the connector is built and tested per
 | `d` | 482-483 | current-minus |
 
 A plugin built for one band does not load on another. See
-[`plans/trino_version_bands.md`](../../plans/trino_version_bands.md) for the
+[`TRINO_VERSION_BANDS.md`](TRINO_VERSION_BANDS.md) for the
 measured SPI differences and the refresh procedure when a new release lands.
 
 ## Building

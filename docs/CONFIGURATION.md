@@ -153,7 +153,7 @@ catalog configuration surface.
 | `BSDB_MCP_CONFIG` | Full JSON configuration string. | None |
 | `BSDB_EMBEDDING_*` | Embedding generator settings (see [Embeddings](#embeddings)). | See above |
 
-See [`contrib/benostreamdb-mcp/README.md`](../contrib/benostreamdb-mcp/README.md#configuration-reference)
+See [`contrib/benostreamdb-mcp/README.md`](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-mcp/README.md)
 for the full CLI/JSON mapping.
 
 ### Search Gateway (`benostreamdb-search`)
@@ -161,7 +161,7 @@ for the full CLI/JSON mapping.
 The OpenSearch/Qdrant gateway is a separate component with its own
 configuration surface (`BSDB_SEARCH_*`, `BSDB_QDRANT_BIND`, `BSDB_QDRANT_PORT`).
 See the
-[search gateway README](../contrib/benostreamdb-search/README.md#configuration)
+[search gateway README](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/README.md)
 for the full table.
 
 ### Server binaries
@@ -177,7 +177,7 @@ The Flight SQL server (`benostreamdb-flight`) has its own variables:
 | `BSDB_WAREHOUSE` | Warehouse root for the server. | `./data` |
 | `BSDB_CATALOG_NAME` | Catalog name to expose. | From `benostream.toml` |
 
-See the [Flight SQL README](../server/flight_sql/README.md#configuration).
+See the [Flight SQL README](https://github.com/benolabsai/benostreamdb/blob/main/server/flight_sql/README.md).
 
 
 ### Cloud Storage & Telemetry
@@ -218,7 +218,7 @@ packaging workflows in this repository.
 | `BSDB_RELEASE_VERSION` | release workflow / dbt adapter | Forced version string for packaging. |
 | `BSDB_VERSION` | `docker-compose.production.yml` | Image tag for the search/Flight containers (`latest` by default). |
 
-See [Monitoring & Operations](monitoring.md) for the full metric catalog and the
+See [Monitoring & Operations](MONITORING.md) for the full metric catalog and the
 per-deployment-mode endpoints.
 
 ---

@@ -1,6 +1,6 @@
 # Tutorial 3 — Graph traversal via `graph_neighbors(...)`
 
-> The runnable Python version is [`examples/tutorials/03_graph_traversal.ipynb`](../../examples/tutorials/03_graph_traversal.ipynb).
+> The runnable Python version is [`examples/tutorials/03_graph_traversal.ipynb`](https://github.com/benolabsai/benostreamdb/blob/main/examples/tutorials/03_graph_traversal.ipynb).
 > This page is the SQL / connector form.
 
 Model a graph as an ordinary edge table, then traverse it directly in a `FROM`

@@ -1,22 +1,21 @@
-# Plan: Fix the CSR/SQL subgraph mismatch + Graph RAG feature specs
+# ADR-005: Graph RAG Feature Set (CSR/SQL Subgraph Fix + F1–F6)
 
-Status: implemented — Part 1 (CSR/SQL subgraph mismatch) is fixed and all six
-Part 2 features (F1–F6) have shipped. See the per-feature status notes below.
-Owner: architect
-Related: [`src/python/helpers.rs`](../src/python/helpers.rs), [`src/python/table.rs`](../src/python/table.rs), [`src/core/table/index_config.rs`](../src/core/table/index_config.rs), [`src/core/segment.rs`](../src/core/segment.rs), [`src/core/index/build_graph.rs`](../src/core/index/build_graph.rs), [`tests/python/test_csr_subgraph.py`](../tests/python/test_csr_subgraph.py)
+- **Status**: Implemented — Part 1 (CSR/SQL subgraph mismatch) is fixed and all six Part 2 features (F1–F6) have shipped. Promoted from `plans/graph_rag_roadmap.md`; see the per-feature status notes below.
+- **Owner**: architect
+- **Related**: [`src/python/helpers.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/helpers.rs), [`src/python/table.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/table.rs), [`src/core/table/index_config.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs), [`src/core/segment.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/segment.rs), [`src/core/index/build_graph.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/index/build_graph.rs), [`tests/python/test_csr_subgraph.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_csr_subgraph.py)
 
 ---
 
 ## Part 1 — Fix the CSR/SQL subgraph mismatch
 
 **Status: fixed.** The duplicate `index_configs[column]` entry for `CsrGraph` is
-no longer created — [`add_index`](../src/core/table/index_config.rs:212) now
+no longer created — [`add_index`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs#L212) now
 guards the spurious entry with
 `if target_col != column && !matches!(algorithm, IndexAlgorithm::CsrGraph { .. })`,
 so a graph index is keyed solely by its `src_column` and the forward CSR loads
 correctly. The regression coverage lives in
-[`tests/python/test_csr_subgraph.py`](../tests/python/test_csr_subgraph.py) and
-[`tests/integration_test_csr_graph.rs`](../tests/integration_test_csr_graph.rs).
+[`tests/python/test_csr_subgraph.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_csr_subgraph.py) and
+[`tests/integration_test_csr_graph.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration_test_csr_graph.rs).
 
 ### Symptom
 
@@ -37,12 +36,12 @@ A graph index is identified in the manifest by `column_name`, but `add_index` po
 
 Trace:
 
-1. `add_index(column, CsrGraph { src_column, dst_column })` sets `target_col = src_column` ([`index_config.rs:134`](../src/core/table/index_config.rs:134)).
+1. `add_index(column, CsrGraph { src_column, dst_column })` sets `target_col = src_column` ([`index_config.rs:134`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs#L134)).
 2. `set_index_columns({ src_column: [CsrGraph] })` sets `index_configs[src_column] = CsrGraph` — correct.
-3. Because `target_col != column`, the block at [`index_config.rs:203`](../src/core/table/index_config.rs:203) **also** sets `index_configs[column] = CsrGraph` — spurious.
-4. The segment writer iterates `index_configs` ([`segment.rs:831`](../src/core/segment.rs:831)) and builds one CSR per key, each from `(src_column, dst_column)`, naming the file `{seg}.{key}.graph.csr.*` ([`build_graph.rs:100`](../src/core/index/build_graph.rs:100)).
-5. The manifest `column_name` is parsed from the filename ([`segment.rs:159`](../src/core/segment.rs:159)).
-6. `load_multi_csr(table, graph_column)` matches `column_name == graph_column` ([`helpers.rs:90`](../src/python/helpers.rs:90)) and treats the CSR as forward out-neighbours.
+3. Because `target_col != column`, the block at [`index_config.rs:203`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs#L203) **also** sets `index_configs[column] = CsrGraph` — spurious.
+4. The segment writer iterates `index_configs` ([`segment.rs:831`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/segment.rs#L831)) and builds one CSR per key, each from `(src_column, dst_column)`, naming the file `{seg}.{key}.graph.csr.*` ([`build_graph.rs:100`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/index/build_graph.rs#L100)).
+5. The manifest `column_name` is parsed from the filename ([`segment.rs:159`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/segment.rs#L159)).
+6. `load_multi_csr(table, graph_column)` matches `column_name == graph_column` ([`helpers.rs:90`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/helpers.rs#L90)) and treats the CSR as forward out-neighbours.
 
 For the test's two calls:
 
@@ -67,9 +66,9 @@ flowchart TD
 
 ### Fix
 
-In `add_index`, do not create the duplicate `index_configs[column]` entry for `CsrGraph`. A graph index is identified solely by its `src_column`, which is exactly the contract documented in [`helpers.rs:71`](../src/python/helpers.rs:71).
+In `add_index`, do not create the duplicate `index_configs[column]` entry for `CsrGraph`. A graph index is identified solely by its `src_column`, which is exactly the contract documented in [`helpers.rs:71`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/helpers.rs#L71).
 
-Change [`index_config.rs:203`](../src/core/table/index_config.rs:203) from:
+Change [`index_config.rs:203`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs#L203) from:
 
 ```rust
 if target_col != column {
@@ -85,14 +84,14 @@ Result: `index_configs` has exactly one entry per graph index, keyed by `src_col
 
 ### Migration
 
-Existing tables built with the buggy code have mislabeled CSR files, and the backfill idempotency check ([`entry_has_index`](../src/core/table/index_config.rs:660)) would skip rebuilding them. Add a one-time rebuild trigger:
+Existing tables built with the buggy code have mislabeled CSR files, and the backfill idempotency check ([`entry_has_index`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs#L660)) would skip rebuilding them. Add a one-time rebuild trigger:
 
 - Record a `graph_index_format` version in the manifest (or a sentinel in the index metadata).
 - On open, if the version is absent, force `backfill_indexes` for graph columns.
 
 ### Tests
 
-- Fix the 7 failing equivalence tests in [`test_csr_subgraph.py`](../tests/python/test_csr_subgraph.py).
+- Fix the 7 failing equivalence tests in [`test_csr_subgraph.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_csr_subgraph.py).
 - Add a regression test: with both forward and reverse indexes, `has_graph_index("source")` and `has_graph_index("target")` are both true, and CSR directed/undirected match SQL for hops 1 and 2.
 - Add a test: with only a forward index, `has_graph_index("source") == True` and `has_graph_index("target") == False`.
 - Add a test: `add_index` on a graph column does not create a spurious `index_columns` entry for the ignored `column` argument.
@@ -114,19 +113,19 @@ flowchart LR
 
 ### F1 — Leiden community detection
 
-- **Status**: ✅ Implemented. [`csr_leiden`](../src/core/algorithms/communities.rs:277) / [`csr_leiden_seeded`](../src/core/algorithms/communities.rs:300) in Rust, the [`graph_leiden_communities`](../src/core/sql/graph_udf/leiden_communities.rs:76) SQL UDF, and `Table.leiden_communities()` / `communities(algorithm="leiden")` in Python. Leiden is the default community algorithm.
-- **Goal**: produce well-connected communities, fixing Louvain's badly-connected-community failure mode. Listed as an open question in [`docs/ROADMAP.md`](../docs/ROADMAP.md:18).
+- **Status**: ✅ Implemented. [`csr_leiden`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/algorithms/communities.rs#L277) / [`csr_leiden_seeded`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/algorithms/communities.rs#L300) in Rust, the [`graph_leiden_communities`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/sql/graph_udf/leiden_communities.rs#L76) SQL UDF, and `Table.leiden_communities()` / `communities(algorithm="leiden")` in Python. Leiden is the default community algorithm.
+- **Goal**: produce well-connected communities, fixing Louvain's badly-connected-community failure mode. Listed as an open question in [`docs/ROADMAP.md`](https://www.benostreamdb.org/guides/roadmap.html).
 - **Design**: implement Leiden (local move + refinement + aggregation) in Rust under `src/core/algorithms/leiden.rs`, reusing the CSR adjacency for the local-move phase. Keep Louvain as the default; select via an `algorithm` parameter.
 - **API**: `Table.leiden_communities(resolution=1.0, max_levels=...)`; `summarize_communities(..., algorithm="leiden")`; `graph_rag_search(..., community_algorithm="leiden")`.
-- **Data model**: same output schema as [`louvain_communities`](../python/benostreamdb/__init__.py:591) — a `community` list column.
+- **Data model**: same output schema as [`louvain_communities`](https://github.com/benolabsai/benostreamdb/blob/main/python/benostreamdb/__init__.py#L591) — a `community` list column.
 - **Acceptance**: modularity at least equal to Louvain on the wiki demo; every community is internally connected; deterministic given a seed.
 - **Dependencies**: none.
 
 ### F2 — Token-budget-aware traversal truncation
 
-- **Status**: ✅ Implemented. `max_nodes` is threaded through [`GraphNeighborhoodOptions`](../src/core/table/graph.rs:36), `Table::graph_neighborhood`, and the Python `subgraph` / `graph_neighbors` / `subgraph_nodes` / `core_subgraph_edges` APIs; `graph_rag_search` exposes it as `traversal_max_nodes`.
+- **Status**: ✅ Implemented. `max_nodes` is threaded through [`GraphNeighborhoodOptions`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/graph.rs#L36), `Table::graph_neighborhood`, and the Python `subgraph` / `graph_neighbors` / `subgraph_nodes` / `core_subgraph_edges` APIs; `graph_rag_search` exposes it as `traversal_max_nodes`.
 - **Goal**: stop BFS expansion when the accumulated context budget is exhausted, not only by degree. `max_degree` is a degree proxy; this is the true budget.
-- **Design**: extend [`csr_bfs_visited`](../src/python/helpers.rs:137) with `max_nodes: Option<usize>`. Track `visited.len()`; stop expanding once the cap is reached. Optionally rank the frontier by PPR or degree so the most relevant nodes are kept. The SQL fallback applies the same cap after `bfs_visited`.
+- **Design**: extend [`csr_bfs_visited`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/helpers.rs#L137) with `max_nodes: Option<usize>`. Track `visited.len()`; stop expanding once the cap is reached. Optionally rank the frontier by PPR or degree so the most relevant nodes are kept. The SQL fallback applies the same cap after `bfs_visited`.
 - **API**: `subgraph(..., max_nodes=...)`; `graph_rag_search(..., context_budget_tokens=..., max_nodes=...)`.
 - **Data model**: none.
 - **Acceptance**: bounded memory regardless of graph density; deterministic; documented interaction with `max_degree`.
@@ -136,7 +135,7 @@ flowchart LR
 
 - **Status**: ✅ Implemented. `Table.summarize_communities(..., llm=..., embed=..., report_column=...)` generates and embeds per-community reports.
 - **Goal**: model-authored community summaries, embedded as first-class retrieval units (Microsoft GraphRAG parity).
-- **Design**: extend [`summarize_communities`](../python/benostreamdb/__init__.py:1484) with an optional `llm` callable and an `embed` callable. Generate a report per community from member text, store it, and build an HNSW index on the report embedding.
+- **Design**: extend [`summarize_communities`](https://github.com/benolabsai/benostreamdb/blob/main/python/benostreamdb/__init__.py#L1484) with an optional `llm` callable and an `embed` callable. Generate a report per community from member text, store it, and build an HNSW index on the report embedding.
 - **API**: `summarize_communities(doc_table, target_uri, llm=..., embed=..., report_column="report")`.
 - **Data model**: community table gains `report` (string) and `embedding` (list of float32); HNSW index on `embedding`.
 - **Acceptance**: global search can retrieve communities by vector similarity; reports are cached and resumable.

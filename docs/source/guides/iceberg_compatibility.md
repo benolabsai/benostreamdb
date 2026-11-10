@@ -1,1 +1,0 @@
-../../ICEBERG_COMPATIBILITY.md

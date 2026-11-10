@@ -1,6 +1,6 @@
 # Zero-copy reads with the Trino Iceberg connector
 
-> **Authoritative Guide:** For the comprehensive guide to Apache Iceberg storage architecture, Python APIs, and conformance specifications, see [Apache Iceberg Storage & Zero-Copy Interoperability](../ICEBERG_STORAGE.md).
+> **Authoritative Guide:** For the comprehensive guide to Apache Iceberg storage architecture, Python APIs, and conformance specifications, see [Apache Iceberg Storage & Zero-Copy Interoperability](https://www.benostreamdb.org/guides/iceberg_storage.html).
 
 BenoStreamDB already stores its data as Parquet and already writes Iceberg-shaped
 metadata. Making that metadata **spec-compliant** means an Iceberg reader can open
@@ -15,16 +15,16 @@ part of the contract:
 
 | Layer | What readers need | Where we write it |
 | --- | --- | --- |
-| `metadata/vN.metadata.json` | `TableMetadataParser`-valid JSON | [`src/core/metadata.rs`](../../src/core/metadata.rs) |
-| `_manifest/snap-*.avro` + `*-m*.avro` + `*-d*.avro` | Manifest list, plus `schema` / `partition-spec` / `partition-spec-id` / `format-version` / `content` Avro user metadata; one content type per manifest | [`src/core/iceberg/writer.rs`](../../src/core/iceberg/writer.rs) |
-| `*.parquet` | `field_id` on every column, including nested elements | [`src/core/segment.rs`](../../src/core/segment.rs) |
-| `del-pos-*.parquet` | `file_path` / `pos` with Iceberg's reserved ids, rows naming absolute data-file URIs | [`src/core/iceberg/delete.rs`](../../src/core/iceberg/delete.rs) |
+| `metadata/vN.metadata.json` | `TableMetadataParser`-valid JSON | [`src/core/metadata.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/metadata.rs) |
+| `_manifest/snap-*.avro` + `*-m*.avro` + `*-d*.avro` | Manifest list, plus `schema` / `partition-spec` / `partition-spec-id` / `format-version` / `content` Avro user metadata; one content type per manifest | [`src/core/iceberg/writer.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/iceberg/writer.rs) |
+| `*.parquet` | `field_id` on every column, including nested elements | [`src/core/segment.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/segment.rs) |
+| `del-pos-*.parquet` | `file_path` / `pos` with Iceberg's reserved ids, rows naming absolute data-file URIs | [`src/core/iceberg/delete.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/iceberg/delete.rs) |
 
 ### 1. Table metadata
 
 Iceberg's parser is stricter than "looks like Iceberg". The following are
 enforced at the metadata boundary (see `TableMetadata::normalize_iceberg_metadata`
-and the manual `Serialize` impls in [`src/core/manifest/types.rs`](../../src/core/manifest/types.rs)):
+and the manual `Serialize` impls in [`src/core/manifest/types.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/types.rs)):
 
 - every schema is `{"type":"struct","schema-id":N,"fields":[...]}` — `schema-id`
   is kebab-case, and `type` is required (an alias on deserialize is not enough);
@@ -155,7 +155,7 @@ Verified output for a table with `id BIGINT, name VARCHAR, vec DOUBLE[]`:
 
 ## Verification
 
-- [`tests/integration_test_iceberg_zero_copy.rs`](../../tests/integration_test_iceberg_zero_copy.rs)
+- [`tests/integration_test_iceberg_zero_copy.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration_test_iceberg_zero_copy.rs)
   asserts all three layers after a real commit: metadata keys, the Avro user
   metadata on the manifest, and the Parquet field ids (including `301` on the
   vector element).

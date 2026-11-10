@@ -599,7 +599,7 @@ def reindex_and_preload(bsdb, args, mode: str):
     # Index-only compaction: build the table-level, cluster-keyed artifact.
     #
     # This is the "global clustering" artifact from
-    # plans/global_clustering_compaction.md: one Puffin file, not owned by any
+    # docs/architecture/ADR_002_GLOBAL_VECTOR_CLUSTERING.md: one Puffin file, not owned by any
     # data file, keyed by global cluster, whose nodes carry (segment_id, row_id).
     # The Parquet files are read once and never rewritten. The query path
     # (read_expr_stream_async) prefers this artifact when present, so the sweep

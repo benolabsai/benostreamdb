@@ -289,11 +289,11 @@ Themes are ordered by priority.
     lakehouse ingestion.
   - **Placement: a new `contrib/benostreamdb-ingest` crate, not the core.** The
     publish/subscribe seam already lives in the core — the
-    [`WorkCoordinator` trait](../src/core/table/coordinator.rs:89) (with
+    [`WorkCoordinator` trait](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/coordinator.rs#L89) (with
     `WorkUnit` / `Lease`), its only implementation
-    [`ObjectStoreCoordinator`](../src/core/table/coordinator.rs:112), and the
+    [`ObjectStoreCoordinator`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/coordinator.rs#L112), and the
     claim → read → write → commit loop in
-    [`ingest_with_coordinator`](../src/core/table/ingest.rs:304). A broker
+    [`ingest_with_coordinator`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/ingest.rs#L304). A broker
     adapter is therefore just another `impl WorkCoordinator`, so **no new core
     API is required**:
     ```

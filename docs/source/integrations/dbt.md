@@ -1,1 +1,0 @@
-../../integrations/DBT.md

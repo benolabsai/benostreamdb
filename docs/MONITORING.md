@@ -33,7 +33,7 @@ process.
 > **⚠️ Security:** none of these endpoints authenticate. Run every BenoStreamDB
 > server on a **trusted internal network**, behind a gateway/reverse proxy that
 > terminates TLS and enforces authentication. Do **not** expose them to the
-> public internet. See [SECURITY.md](../SECURITY.md).
+> public internet. See [SECURITY.md](https://github.com/benolabsai/benostreamdb/blob/main/SECURITY.md).
 
 ## Metric catalog
 

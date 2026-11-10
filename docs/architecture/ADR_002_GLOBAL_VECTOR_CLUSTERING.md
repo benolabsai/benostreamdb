@@ -1,8 +1,8 @@
-# Global Vector Clustering via Index-Only Compaction
+# ADR-002: Global Vector Clustering via Index-Only Compaction
 
-**Status:** Design note (revised)
-**Date:** November 2026
-**Context:** [`COHERE_10M_BOTTLENECK_ANALYSIS.md`](file:///home/ralbright/projects/benolabs/patent-proposal/paper/COHERE_10M_BOTTLENECK_ANALYSIS.md) § 6.4
+- **Status**: Implemented (v0.15.0) — promoted from `plans/global_clustering_compaction.md`
+- **Date**: November 2026
+**Context:** ``COHERE_10M_BOTTLENECK_ANALYSIS.md`` § 6.4
 
 ---
 
@@ -10,7 +10,7 @@
 
 Should compaction run after ingestion to get global vector clustering?
 
-**Yes — but only the index needs compacting, not the data.** The first draft of this note proposed rewriting the Parquet files. That is unnecessary and strictly worse. The index artifact can be reorganized by global cluster while the data files stay in arrival order, because a graph node already carries `(segment_id, row_id)` and the fetch path resolves rows by segment ([`fetch_results_by_id`](src/core/table/read.rs:1523)).
+**Yes — but only the index needs compacting, not the data.** The first draft of this note proposed rewriting the Parquet files. That is unnecessary and strictly worse. The index artifact can be reorganized by global cluster while the data files stay in arrival order, because a graph node already carries `(segment_id, row_id)` and the fetch path resolves rows by segment ([`fetch_results_by_id`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L1523)).
 
 | Approach | Bytes rewritten | Time-range / id-range scans | New code |
 |---|---:|---|---|
@@ -23,13 +23,13 @@ Should compaction run after ingestion to get global vector clustering?
 
 ## 2. Why the Index Must Be Reorganized (and the Data Need Not Be)
 
-Today each segment trains its own k-means over its own 400,000 rows ([`hnsw_ivf.rs`](src/core/index/hnsw_ivf.rs:850), `n_lists = sqrt(n)/5` → 126 clusters). The Puffin sidecar for segment $S$ contains only the members of cluster $C$ that happen to live in $S$.
+Today each segment trains its own k-means over its own 400,000 rows ([`hnsw_ivf.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/index/hnsw_ivf.rs#L850), `n_lists = sqrt(n)/5` → 126 clusters). The Puffin sidecar for segment $S$ contains only the members of cluster $C$ that happen to live in $S$.
 
 If you train global centroids but leave the sidecars per-segment, every sidecar still holds partial clusters. A probe for global cluster $C$ must visit all 25 segments to collect $C$'s 3,175 members — 25 partial reads instead of one whole read. The router would map one global cluster to 25 `(segment, local_cluster)` pairs.
 
 **Partial clusters are penalized by per-cluster overhead, not by bytes.** The measured cost is ~0.23 ms per cluster read (8 clusters → 21.6 ms, 200 → 66.3 ms). Sixteen global clusters split across 25 segments is 400 partial reads ≈ 92 ms — worse than today's 200 whole clusters at 66 ms, even though the bytes are identical. So the cluster must be *whole* in the index.
 
-**But "whole in the index" does not require "contiguous in the data."** A graph node already carries `(segment_id, row_id)`, and [`fetch_results_by_id`](src/core/table/read.rs:1523) groups results by segment and reads rows by local id. The index can therefore hold a cluster whose members live in 25 different Parquet files, and the final payload fetch still resolves correctly.
+**But "whole in the index" does not require "contiguous in the data."** A graph node already carries `(segment_id, row_id)`, and [`fetch_results_by_id`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L1523) groups results by segment and reads rows by local id. The index can therefore hold a cluster whose members live in 25 different Parquet files, and the final payload fetch still resolves correctly.
 
 So the sequence is: **global k-means → assign every row a cluster id → rewrite the index artifact keyed by cluster (nodes keep their `(segment_id, row_id)`) → rebuild the router from global centroids.** The Parquet files are never touched.
 
@@ -39,12 +39,12 @@ So the sequence is: **global k-means → assign every row a cluster id → rewri
 
 | Piece | Location | State |
 |---|---|---|
-| `rewrite_data_files` / `compact` | [`maintenance.rs`](src/core/table/maintenance.rs:48) | Implemented |
-| `CompactionOptions` | [`compaction.rs`](src/core/compaction.rs:25) | Implemented |
-| `ClusteringOptions { columns, strategy }` | [`compaction.rs`](src/core/compaction.rs:19) | Implemented — `zorder` \| `hilbert` |
-| `compact_after` on ingest | [`ingest.rs`](src/core/table/ingest.rs:43) | Implemented |
+| `rewrite_data_files` / `compact` | [`maintenance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/maintenance.rs#L48) | Implemented |
+| `CompactionOptions` | [`compaction.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/compaction.rs#L25) | Implemented |
+| `ClusteringOptions { columns, strategy }` | [`compaction.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/compaction.rs#L19) | Implemented — `zorder` \| `hilbert` |
+| `compact_after` on ingest | [`ingest.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/ingest.rs#L43) | Implemented |
 | GPU k-means assignment | `crate::core::index::gpu::compute_kmeans_assignment` | Implemented |
-| Per-segment k-means | [`hnsw_ivf.rs`](src/core/index/hnsw_ivf.rs:872) | Implemented |
+| Per-segment k-means | [`hnsw_ivf.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/index/hnsw_ivf.rs#L872) | Implemented |
 
 **The gap:** `ClusteringOptions.columns` is `Vec<String>` of scalar columns, and `rewrite_data_files` rewrites *data*. Neither is what we want. What is missing is a **table-level index artifact** — a Puffin file not owned by any single segment, keyed by global cluster, whose nodes carry `(segment_id, row_id)`.
 
@@ -72,7 +72,7 @@ ingest (append-only, arrival order)          <- unchanged
 
 Steps 1–3 are new. Step 4 is a new build path but reuses the existing quantizer and HNSW builder. Steps 5–7 are manifest and router plumbing.
 
-**The Parquet files are never rewritten.** The cluster artifact is derived from them, and the `(segment_id, row_id)` in each node is what lets [`fetch_results_by_id`](src/core/table/read.rs:1523) resolve the top-k rows afterwards.
+**The Parquet files are never rewritten.** The cluster artifact is derived from them, and the `(segment_id, row_id)` in each node is what lets [`fetch_results_by_id`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L1523) resolve the top-k rows afterwards.
 
 **Why this is cheaper than it sounds:** the codes are recomputed from Parquet rather than copied from 25 sidecars, so the build is a single sequential pass over the data plus a 10.75 GB write. No read-modify-write of the existing sidecars, and no 30.97 GB Parquet rewrite.
 
@@ -151,7 +151,7 @@ Two clauses here are the ones worth having, and neither is in the current draft:
 - **"not owned by any single data file"** — this is the structural difference from Borycki's Puffin-backed DiskANN, which attaches the graph to a data file. It is also the clause that makes index-only reorganization possible at all.
 - **"contiguous in the artifact while remaining non-contiguous in the data files"** — this is the decoupling, stated as a positive technical fact rather than a negative limitation, and it is directly verifiable by inspecting the artifact against the data layout.
 
-The delta-artifact clause covers continuous ingestion. All three should be added to [`CLAIM_BREADTH_STRATEGY.md`](file:///home/ralbright/projects/benolabs/patent-proposal/paper/CLAIM_BREADTH_STRATEGY.md) § 4 Family G, and "data-file co-location" should be added to the alternative-embodiments list as the variant we deliberately do *not* require.
+The delta-artifact clause covers continuous ingestion. All three should be added to ``CLAIM_BREADTH_STRATEGY.md`` § 4 Family G, and "data-file co-location" should be added to the alternative-embodiments list as the variant we deliberately do *not* require.
 
 ---
 

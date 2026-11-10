@@ -44,7 +44,7 @@ Untrusted clients ──► Gateway / reverse proxy (TLS + authn) ──► inte
 ```
 
 The embedded library (Python/Rust) is in-process and inherits the trust boundary
-of the host application. See [SECURITY.md](../SECURITY.md) for the full posture.
+of the host application. See [SECURITY.md](https://github.com/benolabsai/benostreamdb/blob/main/SECURITY.md) for the full posture.
 
 ## GPU Acceleration (Optional)
 
@@ -312,7 +312,7 @@ table.vacuum(retention_versions=10)
 The Phase-1 synthetic datasets, their generators, and the associated
 micro-benchmark harnesses have been removed from the repository. The maintained,
 measured end-to-end workload is the full-site Wikipedia Graph RAG demo — see
-[`examples/web_ui/README.md`](../examples/web_ui/README.md) and
+[`examples/web_ui/README.md`](https://github.com/benolabsai/benostreamdb/blob/main/examples/web_ui/README.md) and
 [`docs/BENCHMARKING.md`](BENCHMARKING.md).
 
 ## Phase 2: Nessie Integration (Next)
@@ -518,7 +518,7 @@ benostreamdb/
 
 ## 🤝 Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
+We welcome contributions! See [CONTRIBUTING.md](https://github.com/benolabsai/benostreamdb/blob/main/CONTRIBUTING.md) for guidelines.
 
 ## 📄 License
 
@@ -547,7 +547,7 @@ This guide covers two ways to use BenoStreamDB:
 
 1. **The `bsdb-search` REST server** — an OpenSearch / Elasticsearch 7.10-compatible
    API (plus a Qdrant v1.x-compatible API; see
-   [QDRANT_COMPATIBILITY.md](QDRANT_COMPATIBILITY.md)) served on top of the
+   [QDRANT_COMPATIBILITY.md](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md)) served on top of the
    BenoStreamDB engine.
 2. **The Python client** — direct, in-process access to the engine via `pyo3` bindings.
 
@@ -638,7 +638,7 @@ curl -s localhost:9200/metrics
 | Refresh | `POST /{index}/_refresh`, `POST /_refresh` |
 | Metrics | `GET /metrics` (Prometheus text format) |
 
-See [OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) for the full
+See [OPENSEARCH_COMPATIBILITY.md](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md) for the full
 supported / unsupported matrix.
 
 ---
@@ -729,6 +729,6 @@ pytest benostreamdb-search/tests/test_search_api.py
 
 ## Next steps
 
-- [OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) — full API compatibility matrix.
-- [OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) — design and positioning.
-- [README.md](../README.md) — core engine features, Iceberg compliance, and query engines.
+- [OPENSEARCH_COMPATIBILITY.md](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md) — full API compatibility matrix.
+- [OPENSEARCH_COMPATIBILITY.md](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md) — design and positioning.
+- [README.md](https://github.com/benolabsai/benostreamdb/blob/main/README.md) — core engine features, Iceberg compliance, and query engines.

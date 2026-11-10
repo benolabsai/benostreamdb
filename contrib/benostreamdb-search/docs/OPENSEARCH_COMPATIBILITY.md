@@ -216,7 +216,7 @@ Before implementing new features, we must establish a production-readiness basel
 
 ### 1.2 Documentation Readiness Check
 - **API Reference Compilation**: Verify that `cargo doc --no-deps` builds cleanly without warnings or broken intra-doc links.
-- **Getting Started Guide**: Ensure [INSTALLATION.md](INSTALLATION.md) is up-to-date with current APIs and dependency instructions.
+- **Getting Started Guide**: Ensure [INSTALLATION.md](https://www.benostreamdb.org/guides/installation.html) is up-to-date with current APIs and dependency instructions.
 - **API Coverage**: Confirm all public catalog methods, index structures, and configuration keys are fully documented.
 
 ---

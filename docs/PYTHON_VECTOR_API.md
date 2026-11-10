@@ -7,7 +7,7 @@ BenoStreamDB provides a high-performance Python API for batch vector distance co
 > [!NOTE]
 > **Table Vector Search vs. Standalone Kernels:**
 > - For **Table Vector Search via SQL** (using standard PostgreSQL pgvector operators `<=>`, `<->`, `<#>` in DataFusion), see the [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md).
-> - For **Table Vector Search via Python** (`table.vector_search()`, `table.hybrid_search()`), see the [2-Minute Quickstart](QUICKSTART.md) and [Python Client Guide](integrations/PYTHON.md).
+> - For **Table Vector Search via Python** (`table.vector_search()`, `table.hybrid_search()`), see the [2-Minute Quickstart](QUICKSTART.md) and [Python Client Guide](https://www.benostreamdb.org/integrations/python.html).
 > - For **Index Configuration & Quantizers** (HNSW, TurboQuant TQ8/TQ4, SQ8, IVF), see [Configuration Reference](CONFIGURATION.md).
 > - This document specifically details the **standalone, in-memory batch vector distance kernels** on CPU/GPU.
 
@@ -585,7 +585,7 @@ assert vec1.shape == vec2.shape
 
 ## Examples
 
-See [examples/python_distance_api_examples.py](../examples/python_distance_api_examples.py) for complete working examples.
+See [examples/python_distance_api_examples.py](https://github.com/benolabsai/benostreamdb/blob/main/examples/python_distance_api_examples.py) for complete working examples.
 
 ## See Also
 
@@ -968,7 +968,7 @@ cargo run -p benostreamdb-search --bin bsdb-search
 | `GET`/`POST` | `/collections/aliases` | List / create / delete / rename aliases. |
 
 > [!NOTE]
-> See [QDRANT_COMPATIBILITY.md](QDRANT_COMPATIBILITY.md) for the full support
+> See [QDRANT_COMPATIBILITY.md](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md) for the full support
 > matrix, score semantics, and known approximations.
 
 ## Error Handling

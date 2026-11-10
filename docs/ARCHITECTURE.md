@@ -19,7 +19,7 @@ Authoritative Storage        Advisory Index Overlay
 BenoStreamDB attaches persistent, reconstructible sidecar index files *alongside* standard Parquet files:
 *   **100% Format Compatibility**: Standard data engines (Spark, Trino, DuckDB, Pandas) read the underlying Parquet and Iceberg tables directly at native speed.
 *   **O(log N) Accelerated Retrieval**: BenoStreamDB-aware query engines and REST search gateways leverage inverted bitmap and vector indexes for low-latency queries directly on object storage.
-*   **The Overlay Invariant**: Indexes are derived state. If an index file is absent, corrupted, or stale, queries safely degrade to Parquet scanning without failing or returning incorrect results. See [ADR-001: Tightened Overlay Index Artifact Contract & Compound Puffin Bundles](architecture/ADR_001_TIGHTENED_INDEX_OVERLAY_CONTRACT.md).
+*   **The Overlay Invariant**: Indexes are derived state. If an index file is absent, corrupted, or stale, queries safely degrade to Parquet scanning without failing or returning incorrect results. See [ADR-001: Tightened Overlay Index Artifact Contract & Compound Puffin Bundles](https://www.benostreamdb.org/guides/adr_001.html).
 
 ---
 
@@ -30,7 +30,7 @@ Data is stored in immutable **Segments** pairing open columnar storage with advi
 1.  **Authoritative Raw Data**:
     *   `data/segment_id.parquet`: Standard Apache Iceberg columnar data files written with ZSTD compression and dictionary encoding. 100% readable by external engines (DuckDB, Spark, Trino, Polars).
 2.  **Advisory Secondary Indexes (Apache Iceberg Puffin Compound Bundles)**:
-    *   `metadata/segment_id.puffin`: As specified in [ADR-001](architecture/ADR_001_TIGHTENED_INDEX_OVERLAY_CONTRACT.md), production deployments consolidate secondary index artifacts into standard Apache Iceberg Puffin (`.puffin`) compound bundles. A single `.puffin` file encapsulates Roaring Bitmap inverted indexes, BM25 term frequencies, and Voronoi-clustered HNSW/TurboQuant vector graphs queried via HTTP byte-range offsets, preventing cloud object count explosion.
+    *   `metadata/segment_id.puffin`: As specified in [ADR-001](https://www.benostreamdb.org/guides/adr_001.html), production deployments consolidate secondary index artifacts into standard Apache Iceberg Puffin (`.puffin`) compound bundles. A single `.puffin` file encapsulates Roaring Bitmap inverted indexes, BM25 term frequencies, and Voronoi-clustered HNSW/TurboQuant vector graphs queried via HTTP byte-range offsets, preventing cloud object count explosion.
     *   *(Uncompacted / Local Debug Mode)*: Prior to Voronoi cluster compaction (`rebuild_cluster_index`), transient per-column sidecars (`.inv.parquet`, `.bm25.parquet`, `.centroids.parquet`, `.hnsw.graph`) may be emitted before `compact()` or `vacuum()` merges them into compound Puffin bundles.
 3.  **Iceberg Table Metadata**:
     *   `_manifest/v{N}.avro`: Standard Iceberg V2/V3 snapshot manifests and manifest lists.
@@ -92,5 +92,5 @@ Clusters [0 .. K0]             Clusters [K0+1 .. K1]          Clusters [K1+1 .. 
 
 BenoStreamDB exposes its columnar storage and index overlays via standard REST protocols:
 *   **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for `_search`, `_bulk`, `_mapping`, and `_cat/indices`.
-*   **Qdrant Vector API (Port 6333)**: Qdrant v1.x REST emulation — collections, point upsert/retrieve, payload & vector edits, vector search, aliases, and the universal query API. See [QDRANT_COMPATIBILITY.md](QDRANT_COMPATIBILITY.md).
+*   **Qdrant Vector API (Port 6333)**: Qdrant v1.x REST emulation — collections, point upsert/retrieve, payload & vector edits, vector search, aliases, and the universal query API. See [QDRANT_COMPATIBILITY.md](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md).
 *   **Arrow Flight SQL (Port 50051)**: Low-latency zero-copy gRPC queries for analytical tools.

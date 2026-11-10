@@ -1,6 +1,6 @@
 # Tutorial 1 — AI / semantic retrieval via MCP
 
-> The runnable Python version is [`examples/tutorials/01_ai_retrieval_mcp.ipynb`](../../examples/tutorials/01_ai_retrieval_mcp.ipynb).
+> The runnable Python version is [`examples/tutorials/01_ai_retrieval_mcp.ipynb`](https://github.com/benolabsai/benostreamdb/blob/main/examples/tutorials/01_ai_retrieval_mcp.ipynb).
 > This page is the SQL / connector form for Spark, Trino, dbt, Flight SQL, MCP, and Rust.
 
 Build a document corpus with embeddings, index it with HNSW, and run the

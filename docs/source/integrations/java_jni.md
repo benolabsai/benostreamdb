@@ -1,1 +1,0 @@
-../../integrations/JAVA_JNI.md

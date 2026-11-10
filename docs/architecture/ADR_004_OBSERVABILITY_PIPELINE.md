@@ -1,8 +1,8 @@
-# Observability Implementation Plan
+# ADR-004: Observability Pipeline (Registry, Exporters, OTLP)
 
-> **Status: implemented.** The core owns the registry
-> ([`gather_text`](../src/telemetry/metrics.rs:313) +
-> [`render_metrics`](../src/core/telemetry.rs:50)); the `observability` exporter
+> **Status: implemented.** Promoted from `plans/observability_implementation_plan.md`. The core owns the registry
+> ([`gather_text`](https://github.com/benolabsai/benostreamdb/blob/main/src/telemetry/metrics.rs#L313) +
+> [`render_metrics`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/telemetry.rs#L50)); the `observability` exporter
 > is configurable (`BSDB_METRICS_BIND`/`BSDB_METRICS_PORT`, localhost default);
 > Flight SQL serves `/metrics`, `/health`, `/readyz`; `bsdb-search` merges the
 > core registry; and the JNI `gatherMetrics()` bridge is in place for the Spark
@@ -10,10 +10,10 @@
 > `BSDB_SEARCH_` / `BSDB_QDRANT_` (hard rename, no aliases).
 >
 > **OTLP push + Grafana are now implemented** (the follow-ups previously listed
-> as out of scope): [`src/telemetry/otlp.rs`](../src/telemetry/otlp.rs) converts
+> as out of scope): [`src/telemetry/otlp.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/telemetry/otlp.rs) converts
 > the Prometheus registry to OTLP/HTTP JSON and pushes it
 > (`BSDB_OTLP_ENDPOINT`, `BSDB_OTLP_INTERVAL_SECS`, `BSDB_OTLP_HEADERS`,
-> `BSDB_SERVICE_NAME`); [`deploy/observability/`](../deploy/observability/README.md)
+> `BSDB_SERVICE_NAME`); [`deploy/observability/`](https://github.com/benolabsai/benostreamdb/blob/main/deploy/observability/README.md)
 > brings up a collector + Prometheus + a provisioned Grafana dashboard.
 
 Implements the recommendations from the observability review. Goal: one metrics
@@ -25,7 +25,7 @@ connectors.
 
 1. **The core owns the registry.** All engine metrics are recorded with the
    `prometheus` crate into the default registry in
-   [`src/telemetry/metrics.rs`](../src/telemetry/metrics.rs:32). Do not move
+   [`src/telemetry/metrics.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/telemetry/metrics.rs#L32). Do not move
    ownership into any server.
 2. **One renderer.** Add `gather_text()` to the core and have every host call it.
 3. **Fix the `observability` exporter.** It currently installs a

@@ -1,1 +1,0 @@
-../../QDRANT_COMPATIBILITY.md

@@ -213,12 +213,12 @@ is gone from both the notebook and the article, replaced by the table-function f
   `regional_drift` — were converted from `Signature::exact(...)` to
   `variadic_any`, with `Int64`/`List(Int64)` argument reads normalized to
   `u64`/`u32` via `scalar_u64_at` / `scalar_u32_at` / `list_u64_at` in
-  [`src/core/sql/graph_udf/drift_search.rs`](../src/core/sql/graph_udf/drift_search.rs:33).
-- **R5 — session ergonomics (shipped).** [`sql_to_df`](../src/core/sql/session.rs:348)
-  runs [`sanitize_sql_query`](../src/core/sql/session.rs:440), which strips `--`
+  [`src/core/sql/graph_udf/drift_search.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/sql/graph_udf/drift_search.rs#L33).
+- **R5 — session ergonomics (shipped).** [`sql_to_df`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/sql/session.rs#L348)
+  runs [`sanitize_sql_query`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/sql/session.rs#L440), which strips `--`
   line comments and a single trailing `;` (an internal `;` is still rejected as a
   multi-statement guard). `CREATE INDEX` is no longer an `Unsupported logical
-  plan`: [`catalog_ddl::try_parse_and_execute`](../src/core/sql/catalog_ddl.rs:209)
+  plan`: [`catalog_ddl::try_parse_and_execute`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/sql/catalog_ddl.rs#L209)
   intercepts it and executes it through the core `Table` API
   (`CREATE INDEX ON t (col)`, `ALTER TABLE t ADD INDEX (col)`), with a fallback
   error pointing at `table.add_index(col, algo)` / Flight SQL for forms it cannot
@@ -232,10 +232,10 @@ Because MCP's `execute_sql` and the Python `Session.sql` both drive the same
 MCP server, and the Python bindings.
 
 **Tests:**
-[`tests/test_sql_binding_ergonomics.rs`](../tests/test_sql_binding_ergonomics.rs:1)
+[`tests/test_sql_binding_ergonomics.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_sql_binding_ergonomics.rs#L1)
 (cast-free scalar + TVF calls incl. the two DRIFT UDAFs, `;`/comment tolerance,
 `CREATE INDEX`),
-[`tests/integration_test_graph_mode.rs`](../tests/integration_test_graph_mode.rs:244)
+[`tests/integration_test_graph_mode.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration_test_graph_mode.rs#L244)
 (the DRIFT UDAFs are cast-free across graph modes), and
-[`test_mcp_graph_udaf_without_casts`](../contrib/benostreamdb-mcp/src/server.rs:3166)
+[`test_mcp_graph_udaf_without_casts`](https://github.com/benolabsai/benostreamdb/blob/main/contrib/benostreamdb-mcp/src/server.rs#L3166)
 (the same behavior reachable through the MCP `execute_sql` tool).

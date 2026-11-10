@@ -67,7 +67,7 @@ branch = "main"
 catalog = bsdb.create_catalog_from_config("/path/to/my_config.toml")
 ```
 
-See [examples/configs/](../../examples/configs/) for example configuration files for each catalog type.
+See [examples/configs/](https://github.com/benolabsai/benostreamdb/tree/main/examples/configs) for example configuration files for each catalog type.
 
 ### Table Operations (Writing and Reading)
 
@@ -163,7 +163,7 @@ device = bsdb.Device("mps")    # Apple Silicon Metal
 device = bsdb.Device("cpu")    # CPU fallback
 ```
 
-For stand-alone batch vector distance computations outside tables, see the [Python Vector API Guide](python_vector_api.md).
+For stand-alone batch vector distance computations outside tables, see the [Python Vector API Guide)](https://www.benostreamdb.org/guides/python_vector_api.html).
 
 ## Architecture
 

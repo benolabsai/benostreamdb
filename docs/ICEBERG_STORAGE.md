@@ -208,4 +208,4 @@ The table below reflects machine-checked verification via `tests/test_iceberg_co
 - **[Catalog Integration Guide](CATALOG_USAGE.md)**: Configuring production catalogs (Apache Polaris, Project Nessie, AWS Glue, Unity).
 - **[Concurrency & Durability](CONCURRENCY.md)**: Multi-writer OCC, `_manifest/` commits, and distributed locking.
 - **[pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md)**: Querying vector embeddings in Iceberg tables using ANSI SQL and DataFusion.
-- **[ADR-001: Tightened Index Overlay Contract](architecture/ADR_001_TIGHTENED_INDEX_OVERLAY_CONTRACT.md)**: Compound Puffin sidecar architecture.
+- **[ADR-001: Tightened Index Overlay Contract](https://www.benostreamdb.org/guides/adr_001.html)**: Compound Puffin sidecar architecture.

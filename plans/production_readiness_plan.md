@@ -26,7 +26,7 @@ observed in the demo.
 | **Overall** | **~prototype / early production, not a mature DBMS** |
 
 The review explicitly credits the repo for articulating real invariants
-([`README.md`](../README.md:26)):
+([`README.md`](https://github.com/benolabsai/benostreamdb/blob/main/README.md#L26)):
 
 1. **Overlay Invariant** — indexes are derived, reconstructible state.
 2. **Publication Invariant** — a manifest references only durable artifacts.
@@ -76,7 +76,7 @@ A `hybrid_search` over the 51.8M-row `nodes` table then took **94 s**.
 
 `explain()` decides the vector access path by **globbing the filesystem** for
 `{segment_id}.{column}.cluster_*.hnsw.graph`
-([`src/core/table/read.rs`](../src/core/table/read.rs:362)). But TurboQuant
+([`src/core/table/read.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L362)). But TurboQuant
 indexes are written as `{segment_id}.{column}.tq8.cluster_*.hnsw.graph` — the
 `.tq8.` / `.tq4.` / `.pq.` quantization infix sits between the column and
 `cluster_`, so the pattern never matches and `explain()` **always** reports
@@ -84,7 +84,7 @@ indexes are written as `{segment_id}.{column}.tq8.cluster_*.hnsw.graph` — the
 
 The **actual** search path does not glob the filesystem — it reads the manifest's
 `index_files` and selects by `blob_type` (`hnsw_tq8`/`tq4`/`pq`/`ivf`)
-([`src/core/reader/scan.rs`](../src/core/reader/scan.rs:913)). So there are two
+([`src/core/reader/scan.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/reader/scan.rs#L913)). So there are two
 distinct problems:
 
 1. **Reporting bug (definite):** `explain()` uses a filesystem glob instead of
@@ -114,10 +114,10 @@ reporting one:
 
 > An equality filter on a column that has a **BM25** index returns **zero rows**.
 
-Root cause: [`build_inverted.rs`](../src/core/index/build_inverted.rs:448) uses
+Root cause: [`build_inverted.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/index/build_inverted.rs#L448) uses
 the **English analyzer** (splits on non-alphanumeric) when BM25 is configured, so
 `"cat_1"` is indexed as the tokens `["cat", "1"]`. But
-[`get_scalar_filter_bitmap`](../src/core/reader/filter.rs:257) selects any
+[`get_scalar_filter_bitmap`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/reader/filter.rs#L257) selects any
 `index_type == "inverted"` index for an equality filter and matches the **raw
 value** `"cat_1"` against the index keys — which are tokens, so nothing matches
 and the bitmap is empty. The query returns 0 rows instead of the 16 that a full
@@ -131,7 +131,7 @@ analyzer is `identity` (exact). The reader now reads the `analyzer` key from the
 `.inv.parquet` footer (cached in `ANALYZER_META_CACHE`) and falls back to a full
 scan when the index is tokenized.
 
-**Tests:** [`tests/test_differential_index_oracle.rs`](../tests/test_differential_index_oracle.rs:1)
+**Tests:** [`tests/test_differential_index_oracle.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_differential_index_oracle.rs#L1)
 — exact indexes must equal the full scan; ANN indexes must meet recall.
 
 ### 2.2 Tiered-manifest accessor bug — `manifest.entries` is empty by design
@@ -144,36 +144,36 @@ investigation uncovered two *real* bugs of the same class.
 (`ManifestList` → `*.avro` manifest files). The top-level `Manifest.entries`
 vector is therefore **empty by design** — the real entries live in the manifest
 list and are resolved by
-[`ManifestManager::load_all_entries`](../src/core/manifest/manager/load.rs:219).
+[`ManifestManager::load_all_entries`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/load.rs#L219).
 The background index task *does* register the generated files: it builds
 `index_files` in
-[`to_manifest_entry`](../src/core/segment.rs:102) and commits them via
-[`ManifestManager::commit`](../src/core/manifest/manager/commit.rs:24). The
-reader ([`load_multi_csr`](../src/python/helpers.rs:73)) already resolves the
+[`to_manifest_entry`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/segment.rs#L102) and commits them via
+[`ManifestManager::commit`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/commit.rs#L24). The
+reader ([`load_multi_csr`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/helpers.rs#L73)) already resolves the
 tiered list correctly, so the CSR fast path *is* available.
 
 The original test asserted on `manifest.entries` directly, which is always empty
 for tiered manifests — a false negative. The test now uses the same accessor the
 reader uses and passes
-([`tests/test_graph_csr_path_conformance.rs`](../tests/test_graph_csr_path_conformance.rs:1)).
+([`tests/test_graph_csr_path_conformance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_graph_csr_path_conformance.rs#L1)).
 
 **The real bugs (same class).** Two code paths iterated `manifest.entries`
 directly and so silently saw an empty list for every tiered table:
 
-1. [`drop_index`](../src/core/table/index_config.rs:247) — collected index file
+1. [`drop_index`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs#L247) — collected index file
    paths from `manifest.entries`, so it never found any and left **every index
    file orphaned on disk** after a drop.
-2. [`infer_index_metadata_from_physical_async`](../src/core/table/index_config.rs:585)
+2. [`infer_index_metadata_from_physical_async`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs#L585)
    — the "recover indexes from physical files" path iterated `manifest.entries`,
    so it was a **no-op for tiered tables** (the circularity noted earlier).
-3. [`drop_index`](../src/core/table/index_config.rs:247) also omitted the CSR
+3. [`drop_index`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/index_config.rs#L247) also omitted the CSR
    `.dict` sidecar from its deletion list, so even once it *could* see the
    entries it left `*.graph_v2.csr.dict` orphaned on every drop. The CSR is a
    triple (offsets, edges, dict); all three are now deleted.
 
 All three now resolve entries via `load_all_entries`, matching the reader.
 
-**Tests:** [`tests/test_tiered_manifest_index_accessors.rs`](../tests/test_tiered_manifest_index_accessors.rs:1)
+**Tests:** [`tests/test_tiered_manifest_index_accessors.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_tiered_manifest_index_accessors.rs#L1)
 — `drop_index` must delete all three CSR artifacts for a tiered table.
 
 **Lesson / guardrail.** `Manifest.entries` is *not* the source of truth for
@@ -181,14 +181,14 @@ active segments; any code that needs the live segment set must go through
 `load_all_entries` (or `load_latest_full`). A follow-up lint/helper that makes
 the raw field private, or a `#[deprecated]` accessor, would prevent regressions.
 The remaining direct use in
-[`load_initial_schema`](../src/core/table/mod.rs:639) is a benign last-resort
+[`load_initial_schema`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/mod.rs#L639) is a benign last-resort
 fallback (it degrades to a bounded directory listing) but should be migrated for
 consistency.
 
 ### 2.3 WS2 finding — WAL replay was not idempotent (duplicate rows)
 
 The WS2 crash-injection sweep
-([`tests/test_crash_injection_sweep.rs`](../tests/test_crash_injection_sweep.rs:1))
+([`tests/test_crash_injection_sweep.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_crash_injection_sweep.rs#L1))
 found a **real durability bug** at the review's case E
 ("manifest-before-WAL-truncation"):
 
@@ -196,7 +196,7 @@ found a **real durability bug** at the review's case E
 > committed batch in the WAL. On reopen, WAL replay re-applied it, so the table
 > returned **20 rows where only 15 were committed** (5 duplicates).
 
-Root cause: [`recover_wal_state`](../src/core/table/builder.rs:66) replayed every
+Root cause: [`recover_wal_state`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/builder.rs#L66) replayed every
 WAL record unconditionally, with no check against the committed manifest. The
 WAL is truncated only *after* the manifest commit (correctly — truncating first
 would lose data on a crash between truncate and commit), so the window between
@@ -204,24 +204,24 @@ the two is exactly where a crash duplicates rows.
 
 **Fix.** The writer now records the WAL transaction ids it is committing in the
 manifest property `benostream.committed_wal_tx`
-([`flush_internal_async`](../src/core/table/write.rs:711)), and recovery skips
+([`flush_internal_async`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/write.rs#L711)), and recovery skips
 WAL records whose tx id is already committed
-([`build_async`](../src/core/table/builder.rs:356)). The tx ids are taken under
+([`build_async`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/builder.rs#L356)). The tx ids are taken under
 the same lock as the write buffer, so a tx id is never recorded without its
 rows. This makes replay idempotent: a committed batch is never applied twice.
 
 **Tests:** the sweep asserts atomicity + no-duplication + durability at every
-boundary; [`tests/test_crash_injection_cases.rs`](../tests/test_crash_injection_cases.rs:1)
+boundary; [`tests/test_crash_injection_cases.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_crash_injection_cases.rs#L1)
 adds explicit cases A–F.
 
 ### 2.4 WS3 findings — vacuum data loss, GC-vs-writer race, partition-spec data loss
 
 The WS3 concurrency harness
-([`tests/test_multi_writer_concurrency.rs`](../tests/test_multi_writer_concurrency.rs:1))
+([`tests/test_multi_writer_concurrency.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_multi_writer_concurrency.rs#L1))
 found three more bugs, all in the maintenance/manifest path:
 
 1. **Vacuum deleted every data file (critical data loss).**
-   [`vacuum`](../src/core/manifest/manager/commit.rs:504) built its `active_files`
+   [`vacuum`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/commit.rs#L504) built its `active_files`
    set by iterating `Manifest.entries` directly — empty for tiered manifests — so
    the set was empty and vacuum reaped **all** data files. Fixed by resolving
    entries via `load_all_entries` (the same tiered-manifest bug class as §2.2).
@@ -235,20 +235,20 @@ found three more bugs, all in the maintenance/manifest path:
    never reaped before its commit is visible.
 
 3. **Partition-spec update dropped all data.**
-   [`update_partition_spec`](../src/core/manifest/manager/partition.rs:20) rebuilt
+   [`update_partition_spec`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/partition.rs#L20) rebuilt
    the manifest from `Manifest.entries` (empty for tiered tables) without carrying
    over `manifest_list_path`, so the new manifest referenced no segments and the
    table appeared empty. Fixed by preserving `manifest_list_path` (and
    `properties`), matching `update_schema`.
 
-**Tests:** [`tests/test_multi_writer_concurrency.rs`](../tests/test_multi_writer_concurrency.rs:1)
+**Tests:** [`tests/test_multi_writer_concurrency.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_multi_writer_concurrency.rs#L1)
 — shared in-memory store with 16 writers (no lost updates), a randomized
 insert/delete/compact/vacuum workload (no torn snapshots, no orphaned-but-
 referenced artifacts), a fault-injecting object store (commit failures leave no
 torn state), `vacuum_preserves_referenced_files`, and
 `partition_spec_update_preserves_data`.
 
-**Enabling change:** [`TableBuilder::with_store`](../src/core/table/builder.rs:280)
+**Enabling change:** [`TableBuilder::with_store`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/builder.rs#L280)
 lets a table use a caller-supplied store, and `create_object_store` now supports
 `memory://` (a process-wide shared in-memory store per URI) — the shared-store
 model the harness needs.
@@ -257,46 +257,46 @@ model the harness needs.
 
 The strongest WS4 check is an **independent** reader. Loading a
 BenoStreamDB-written table with **PyIceberg 0.12.0** (see
-[`tests/integration/test_bsdb_to_pyiceberg.py`](../tests/integration/test_bsdb_to_pyiceberg.py:1))
+[`tests/integration/test_bsdb_to_pyiceberg.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_bsdb_to_pyiceberg.py#L1))
 surfaced four spec-conformance bugs that the internal round-trip tests missed
 (BenoStreamDB's own reader was tolerant of each):
 
 1. **Relative `manifest-list` path.** The snapshot's `manifest-list` was written
    as `_manifest/snap-…avro`. PyIceberg resolves a relative path against the
    *process CWD*, not the table location, so it looked in the wrong directory.
-   Fixed to an absolute URI in [`flush_internal_async`](../src/core/table/write.rs:1388).
+   Fixed to an absolute URI in [`flush_internal_async`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/write.rs#L1388).
 2. **Relative `manifest_path` in the manifest list.** Same class — the manifest
    file it points at was `_manifest/…-m0.avro`. Fixed to absolute in
-   [`ManifestManager::commit`](../src/core/manifest/manager/commit.rs:125).
+   [`ManifestManager::commit`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/commit.rs#L125).
 3. **Relative `file_path` in the data manifest.** Iceberg requires a full URI.
    Now qualified to absolute on write and **relativized back on read**
-   ([`load_avro_manifest_static`](../src/core/manifest/manager/load.rs:337)) so the
+   ([`load_avro_manifest_static`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/load.rs#L337)) so the
    rest of the engine (vacuum, dedup, path resolution) is unaffected.
 4. **Avro schemas missing Iceberg metadata.** The manifest-list and manifest Avro
    schemas lacked the spec-required metadata: `field-id` on every field,
    `logicalType: map` on map arrays, and `element-id` on list arrays. PyIceberg's
    `AvroSchemaConversion` rejects any of these omissions. Fixed in
-   [`MANIFEST_LIST_SCHEMA_V2`](../src/core/iceberg/writer.rs:6) and
-   [`generate_manifest_schema`](../src/core/iceberg/writer.rs:815).
+   [`MANIFEST_LIST_SCHEMA_V2`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/iceberg/writer.rs#L6) and
+   [`generate_manifest_schema`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/iceberg/writer.rs#L815).
 
 **Tests:**
-[`tests/test_iceberg_conformance.rs`](../tests/test_iceberg_conformance.rs:1)
+[`tests/test_iceberg_conformance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_iceberg_conformance.rs#L1)
 (structural: metadata JSON fields, manifest-list/schema conformance, manifest
 round-trip, nanosecond timestamps, delete reflection, V3 row lineage) and
-[`tests/integration/test_bsdb_to_pyiceberg.py`](../tests/integration/test_bsdb_to_pyiceberg.py:1)
+[`tests/integration/test_bsdb_to_pyiceberg.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_bsdb_to_pyiceberg.py#L1)
 (PyIceberg reads a BenoStreamDB table end-to-end).
 
-**Published matrix:** [`docs/ICEBERG_COMPATIBILITY.md`](../docs/ICEBERG_COMPATIBILITY.md)
+**Published matrix:** [`docs/ICEBERG_COMPATIBILITY.md`](https://www.benostreamdb.org/guides/iceberg_compatibility.html)
 — the feature matrix and known deviations.
 
 ### 2.6 WS5 finding — compaction resurrected deleted rows
 
 The WS5 maintenance soak
-([`tests/test_maintenance_invariant.rs`](../tests/test_maintenance_invariant.rs:1))
+([`tests/test_maintenance_invariant.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_maintenance_invariant.rs#L1))
 found a **data-correctness bug**: after a delete followed by compaction, the
 deleted row came back (79 rows committed → 80 after compaction).
 
-Root cause: [`compact_bin`](../src/core/compaction.rs:284) read each input
+Root cause: [`compact_bin`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/compaction.rs#L284) read each input
 segment with a `SegmentConfig` that did **not** carry the segment's delete files.
 `stream_all` *does* apply deletes, but only from `config.delete_files` — which was
 empty, so the raw data files were re-read and the deleted rows were physically
@@ -304,17 +304,17 @@ written into the compacted output. (Merge-on-read still masked them in the
 manifest, so the bug only surfaced once the delete was compacted away.)
 
 **Fix:** pass `entry.delete_files` into the reader
-([`compact_bin`](../src/core/compaction.rs:317)), so compaction applies the
+([`compact_bin`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/compaction.rs#L317)), so compaction applies the
 delete mask and physically removes deleted rows. This is the correct
 merge-on-read → copy-on-write transition.
 
 **Second finding — compaction mis-classified index sidecars as the data file.**
-The long-duration soak (now [`tests/soak.rs`](../tests/soak.rs:1),
+The long-duration soak (now [`tests/soak.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/soak.rs#L1),
 `maintenance_churn_soak`) surfaced a second, related bug: after compaction of a
 table with a vector index, a full-column read failed with *"Column 'id' is
 declared as non-nullable but contains null values"*.
 
-Root cause: [`compact_bin`](../src/core/compaction.rs:468) classified the output
+Root cause: [`compact_bin`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/compaction.rs#L468) classified the output
 files with `file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet")`.
 That also matches the vector index's auxiliary parquet sidecars
 (`<seg>.<col>.tq8.cluster_1.mapping.parquet`), so `main_parquet_path` was
@@ -325,11 +325,11 @@ schema-evolution mapping then filled every column with NULLs.
 **Fixes:** (a) identify the data parquet by its exact name
 (`format!("{}.parquet", new_segment_id)`) and skip the `.mapping.parquet` /
 `.centroids.parquet` / `.doclen.parquet` sidecars
-([`compact_bin`](../src/core/compaction.rs:469)); (b) harden the read path so a
+([`compact_bin`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/compaction.rs#L469)); (b) harden the read path so a
 missing required column raises a clear error instead of manufacturing NULLs
-([`stream_row_groups`](../src/core/reader/scan.rs:578)).
+([`stream_row_groups`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/reader/scan.rs#L578)).
 
-**Tests:** [`tests/test_maintenance_invariant.rs`](../tests/test_maintenance_invariant.rs:1)
+**Tests:** [`tests/test_maintenance_invariant.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_maintenance_invariant.rs#L1)
 — a bounded churn soak (insert/delete/reinsert/compaction/vacuum/vector query)
 that asserts committed row counts are preserved, the GC-vs-reader race
 (a pinned version inside the retention window survives vacuum), the retention
@@ -337,16 +337,16 @@ bound (manifest versions outside the window are reclaimed — the mechanism is
 **version-based retention**, not reader leases), delete × HNSW candidate
 visibility, snapshot rollback, and full-column reads after a range delete +
 compaction. The longer `maintenance_churn_soak` in
-[`tests/soak.rs`](../tests/soak.rs:1) runs the full matrix
+[`tests/soak.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/soak.rs#L1) runs the full matrix
 (insert/delete/reinsert/compaction/index-rebuild/snapshot-rollback/time-travel)
 for `BSDB_SOAK_SECONDS` and is wired into the weekly
-[`.github/workflows/soak.yml`](../.github/workflows/soak.yml:1).
+[`.github/workflows/soak.yml`](https://github.com/benolabsai/benostreamdb/blob/main/.github/workflows/soak.yml#L1).
 
 ### 2.7 Randomized differential workload — two more bugs, one open hang
 
 The plan's "definition of done" (§5) is a randomized workload run without a
 single divergence between indexed and full-scan execution. That harness is
-[`tests/test_randomized_differential_workload.rs`](../tests/test_randomized_differential_workload.rs:1):
+[`tests/test_randomized_differential_workload.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_randomized_differential_workload.rs#L1):
 a seeded workload (insert / delete / compaction / vacuum / index-rebuild) whose
 "full-scan" side is an **independent in-memory model**, checked after every step
 for row count, a scalar predicate, and vector recall (no phantom rows + the
@@ -359,9 +359,9 @@ It found two more real bugs:
    tx id was not added to `pending_wal_tx_ids`, so the *next* commit did not
    record it in `benostream.committed_wal_tx`. A later crash then re-replayed it,
    duplicating the rows (observed: 15 → 25). Fixed in
-   [`build_async`](../src/core/table/builder.rs:413) by seeding
+   [`build_async`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/builder.rs#L413) by seeding
    `pending_wal_tx_ids` with the recovered records' tx ids.
-2. **Compaction mis-registered vector indexes.** [`compact_bin`](../src/core/compaction.rs:468)
+2. **Compaction mis-registered vector indexes.** [`compact_bin`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/compaction.rs#L468)
    classified index files by filename, giving a vector index
    `column_name = "hnsw"`, the full `.hnsw.graph` filename, and no `blob_type` —
    so the reader could not find it and recall collapsed. Fixed by taking the
@@ -409,17 +409,17 @@ flowchart TD
   assert the indexed vector query is materially faster than the scan.
 - Property tests (extend `proptest-regressions/`) over random predicates.
 
-**Existing assets to build on:** [`tests/test_vector_consistency.rs`](../tests/test_vector_consistency.rs),
-[`tests/test_vector_metrics_parity.rs`](../tests/test_vector_metrics_parity.rs),
-[`tests/python/test_vector_search_correctness.py`](../tests/python/test_vector_search_correctness.py),
-[`tests/python/test_explain_pruning.py`](../tests/python/test_explain_pruning.py),
-[`src/core/planner.rs`](../src/core/planner.rs:1099) (`prune_entries`,
-`classify_condition`), [`src/core/table/read.rs`](../src/core/table/read.rs:121) (`explain`).
+**Existing assets to build on:** [`tests/test_vector_consistency.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_vector_consistency.rs),
+[`tests/test_vector_metrics_parity.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_vector_metrics_parity.rs),
+[`tests/python/test_vector_search_correctness.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_vector_search_correctness.py),
+[`tests/python/test_explain_pruning.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_explain_pruning.py),
+[`src/core/planner.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/planner.rs#L1099) (`prune_entries`,
+`classify_condition`), [`src/core/table/read.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L121) (`explain`).
 
 **Root-cause work for §2:** verify the `nodes` manifest registers the `embedding`
 vector index (mirror the graph v1→v2 investigation in
-[`src/python/helpers.rs`](../src/python/helpers.rs:73)), and that
-[`src/core/planner.rs`](../src/core/planner.rs:1458) `select_index` matches the
+[`src/python/helpers.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/helpers.rs#L73)), and that
+[`src/core/planner.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/planner.rs#L1458) `select_index` matches the
 vector index type for the `embedding` column.
 
 ---
@@ -445,11 +445,11 @@ commit/WAL/manifest/index boundaries and prove recovery is deterministic.
   index-without-manifest, delayed visibility, WAL-before-manifest,
   manifest-before-WAL-truncation, two-writer race).
 
-**Existing assets:** [`tests/test_crash_injection.rs`](../tests/test_crash_injection.rs:1)
-(WAL tx identity/sequence), [`tests/test_durability_robust.rs`](../tests/test_durability_robust.rs),
-[`tests/test_chaos.rs`](../tests/test_chaos.rs:47) (missing index files),
-[`tests/integration/test_wal_durability.py`](../tests/integration/test_wal_durability.py),
-[`tests/integration/test_wal_compaction.py`](../tests/integration/test_wal_compaction.py).
+**Existing assets:** [`tests/test_crash_injection.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_crash_injection.rs#L1)
+(WAL tx identity/sequence), [`tests/test_durability_robust.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_durability_robust.rs),
+[`tests/test_chaos.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_chaos.rs#L47) (missing index files),
+[`tests/integration/test_wal_durability.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_wal_durability.py),
+[`tests/integration/test_wal_compaction.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_wal_compaction.py).
 
 **Gap:** existing tests cover specific scenarios; there is no *swept* injection
 across every boundary with a reference oracle.
@@ -468,11 +468,11 @@ writers against shared object storage, under randomized failure.
   artifacts, deterministic conflict resolution.
 - A shared-object-store variant (RustFS/S3) rather than only local FS.
 
-**Existing assets:** [`tests/test_concurrent_writers.rs`](../tests/test_concurrent_writers.rs:44),
-[`tests/test_concurrency_robust.rs`](../tests/test_concurrency_robust.rs),
-[`tests/python/test_mvcc_commits.py`](../tests/python/test_mvcc_commits.py),
-[`tests/integration/test_concurrent_access.py`](../tests/integration/test_concurrent_access.py),
-[`src/core/lock.rs`](../src/core/lock.rs), [`src/core/nessie.rs`](../src/core/nessie.rs).
+**Existing assets:** [`tests/test_concurrent_writers.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_concurrent_writers.rs#L44),
+[`tests/test_concurrency_robust.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_concurrency_robust.rs),
+[`tests/python/test_mvcc_commits.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/python/test_mvcc_commits.py),
+[`tests/integration/test_concurrent_access.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_concurrent_access.py),
+[`src/core/lock.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/lock.rs), [`src/core/nessie.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/nessie.rs).
 
 ---
 
@@ -490,11 +490,11 @@ implementations, not only internal tests.
 - A published compatibility matrix with known deviations (the README already
   documents pgvector Hamming/Jaccard differences — extend that discipline).
 
-**Existing assets:** [`tests/test_cross_engine_compat.rs`](../tests/test_cross_engine_compat.rs),
-[`tests/integration/test_pyiceberg_compat.py`](../tests/integration/test_pyiceberg_compat.py),
-[`tests/verify_compliance.rs`](../tests/verify_compliance.rs),
-[`tests/verify_iceberg_rest*.sh`](../tests/verify_iceberg_rest.sh),
-[`spark-benostreamdb/`](../spark-benostreamdb), [`trino-benostreamdb/`](../trino-benostreamdb).
+**Existing assets:** [`tests/test_cross_engine_compat.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_cross_engine_compat.py),
+[`tests/integration/test_pyiceberg_compat.py`](https://github.com/benolabsai/benostreamdb/blob/main/tests/integration/test_pyiceberg_compat.py),
+[`tests/verify_compliance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/verify_compliance.rs),
+[`tests/verify_iceberg_rest*.sh`](https://github.com/benolabsai/benostreamdb/blob/main/tests/verify_iceberg_rest.sh),
+[`spark-benostreamdb/`](https://github.com/benolabsai/benostreamdb/tree/main/spark-benostreamdb), [`trino-benostreamdb/`](https://github.com/benolabsai/benostreamdb/tree/main/trino-benostreamdb).
 
 ---
 
@@ -512,11 +512,11 @@ review's GC-vs-reader race.
 - Delete-semantics matrix: position deletes, equality deletes, deletion vectors,
   row lineage — each crossed with HNSW candidate → visibility → delete-mask.
 
-**Existing assets:** [`tests/soak.rs`](../tests/soak.rs), [`tests/stability.rs`](../tests/stability.rs),
-[`tests/stress/`](../tests/stress), [`tests/verify_delete_correctness.rs`](../tests/verify_delete_correctness.rs),
-[`tests/verify_mor_reads.rs`](../tests/verify_mor_reads.rs), [`tests/verify_mor_writes.rs`](../tests/verify_mor_writes.rs),
-[`tests/verify_index_recovery.rs`](../tests/verify_index_recovery.rs),
-[`src/core/table/maintenance.rs`](../src/core/table/maintenance.rs:95) (`vacuum`,
+**Existing assets:** [`tests/soak.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/soak.rs), [`tests/stability.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/stability.rs),
+[`tests/stress/`](https://github.com/benolabsai/benostreamdb/tree/main/tests/stress), [`tests/verify_delete_correctness.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/verify_delete_correctness.rs),
+[`tests/verify_mor_reads.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/verify_mor_reads.rs), [`tests/verify_mor_writes.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/verify_mor_writes.rs),
+[`tests/verify_index_recovery.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/verify_index_recovery.rs),
+[`src/core/table/maintenance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/maintenance.rs#L95) (`vacuum`,
 `remove_orphan_files`).
 
 ---
@@ -624,25 +624,25 @@ Delete files are now stored **once**, partition-scoped, in
 `Manifest::delete_files`; `ManifestEntry::delete_files` is a read-time *derived
 view* that is never persisted.
 
-- **Data model** ([`types.rs`](../src/core/manifest/types.rs:919)): added
+- **Data model** ([`types.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/types.rs#L919)): added
   `Manifest::delete_files`.
-- **Writer** ([`writer.rs`](../src/core/iceberg/writer.rs:461)):
+- **Writer** ([`writer.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/iceberg/writer.rs#L461)):
   `write_manifest_chunks` takes the global list and emits Delete records once
   (via `append_delete_record`), not per entry.
-- **Reader** ([`load.rs`](../src/core/manifest/manager/load.rs:238),
-  [`catalog.rs`](../src/core/table/catalog.rs:537)): collects Delete records into
+- **Reader** ([`load.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/load.rs#L238),
+  [`catalog.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/catalog.rs#L537)): collects Delete records into
   the global list and resolves the per-entry view by partition.
-- **Commit** ([`commit.rs`](../src/core/manifest/manager/commit.rs:38)): merges
+- **Commit** ([`commit.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/commit.rs#L38)): merges
   new deletes into the global list (deduped by path) and clears the per-entry
   view before writing.
 - **All manifest writers** must carry `delete_files` forward:
-  [`commit`](../src/core/manifest/manager/commit.rs:38),
-  [`commit_imported_entries`](../src/core/manifest/manager/commit.rs:372),
-  [`update_schema`](../src/core/manifest/manager/schema.rs:25),
-  [`update_partition_spec`](../src/core/manifest/manager/partition.rs:20). Missing
+  [`commit`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/commit.rs#L38),
+  [`commit_imported_entries`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/commit.rs#L372),
+  [`update_schema`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/schema.rs#L25),
+  [`update_partition_spec`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/partition.rs#L20). Missing
   any one of these silently drops the delete list (this was the cause of a
   deterministic step-30 divergence during development).
-- **GC** ([`commit.rs`](../src/core/manifest/manager/commit.rs:565)): keeps every
+- **GC** ([`commit.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/commit.rs#L565)): keeps every
   delete file in the global list, even if no data entry shares its partition.
 
 ### 8.5 Result
@@ -669,7 +669,7 @@ The randomized workload also failed intermittently with a **vector recall miss**
 (`total_points=10` when the model had 15+), i.e. the index was **stale**.
 
 Root cause: the write path builds the vector index in a **background task**
-([`write.rs`](../src/core/table/write.rs:1049), `tokio::spawn` pushed to
+([`write.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/write.rs#L1049), `tokio::spawn` pushed to
 `background_tasks`) and `commit_async` returns before it completes. A vector
 query issued immediately after commit therefore raced the index build and saw a
 stale index.
@@ -690,7 +690,7 @@ file and rewrote the manifest list to reference only that file. The cost was
 O(N) in the number of live segments, so a table with hundreds of segments paid
 the full re-encode on every small append.
 
-**Fix.** [`ManifestManager::commit`](../src/core/manifest/manager/commit.rs:38)
+**Fix.** [`ManifestManager::commit`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/commit.rs#L38)
 now detects an **append-only** commit — no `remove_paths` and every added entry
 is a brand-new file path — and takes a fast path that:
 
@@ -699,7 +699,7 @@ is a brand-new file path — and takes a fast path that:
    previous manifest list) plus the new one.
 
 The reader already walks every manifest file in the list and dedups by
-`file_path` ([`load_all_entries`](../src/core/manifest/manager/load.rs:238)), so
+`file_path` ([`load_all_entries`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/manifest/manager/load.rs#L238)), so
 the union of the referenced files is the full live set. The global
 `delete_files` list and the version-cache invalidation are preserved on the fast
 path.
@@ -722,7 +722,7 @@ The gap widens with segment count. On the small 60-step randomized workload the
 two paths are neutral (~2.0s), as expected.
 
 **Correctness.** New focused test
-[`append_only_commit_grows_then_consolidates`](../tests/read_manifest.rs:89)
+[`append_only_commit_grows_then_consolidates`](https://github.com/benolabsai/benostreamdb/blob/main/tests/read_manifest.rs#L89)
 asserts the manifest list grows 1 → 2 on a pure append and consolidates back to
 1 after compaction, with row counts preserved. The full suite
 (`test_iceberg_conformance`, `verify_mor_reads`/`verify_mor_writes`,
@@ -732,8 +732,8 @@ asserts the manifest list grows 1 → 2 on a pure append and consolidates back t
 
 ### 8.8 Parquet read path — profile and fixes
 
-**Profile.** Instrumented [`stream_row_groups`](../src/core/reader/scan.rs:527)
-(setup phases) and [`read_segment_expr`](../src/core/table/read.rs:907)
+**Profile.** Instrumented [`stream_row_groups`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/reader/scan.rs#L527)
+(setup phases) and [`read_segment_expr`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/read.rs#L907)
 (decode/filter) with a `benostreamdb_read_phase_seconds` histogram. On the
 60-step randomized workload (550 reads):
 
@@ -745,7 +745,7 @@ asserts the manifest list grows 1 → 2 on a pure append and consolidates back t
 | `deletes` (merged + equality) | 0.107s | 0.139s |
 | `meta` (metadata cache + builder) | 0.071s | 0.081s |
 
-**Fix 1 — compiled-expression cache.** [`evaluate_expr`](../src/core/planner.rs:940)
+**Fix 1 — compiled-expression cache.** [`evaluate_expr`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/planner.rs#L940)
 built a fresh `SessionContext` (re-registering the vector operators) and called
 `create_physical_expr` on *every batch*. The context is now a shared
 `once_cell::sync::Lazy<SessionContext>`, and the compiled `PhysicalExpr` is
@@ -756,8 +756,8 @@ many batches that share a schema. Filter phase: 0.186s → 0.032s (5.9x).
 **Fix 2 — small-file parquet byte cache.** The decode phase was ~half I/O: a
 full-file read of a tiny segment cost ~0.41ms through the object store (a
 `spawn_blocking` + open per range). Added
-[`PARQUET_BYTES_CACHE`](../src/core/cache.rs:238) and a
-[`BytesReader`](../src/core/reader/scan.rs:38) that serves byte ranges from
+[`PARQUET_BYTES_CACHE`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/cache.rs#L238) and a
+[`BytesReader`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/reader/scan.rs#L38) that serves byte ranges from
 memory. Files at or below `PARQUET_BYTES_CACHE_MAX_FILE` (4 MiB) are cached
 whole; larger files still stream only the needed column chunks through
 `ParquetObjectReader`. Decode phase: 0.594s → 0.042s (10x).
@@ -780,7 +780,7 @@ and `verify_delete_correctness` all pass.
 `delete_async` had no effect on an S3-backed table: the row count was unchanged
 after a delete, and no delete file appeared in the bucket.
 
-**Root cause.** [`IcebergDeleteWriter`](../src/core/iceberg/delete.rs:466) built
+**Root cause.** [`IcebergDeleteWriter`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/iceberg/delete.rs#L466) built
 the delete-file path from the table URI and wrote it with
 `std::fs::File::create`. For `file://` that happens to work (the URI is a local
 path), but for any remote store it wrote to a bogus local path — the test left a
@@ -793,13 +793,13 @@ path was passed to the store verbatim.
 Avro bytes in memory, and writes them with `store.put` at a path relative to the
 table root; the manifest records the full URI. The reader relativizes the
 delete-file URI against the table root for any scheme. Callers updated:
-[`delete_async`](../src/core/table/maintenance.rs:112),
-[`MergePlanner::execute_merge`](../src/core/merge.rs:139), and
-[`verify_mor_reads`](../tests/verify_mor_reads.rs:43).
+[`delete_async`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/maintenance.rs#L112),
+[`MergePlanner::execute_merge`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/merge.rs#L139), and
+[`verify_mor_reads`](https://github.com/benolabsai/benostreamdb/blob/main/tests/verify_mor_reads.rs#L43).
 
 **Verification.** New gated tests
-[`s3_shared_store_multi_writer_no_lost_updates`](../tests/test_multi_writer_concurrency.rs:465)
-and [`s3_full_lifecycle_round_trip`](../tests/test_multi_writer_concurrency.rs:530)
+[`s3_shared_store_multi_writer_no_lost_updates`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_multi_writer_concurrency.rs#L465)
+and [`s3_full_lifecycle_round_trip`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_multi_writer_concurrency.rs#L530)
 run against RustFS (`docker compose -f docker-compose-rustfs-nessie.yml up -d`,
 `AWS_ENDPOINT_URL=http://localhost:9000`, bucket `mstar-staging`) and pass:
 write → delete → compact → vacuum over a real S3 store. The delete file now

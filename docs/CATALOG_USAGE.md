@@ -112,7 +112,7 @@ table = catalog.load_table("marketing", "campaign_results")
 ---
 
 ## Next Steps
-* For zero-copy querying in Snowflake via Apache Polaris, see the [Snowflake + Polaris Integration Guide](catalog_usage.md).
+* For zero-copy querying in Snowflake via Apache Polaris, see the [Snowflake + Polaris Integration Guide](CATALOG_USAGE.md).
 * For cluster configuration or setting up catalog properties via `benostream.toml`, see the [Configuration Guide](CONFIGURATION.md).
 
 

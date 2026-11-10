@@ -253,10 +253,10 @@ benostreamdb_profile:
 
 Now that you've run your first query:
 
-* **[Arrow Flight SQL Connector](integrations/FLIGHT_SQL.md)** — Configuration, authentication, and client examples for JDBC/ODBC/ADBC.
-* **[Trino Connector](integrations/TRINO.md)** — Distributed SQL, predicate pushdown, graph table functions, and GPU device selection.
-* **[Apache Spark Connector](integrations/SPARK.md)** — DataSource V2 reads/writes, row-level operations, vector functions, and streaming.
-* **[dbt Adapter](integrations/DBT.md)** — Models, incremental materializations, vector/hybrid-search macros, and lineage.
-* **[Installation Guide](installation.md)** — Hardware acceleration (CUDA, Metal, ROCm), package variants, and security guidelines.
-* **[pgvector SQL Reference](pgvector_sql_guide.md)** — Complete reference for operators (`<->`, `<=>`, `<#>`, `<~>`), sparse vectors, and index acceleration.
-* **[Graph RAG on Iceberg](graph_rag_edge_tables.md)** — Traverse edge tables natively with SQL UDFs (`graph_neighbors`, PageRank).
+* **[Arrow Flight SQL Connector](https://www.benostreamdb.org/integrations/flight_sql.html)** — Configuration, authentication, and client examples for JDBC/ODBC/ADBC.
+* **[Trino Connector](https://www.benostreamdb.org/integrations/trino.html)** — Distributed SQL, predicate pushdown, graph table functions, and GPU device selection.
+* **[Apache Spark Connector](https://www.benostreamdb.org/integrations/spark.html)** — DataSource V2 reads/writes, row-level operations, vector functions, and streaming.
+* **[dbt Adapter](https://www.benostreamdb.org/integrations/dbt.html)** — Models, incremental materializations, vector/hybrid-search macros, and lineage.
+* **[Installation Guide](INSTALLATION.md)** — Hardware acceleration (CUDA, Metal, ROCm), package variants, and security guidelines.
+* **[pgvector SQL Reference](PGVECTOR_SQL_GUIDE.md)** — Complete reference for operators (`<->`, `<=>`, `<#>`, `<~>`), sparse vectors, and index acceleration.
+* **[Graph RAG on Iceberg](GRAPH_RAG_EDGE_TABLES.md)** — Traverse edge tables natively with SQL UDFs (`graph_neighbors`, PageRank).
