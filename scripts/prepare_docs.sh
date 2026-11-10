@@ -64,5 +64,17 @@ for f in docs/architecture/ADR_*.md; do
     cp -f "$f" "docs/source/guides/adr_$num.md"
 done
 
+# docs/governance/*.md -> guides/<lowercase>.md and <original>.md. The toctree
+# references guides/dependency_risk, so these are published even though they are
+# governance documents rather than user guides.
+for f in docs/governance/*.md; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f")
+    name=$(echo "${base%.md}" | tr '[:upper:]' '[:lower:]')
+    rm -f "docs/source/guides/$name.md" "docs/source/guides/$base"
+    cp -f "$f" "docs/source/guides/$name.md"
+    cp -f "$f" "docs/source/guides/$base"
+done
+
 rm -f docs/source/guides/production_readiness.md
 cp -f docs/PRODUCTION_READINESS_ASSESSMENT.md docs/source/guides/production_readiness.md
