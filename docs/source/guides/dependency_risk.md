@@ -1,1 +1,1 @@
-../../DEPENDENCY_RISK.md
+../../governance/DEPENDENCY_RISK.md
