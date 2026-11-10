@@ -149,6 +149,22 @@ print("PASS: All connectors, crates, and metadata match workspace version.")
 PY
 echo "PASS: Version alignment verified."
 
+# Packaging and Symlink Integrity Check (prevents crates.io upload failures)
+echo ""
+echo "--> Checking packaging integrity and dangling symlinks..."
+BROKEN_SYMLINKS=$(find "${REPO_ROOT}" -not -path '*/.*' -not -path '*/target/*' -not -path '*/benchmarks/*' -xtype l)
+if [[ -n "${BROKEN_SYMLINKS}" ]]; then
+    echo "ERROR: Broken symlinks detected in repository:"
+    echo "${BROKEN_SYMLINKS}"
+    exit 1
+fi
+if ! ${CARGO_CMD} package --manifest-path "${REPO_ROOT}/Cargo.toml" --list --allow-dirty > /dev/null 2>&1; then
+    echo "ERROR: 'cargo package --list' failed! Package contains unarchivable files."
+    ${CARGO_CMD} package --manifest-path "${REPO_ROOT}/Cargo.toml" --list --allow-dirty
+    exit 1
+fi
+echo "PASS: Packaging integrity and symlink targets verified."
+
 # 8. Rust Unit & Regression Tests (including fuzzer regression test cases)
 echo ""
 echo "--> [7/10] Running core Rust unit & regression tests..."
