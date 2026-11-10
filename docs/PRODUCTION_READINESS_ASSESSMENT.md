@@ -1,9 +1,9 @@
 # BenoStreamDB — Release Readiness Assessment
-Date: 2026-10-03 (core audit performed for v0.13.0; carried forward for v0.14.0–v0.15.1)
-Scope: Architectural audit of core storage invariants, differential oracles, crash recovery, and security against the **Developer Preview Release Bar**.
-Current Version: 0.15.1
-
-Status: **Developer Preview Ready** (All core integrity gates passed; enterprise HA/clustering deferred).
+- **Status:** Living document — **Developer Preview Ready** (All core integrity gates passed; enterprise HA/clustering deferred).
+- **Initial reviews:** 2026-09-30 (concurrency & workspace boundary review); 2026-10-03 (v0.13.0 core storage WS1–WS5 audit)
+- **Last verified:** 2026-11-10 (carried forward for v0.14.0–v0.15.1)
+- **Scope:** Architectural audit of core storage invariants, differential oracles, crash recovery, and security against the **Developer Preview Release Bar**.
+- **Current Version:** 0.15.1
 
 > **Release Scope Notice:**
 > For preview releases through v0.15.1, the same **Developer Preview** standard applies. The audit below covers the
@@ -35,10 +35,10 @@ This assessment summarizes the verification of core invariants (WS1-WS5) and the
 | Operational tooling | Progressing (observability plan in motion) |
 | **Overall** | **Developer Preview Ready** |
 
-### ✅ Resolved Blocker: `lastfm-64-dot` Vector Recall Anomaly
-During the execution of the end-to-end benchmark suite, an anomaly was discovered where vector recall dropped to **~6%** specifically on the `lastfm-64-dot` dataset for `hnsw_tq8`. 
+### ✅ Resolved Blocker (Resolved 2026-10-10 / Verified 2026-10-28): `lastfm-64-dot` Vector Recall Anomaly
+During initial post-audit execution of the end-to-end benchmark suite, an anomaly was discovered where vector recall dropped to **~6%** specifically on the `lastfm-64-dot` dataset for `hnsw_tq8`. 
 - **Root Cause:** The MIPS dataset `lastfm-64-dot` contains padded training vectors with a uniform small norm (~0.7256), whereas the query vectors possessed wildly varying, unpadded natural norms (up to ~31.23). The query vectors severely overflowed the `TurboQuant` encoder's dynamic range during SDC, clamping their values to zero or max, thus destroying vector directionality.
-- **Resolution:** A pre-quantization dynamic scaling step was introduced for `InnerProduct` and `Cosine` metrics in `HnswGraph`. Because query magnitude does not alter metric rankings, the query is perfectly scaled into the quantizer's `offset` and `scale` window, completely avoiding overflow and maximizing 8-bit precision.
+- **Resolution:** A pre-quantization dynamic scaling step was introduced for `InnerProduct` and `Cosine` metrics in `HnswGraph` (with exact dot-product/angular rescore validated across full benchmark sweeps by `2026-10-28`, `86391664`). Because query magnitude does not alter metric rankings, the query is scaled into the quantizer's `offset` and `scale` window, avoiding overflow and restoring 8-bit precision.
 
 ---
 
@@ -126,3 +126,17 @@ logging of authentication events.
 With the completion of WS1-WS5 and the resolution of the quantization boundary anomaly, the core storage engine has survived millions of operations (insert/update/delete/predicate/vector/snapshot/commit/compaction/index-rebuild) with injected failures without divergence between indexed and full-scan execution.
 
 The system meets the exit criteria for a **Developer Preview** (pending real-world usage and operational tooling maturity).
+
+---
+
+## 6. Review & Resolution History
+
+| Initial Review | Scope / Finding | Status | Resolution Date & Evidence |
+|---|---|---|---|
+| **2026-09-30** | Pre-OSS concurrency & boundary review (`H1`: atomic `PendingWrite` vs dual-lock extraction; `H2`: `maintenance_lock` barrier on `truncate_async`; `H3`: propagate manifest-load errors on `truncate`; `contrib/` three-tier repo split) | **Resolved** | **2026-09-30** (`bba0dc46` / `203b8bc8`): `pending_writes` and `maintenance_lock` implemented in `src/core/table/mod.rs` and `src/core/table/write.rs`; `tests/test_h1_h2_concurrency_regression.rs` added; non-core gateways isolated under `contrib/`. |
+| **2026-09-30** | Extended audit `M1`: `remove_orphan_files_async()` and `vacuum()` fencing against concurrent readers, `_staging/`, and `_wal/` | **Resolved** | **2026-10-03** (WS3/WS5, `203b8bc8`): Grace-period + live-set re-validation shipped; verified by `tests/test_crash_injection.rs` and `crash_during_vacuum_preserves_live_rows` in `tests/test_crash_injection_workload.rs`. |
+| **2026-09-30** | Extended audit `M2`: Explicit `PendingCommit` transaction state machine evaluation | **Deferred** | Post-Preview hardening item. Current single-table write path is protected by `PendingWrite`, `maintenance_lock`, idempotent WAL tx IDs, and OCC snapshot commit. |
+| **2026-10-03** | Core storage invariant audit (`WS1`–`WS5`) + security posture for `v0.13.0` | **Resolved** | **2026-10-03** (`5ef7b25b`): Differential oracles, crash-injection matrix, PyIceberg V2/V3 conformance, and stateless auth verified. |
+| **2026-10-10** | `lastfm-64-dot` `InnerProduct` / `Cosine` recall collapse under `hnsw_tq8` | **Resolved** | **2026-10-10** / verified **2026-10-28** (`da2ea446`, `86391664`, `e3f933a2`): Pre-quantization dynamic query scaling + exact rescore shipped. |
+| **2026-11-09** | `v0.15.1` scope carry-forward & Arrow C FFI string offset conformance | **Verified** | **2026-11-09** (`a51b245b`, `5ac9838a`, `b88cfcbe`): Fixed string/vector search offsets across Arrow C FFI; `cargo deny check` and fuzz smoke tests enforced on pre-push gate. |
+
