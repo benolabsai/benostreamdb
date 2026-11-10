@@ -1,5 +1,14 @@
 # BenoStreamDB — Production-Readiness Plan
 
+**Status (2026-11-10, v0.15.1): open.** WS1, WS2, WS4 and WS5 have
+harnesses in `tests/`; WS2 sweeps every `CrashPoint` across delete,
+compaction, vacuum and index build. The open items are: (a) WS3's
+randomized N-writer harness with injected commit conflicts and
+object-store errors — `test_concurrent_writers.rs` currently has a single
+test; (b) the cross-cutting benchmark classes (p95/p99 tails, sustained
+concurrent queries, throttling, skewed data); (c) the security track
+beyond static-key/JWT auth.
+
 Derived from the external (OpenAI) production-readiness review. The review's
 verdict: the **storage/index architecture is the strongest part**; the gap is
 **adversarial correctness testing at the storage / transaction / recovery

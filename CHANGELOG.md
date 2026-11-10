@@ -1,3 +1,22 @@
+## [Unreleased]
+
+### Added
+- **Trino `system.keyword_search`** (`trino-benostreamdb`): BM25-only retrieval
+  as a table function, the lexical counterpart of `system.hybrid_search`. It
+  returns every table column plus `score`, validated against the engine's BM25
+  index path (an equality predicate on a BM25-indexed column).
+- **Spark TopN pushdown** (`spark-benostreamdb`): `BenoStreamScanBuilder` now
+  implements `SupportsPushDownTopN`. Unlike Trino's `SortItem`, a Spark
+  `SortOrder` carries a full expression, so `ORDER BY cosine_distance(embedding,
+  …) LIMIT k` is rendered back into the scan SQL and reaches the engine's KNN
+  optimizer rule instead of being sorted after a full scan. A pushed TopN forces
+  the single SQL scan, because a per-file fan-out cannot produce a global top-k.
+
+### Changed
+- `plans/` now contains only live work. The completed connector plan became
+  `docs/architecture/ADR_009_NATIVE_CONNECTOR_ARCHITECTURE_AND_UDF_EXPOSURE.md`,
+  and ADR-006..008 were promoted alongside it.
+
 ## [0.15.1] - 2026-11-09
 
 Patch release fixing Arrow C Data Interface string offset conformance during vector search result projection and hybrid search rank fusion.
@@ -1037,7 +1056,7 @@ needed to publish the resulting numbers honestly.
   `vector_max`, `vector_stddev`, `vector_median`, `bm25_score`, `tf_idf` in
   `python/benostreamdb/__init__.py`, keeping the Rust, Python, and SQL surfaces
   1:1.
-- **`plans/sql_ddl_surface.md`** — design spec for the SQL surface, and a full
+- **[`docs/architecture/ADR_006_SQL_DDL_AND_MAINTENANCE_SURFACE.md`](docs/architecture/ADR_006_SQL_DDL_AND_MAINTENANCE_SURFACE.md)** — design spec for the SQL surface, and a full
   SQL language guide (all statements, UDFs, and pgvector syntax) in
   `server/flight_sql/README.md`.
 - **`Table::reindex_inverted_column`** — a *targeted* reindex that rebuilds only

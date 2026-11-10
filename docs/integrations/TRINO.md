@@ -163,6 +163,29 @@ adds a `distance` column.
 An unknown metric is rejected at analysis time (user error), never interpolated
 into the SQL string.
 
+### Keyword search (BM25 only)
+
+```sql
+SELECT id, title, score
+FROM TABLE(system.keyword_search(
+    table_name  => 'default.docs',
+    text_column => 'title',
+    query_text  => 'graph traversal',
+    k           => 10,
+    filter      => 'category = ''science'''));
+```
+
+Returns every table column plus `score` (DOUBLE, higher is better), ordered by
+descending BM25. The engine only takes its BM25 index path for an equality
+predicate against a column that carries a BM25 index, so the generated statement
+is `WHERE "title" = 'graph traversal'` rather than a function call, and it
+carries no `ORDER BY` — a sort above the scan would defeat the index. The
+predicate is the query, not a row filter, so rows are ranked rather than matched
+exactly.
+
+This is the lexical half of `hybrid_search` without the dense side and without
+fusion; use it when there is no embedding for the query text.
+
 ### Hybrid search (vector + BM25, fused with RRF)
 
 ```sql

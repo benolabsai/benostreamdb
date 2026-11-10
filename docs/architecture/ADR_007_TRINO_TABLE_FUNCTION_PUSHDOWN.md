@@ -1,10 +1,11 @@
-# Trino Vector Connector: Scoped Implementation Plan
+# ADR-007: Trino Vector and Graph Pushdown via Table Functions
 
-**Status:** scoping, no code changes yet  
-**Target:** Trino 482-483 (band `d`) and 484+ (band `e`). The 468-era plan below
-predates the two-band split; see `trino_version_bands.md` for the supported
-version policy.
-**Owner surface:** `trino-benostreamdb/`, `src/core/ffi.rs`, `docs/integrations/TRINO.md`
+- **Status**: Implemented — promoted from `plans/trino_vector_pushdown.md`  
+- **Target**: Trino 482-483 (band `d`) and 484+ (band `e`); see
+[`TRINO_VERSION_BANDS.md`](https://www.benostreamdb.org/integrations/trino_version_bands.html) for the
+supported version policy. The 468-era discussion below predates the two-band
+split and is retained as rationale.
+- **Owner surface**: `trino-benostreamdb/`, `src/core/ffi.rs`, `docs/integrations/TRINO.md`
 
 ## 1. Decision
 

@@ -29,7 +29,20 @@ Key Architecture Highlights
    guides/quickstart
    guides/installation
    guides/architecture
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Architecture Decisions
+
    guides/adr_001
+   guides/adr_002
+   guides/adr_003
+   guides/adr_004
+   guides/adr_005
+   guides/adr_006
+   guides/adr_007
+   guides/adr_008
+   guides/adr_009
 
 .. toctree::
    :maxdepth: 2
@@ -38,6 +51,7 @@ Key Architecture Highlights
    integrations/python
    integrations/spark
    integrations/trino
+   integrations/trino_version_bands
    integrations/dbt
    integrations/flight_sql
    integrations/java_jni

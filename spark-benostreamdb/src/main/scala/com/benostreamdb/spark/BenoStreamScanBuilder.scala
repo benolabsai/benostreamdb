@@ -9,6 +9,7 @@ import org.apache.arrow.c.{ArrowArray, ArrowSchema, Data}
 import org.apache.arrow.memory.RootAllocator
 import org.apache.arrow.vector.VectorSchemaRoot
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.connector.expressions.{Expression, GeneralScalarExpression, Literal, NamedReference, SortDirection, SortOrder}
 import org.apache.spark.sql.connector.read._
 import org.apache.spark.sql.sources._
 import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType}
@@ -25,12 +26,15 @@ import org.slf4j.LoggerFactory
 class BenoStreamScanBuilder(table: BenoStreamTable)
     extends ScanBuilder
     with SupportsPushDownFilters
-    with SupportsPushDownRequiredColumns {
+    with SupportsPushDownRequiredColumns
+    with SupportsPushDownTopN {
 
   private val logger = LoggerFactory.getLogger(classOf[BenoStreamScanBuilder])
   private var requiredSchema: StructType = table.structSchema
   private var handled: Array[Filter] = Array.empty
   private var unhandled: Array[Filter] = Array.empty
+  private var topNOrdering: Array[SortOrder] = Array.empty
+  private var topNLimit: Option[Int] = None
 
   @native def listDataFiles(tableUri: String): String
 
@@ -52,6 +56,38 @@ class BenoStreamScanBuilder(table: BenoStreamTable)
     this.requiredSchema = requiredSchema
   }
 
+  /**
+   * Push `ORDER BY … LIMIT k` into the engine.
+   *
+   * Spark hands over the sort the same way it hands over filters, and unlike
+   * Trino's `SortItem` it carries a full `Expression`. That matters here: a KNN
+   * query sorts by `cosine_distance(embedding, …)`, which is an expression, not
+   * a column. Rendering it back into the scan SQL is what lets the engine's KNN
+   * optimizer rule see the query and use the index instead of scanning.
+   *
+   * Returning false is always safe — Spark then sorts and limits the rows
+   * itself, which is slower but correct.
+   */
+  override def pushTopN(ordering: Array[SortOrder], limit: Int): Boolean = {
+    if (limit <= 0 || ordering.isEmpty) {
+      false
+    } else {
+      val rendered = ordering.map(BenoStreamSql.sortOrderToSql)
+      if (rendered.exists(_.isEmpty)) {
+        logger.debug(
+          "benostream: not pushing TopN — could not render {} of {} sort expressions",
+          rendered.count(_.isEmpty),
+          rendered.length
+        )
+        false
+      } else {
+        topNOrdering = ordering
+        topNLimit = Some(limit)
+        true
+      }
+    }
+  }
+
   override def build(): Scan = {
     val isDelta = requiredSchema.exists(f => f.name == "_file" || f.name == "_pos")
     if (isDelta) {
@@ -63,8 +99,10 @@ class BenoStreamScanBuilder(table: BenoStreamTable)
       // pushed-down predicate (so dropping the single SQL scan loses nothing) and
       // the table has more than one file. The per-file reader is the same one the
       // merge-on-read path already uses.
+      // A pushed TopN must stay a single SQL scan: a per-file fan-out cannot
+      // produce a global top-k.
       val splitFiles =
-        if (handled.isEmpty && BenoStreamScanBuilder.splitFanoutEnabled()) {
+        if (handled.isEmpty && topNLimit.isEmpty && BenoStreamScanBuilder.splitFanoutEnabled()) {
           parseSplitFiles(BenoStreamScanBuilder.this.listSplits(table.tableUri))
         } else {
           Seq.empty
@@ -72,7 +110,19 @@ class BenoStreamScanBuilder(table: BenoStreamTable)
       if (splitFiles.length > 1) {
         new BenoStreamSplitScan(table.tableUri, requiredSchema, splitFiles)
       } else {
-        val sql = BenoStreamSql.buildScanSql(table.structSchema, requiredSchema, handled)
+        val orderBy =
+          if (topNOrdering.isEmpty) {
+            None
+          } else {
+            Some(topNOrdering.flatMap(BenoStreamSql.sortOrderToSql).mkString(", "))
+          }
+        val sql = BenoStreamSql.buildScanSql(
+          table.structSchema,
+          requiredSchema,
+          handled,
+          orderBy.filter(_.nonEmpty),
+          topNLimit
+        )
         new BenoStreamScan(table.tableUri, requiredSchema, sql)
       }
     }
@@ -334,12 +384,45 @@ object BenoStreamSql {
     case _ => None
   }
 
-  def buildScanSql(full: StructType, required: StructType, filters: Array[Filter]): String = {
+  /**
+   * Render a DSv2 sort order as engine SQL.
+   *
+   * `NamedReference` covers plain columns; `GeneralScalarExpression` covers the
+   * function calls that make KNN work (`cosine_distance(embedding, …)`). Null
+   * ordering is left to the engine, which only needs the direction to place
+   * scored rows correctly.
+   */
+  def sortOrderToSql(order: SortOrder): Option[String] =
+    expressionToSql(order.expression).map { expr =>
+      // SortDirection is a Java enum in both Spark 3.5 and 4.x.
+      val direction = if (order.direction == SortDirection.DESCENDING) "DESC" else "ASC"
+      s"$expr $direction"
+    }
+
+  def expressionToSql(expr: Expression): Option[String] = expr match {
+    case ref: NamedReference => Some(ref.fieldNames.map(quote).mkString("."))
+    case lit: Literal[_] => literal(lit.value)
+    case call: GeneralScalarExpression =>
+      val rendered = call.children.map(expressionToSql)
+      if (rendered.exists(_.isEmpty)) None
+      else Some(s"${call.name}(${rendered.flatten.mkString(", ")})")
+    case _ => None
+  }
+
+  def buildScanSql(
+      full: StructType,
+      required: StructType,
+      filters: Array[Filter],
+      orderBy: Option[String] = None,
+      limit: Option[Int] = None
+  ): String = {
     val cols =
       if (required.fields.length == full.fields.length && required.fieldNames.toSet == full.fieldNames.toSet) "*"
       else required.fields.map(f => quote(f.name)).mkString(", ")
     val preds = filters.flatMap(filterToSql)
     val where = if (preds.isEmpty) "" else " WHERE " + preds.mkString(" AND ")
-    s"SELECT $cols FROM t$where"
+    val order = orderBy.map(o => " ORDER BY " + o).getOrElse("")
+    val lim = limit.map(k => " LIMIT " + k).getOrElse("")
+    s"SELECT $cols FROM t$where$order$lim"
   }
 }

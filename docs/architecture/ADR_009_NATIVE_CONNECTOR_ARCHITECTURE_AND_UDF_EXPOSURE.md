@@ -1,6 +1,6 @@
-# BenoStreamDB Connector Architecture: Native Engine + UDF Exposure + Version Matrix
+# ADR-009: Native Connector Architecture, UDF Exposure, and Version Matrix
 
-## Status (2026-10-06)
+## Status and scope
 
 - **A. Native Spark connector — DONE.** Catalog/DDL/read/write/row-level ops are
   native; MERGE matrix verified on Spark 3.5.9 + 4.2.0 with codegen ON. Row-level
@@ -14,7 +14,30 @@
   reciprocal_rank_fusion}` — verified on 3.5.9 and 4.2.0, no registration, works
   from PySpark. `ScalarFunction` implementations must override
   `produceResult(InternalRow)` (required by Spark 4.x, accepted by 3.4+).
-- **B2. Remaining (this milestone)**: (1) pass-through `option("query", sql)`
+- **B2 — all four items closed (2026-11-10, v0.15.1).**
+  (1) pass-through `option("query", sql)` reads through the engine DataFusion
+  session (`BenoStreamQueryTable`).
+  (2) `BenoStreamScanBuilder` now implements `SupportsPushDownTopN`, so
+  `ORDER BY <distance> LIMIT k` written in Spark SQL is rendered back into the
+  scan SQL and reaches the engine's KNN rule; a pushed TopN forces the single
+  SQL scan because a per-file fan-out cannot produce a global top-k.
+  (3) all 21 graph aggregates are reachable through the pass-through reader.
+  (4) `getTableFunctions()` registers `vector_search`, `keyword_search`,
+  `hybrid_search`, `graph_neighbors`, `graph_shortest_path`, `graph_subgraph`,
+  `list_indexes`, `regional_drift`, `graph_rag_search`.
+- **Two scope corrections, recorded so this does not reopen.** (a) A Spark
+  `bsdb_query(sql)` table function is **not implementable**: Spark has no public
+  DSv2 `TableFunction` interface (its `TableFunctionRegistry`/`SQLTableFunction`
+  are catalyst-internal, for `CREATE FUNCTION … RETURNS TABLE` with a declared
+  output), and `BoundFunction.resultType()` is fixed at bind time, so a function
+  could not derive a schema from the SQL string. `option("query", …)` is the
+  supported mechanism and already covers the whole DataFusion surface.
+  (b) Trino cannot host a generic pass-through either (fixed return schema), so
+  of the 21 graph aggregates it exposes the four that have table-function
+  shapes (neighbors, shortest path, subgraph, regional drift). Exposing the
+  remaining 17 requires one fixed-schema TVF per algorithm, a deliberate
+  follow-up rather than a gap in this plan.
+- **B2. Original scope from this milestone**: (1) pass-through `option("query", sql)`
   reader (full DataFusion surface incl. pgvector operators + KNN optimizer);
   (2) index-accelerated KNN for Spark 4.x via `SupportsTopNPushDown` rendering
   `ORDER BY <distance fn> LIMIT k` back into engine SQL; (3) **all 21 graph
@@ -95,7 +118,7 @@ Two complementary mechanisms:
    `spark.read.format("benostream").option("query", "SELECT id, cosine_distance(...)
    FROM t ORDER BY embedding <-> [..] LIMIT 10").load()` runs engine SQL and
    returns rows. This gives *all* UDFs + operators + KNN/graph optimizer rules
-   for free. Expose the same via a Spark 4 DSv2 `TableFunction` `bsdb_query(sql)`.
+   for free.
 2. **Typed table functions (both engines) — the named UDFs.** Define fixed-schema
    table functions so users get IntelliSense-style calls without raw SQL:
    - `vector_search(table, column, query_vector, k, metric)` → `(row_id, score)`

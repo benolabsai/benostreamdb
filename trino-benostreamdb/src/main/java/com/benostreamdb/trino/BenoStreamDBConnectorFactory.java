@@ -67,6 +67,7 @@ public class BenoStreamDBConnectorFactory implements ConnectorFactory {
         public Set<ConnectorTableFunction> getTableFunctions() {
             return Set.of(
                     new VectorSearchFunction(warehouse),
+                    new KeywordSearchFunction(warehouse),
                     new HybridSearchFunction(warehouse),
                     new GraphTableFunction(warehouse, GraphSql.Kind.NEIGHBORS),
                     new GraphTableFunction(warehouse, GraphSql.Kind.SHORTEST_PATH),

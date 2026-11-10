@@ -1,11 +1,14 @@
-# Python Binding Ergonomics: Hiding the `arrow_cast(...)` Tax
+# ADR-008: Vector and Graph Binding Ergonomics (Hiding the `arrow_cast(...)` Tax)
 
-Status: proposal
-Scope: embedded Python session (`bsdb.Session` / `bsdb.Table`) and the SQL surface it exposes
-Motivation: the RAG + knowledge-graph how-to notebook only runs because of dozens of hand-written
-type casts in SQL. Users should not have to know that graph UDFs want `UInt64`/`UInt32`, that
-`louvain` wants `Float32`, or that a vector literal needs `::vector`. The bindings should absorb
-all of that.
+- **Status**: Implemented in part — R1, R3 and R5 are fixed; R4 is partly fixed
+(Python `vector()` helper exists, SQL operators still require `::vector`);
+R2 is covered by the R3 table functions. Promoted from
+`plans/python_binding_ergonomics.md`; per-item notes follow.
+- **Scope**: embedded Python session (`bsdb.Session` / `bsdb.Table`) and the SQL surface it exposes
+- **Motivation**: the RAG + knowledge-graph how-to notebook only ran because of dozens of
+hand-written type casts in SQL. Users should not have to know that graph UDFs want
+`UInt64`/`UInt32`, that `louvain` wants `Float32`, or that a vector literal needs `::vector`.
+The bindings should absorb all of that.
 
 ---
 

@@ -1,7 +1,8 @@
-# Design: SQL DDL / Maintenance Surface over the Core `Table` API
+# ADR-006: SQL DDL and Maintenance Surface over the Core `Table` API
 
-Status: Draft for review
-Scope: `src/core/sql/`, `src/core/catalog/`, `src/core/table/`, `server/flight_sql/`
+- **Status**: Implemented — promoted from `plans/sql_ddl_surface.md`
+- **Scope**: `src/core/sql/`, `src/core/catalog/`, `src/core/table/`, `server/flight_sql/`
+- **Implementation**: `src/core/sql/catalog_ddl.rs` (`handled_ddl_statements`, `table_action_names`)
 
 ## 1. Problem
 

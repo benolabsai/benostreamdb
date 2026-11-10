@@ -388,8 +388,25 @@ public abstract class AbstractBenoStreamDBMetadata implements ConnectorMetadata 
 
         if (!(functionHandle instanceof VectorSearchHandle)
                 && !(functionHandle instanceof GraphTableFunctionHandle)
-                && !(functionHandle instanceof HybridSearchHandle)) {
+                && !(functionHandle instanceof HybridSearchHandle)
+                && !(functionHandle instanceof KeywordSearchHandle)) {
             return Optional.empty();
+        }
+
+        if (functionHandle instanceof KeywordSearchHandle) {
+            KeywordSearchHandle handle = (KeywordSearchHandle) functionHandle;
+            String[] schemaTable = BenoStreamDBTableUri.splitTable(handle.getTable());
+            List<ColumnHandle> columnHandles = new ArrayList<>();
+            for (ColumnMetadata column : resolveColumns(schemaTable[0], schemaTable[1])) {
+                columnHandles.add(new BenoStreamDBColumnHandle(column.getName(), column.getType()));
+            }
+            columnHandles.add(new BenoStreamDBColumnHandle("score", DoubleType.DOUBLE));
+            BenoStreamDBTableHandle tableHandle = new BenoStreamDBTableHandle(
+                    schemaTable[0],
+                    schemaTable[1],
+                    Optional.empty(),
+                    Optional.of(KeywordSearchSql.build(handle)));
+            return Optional.of(new TableFunctionApplicationResult<>(tableHandle, columnHandles));
         }
 
         if (functionHandle instanceof HybridSearchHandle) {
