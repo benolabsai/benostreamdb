@@ -473,28 +473,45 @@ pub fn convert_iceberg_to_object(
             ..Default::default()
         })))
     } else {
-        // Delete File
-        let content = if df.content == 1 {
+        // Delete File.
+        //
+        // Two encodings are accepted for V3 Deletion Vectors:
+        //  - spec shape: `content = 1` (POSITION_DELETES), `file_format = "PUFFIN"`,
+        //    non-null `referenced_data_file` + `content_offset` + `content_size_in_bytes`;
+        //  - legacy BenoStreamDB shape: the custom `content = 3` code, which earlier
+        //    builds wrote before the V3 spec layout was implemented.
+        let dv_fields = (df.content_offset, df.content_size_in_bytes);
+        let is_puffin = df.file_format.eq_ignore_ascii_case("PUFFIN");
+        let content = if df.content == 1 && is_puffin {
+            match dv_fields {
+                (Some(offset), Some(size)) => DeleteContent::DeletionVector {
+                    puffin_file_path: df.file_path.clone(),
+                    referenced_data_file: df.referenced_data_file.clone(),
+                    content_offset: offset,
+                    content_size_in_bytes: size,
+                },
+                // A PUFFIN-format position-delete entry without blob coordinates
+                // cannot be fetched; failing closed here would silently drop the
+                // deletes, so surface it as a position delete and let the reader
+                // warn on the unreadable path.
+                _ => DeleteContent::Position,
+            }
+        } else if df.content == 1 {
             DeleteContent::Position
         } else if df.content == 2 {
             DeleteContent::Equality {
                 equality_ids: df.equality_ids.clone().unwrap_or_default(),
             }
         } else if df.content == 3 {
-            // V3 Deletion Vector (content=3)
-            // Check if we have the required DV fields
-            if let (Some(_ref_file), Some(offset), Some(size)) = (
-                df.referenced_data_file.clone(),
-                df.content_offset,
-                df.content_size_in_bytes,
-            ) {
+            // Legacy DV encoding written before the V3 spec layout landed.
+            if let (Some(offset), Some(size)) = dv_fields {
                 DeleteContent::DeletionVector {
                     puffin_file_path: df.file_path.clone(),
+                    referenced_data_file: df.referenced_data_file.clone(),
                     content_offset: offset,
                     content_size_in_bytes: size,
                 }
             } else {
-                // Fallback to position delete if DV fields are missing
                 DeleteContent::Position
             }
         } else {

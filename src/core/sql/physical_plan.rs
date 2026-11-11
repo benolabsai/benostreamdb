@@ -33,6 +33,14 @@ pub struct BenoStreamExec {
     /// Human-readable breakdown of why segments were pruned by partition /
     /// statistics rules, surfaced in `EXPLAIN` output.
     pruning_summary: Option<String>,
+    /// Uncommitted write-buffer batches captured **at plan time**, from the same
+    /// [`Table::consistent_scan_view`] call that produced `partitions`.
+    ///
+    /// Re-reading the live buffer in `execute()` would let a flush publish its
+    /// manifest between planning and execution, so a row would be returned once
+    /// from the new segment and once from the still-staged batch. Pinning the
+    /// captured set makes the whole query read one coherent snapshot.
+    write_buffer: Arc<Vec<arrow::record_batch::RecordBatch>>,
 }
 
 impl BenoStreamExec {
@@ -76,12 +84,22 @@ impl BenoStreamExec {
             schema: projected_schema,
             properties,
             pruning_summary: None,
+            write_buffer: Arc::new(Vec::new()),
         })
     }
 
     /// Attach a pruning-reason breakdown to be shown in `EXPLAIN` output.
     pub fn with_pruning_summary(mut self, summary: Option<String>) -> Self {
         self.pruning_summary = summary;
+        self
+    }
+
+    /// Attach the write-buffer batches captured alongside `partitions`.
+    ///
+    /// Must come from the same [`Table::consistent_scan_view`] call that produced
+    /// the partitions; `BenoStreamTableProvider::scan` is the only intended caller.
+    pub fn with_write_buffer(mut self, buffer: Arc<Vec<arrow::record_batch::RecordBatch>>) -> Self {
+        self.write_buffer = buffer;
         self
     }
 
@@ -196,7 +214,8 @@ impl ExecutionPlan for BenoStreamExec {
                 self.limit,
                 self.base_schema.clone(), // Use base schema for reprojection
             )?
-            .with_pruning_summary(self.pruning_summary.clone()),
+            .with_pruning_summary(self.pruning_summary.clone())
+            .with_write_buffer(self.write_buffer.clone()),
         ))
     }
 
@@ -215,6 +234,9 @@ impl ExecutionPlan for BenoStreamExec {
 
         let table = self.table.clone();
         let filter = self.filter.clone();
+        // Clone the Arc so the stream owns the captured buffer rather than
+        // borrowing `self`, which would tie the returned stream to `&self`.
+        let write_buffer = self.write_buffer.clone();
 
         // If no partitions (empty table), return empty stream
         let entries = if self.partitions.is_empty() {
@@ -289,12 +311,17 @@ impl ExecutionPlan for BenoStreamExec {
                 }
             }
 
-            // If this is partition 0, also include in-memory write buffer data
+            // If this is partition 0, also include the write-buffer batches that
+            // were captured with the manifest at plan time.
             if partition == 0 {
                 let col_refs: Option<Vec<&str>> = col_names_owned.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
                 let col_slice = col_refs.as_deref();
 
-                match table.read_write_buffer_expr(filter_expr.as_ref(), col_slice) {
+                match table.filter_write_buffer_batches(
+                    write_buffer.as_ref(),
+                    filter_expr.as_ref(),
+                    col_slice,
+                ) {
                     Ok(batches) => {
                         for batch in batches {
                             match normalize_batch_to_expected(batch, &expected_schema_inner) {

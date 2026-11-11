@@ -1203,7 +1203,16 @@ impl Table {
                             }
                         }
                         merged_entry.index_files = updated_index_files;
-                        let commit_metadata = crate::core::manifest::CommitMetadata::default();
+                        // This is an in-place update: remove the unindexed entry and
+                        // add the indexed one. If a concurrent compaction already
+                        // removed this segment while its indexes were building, the
+                        // removal is a no-op and the add would *resurrect* the file —
+                        // whose rows the compacted replacement already contains, so
+                        // every row in it becomes a duplicate. Commit no-op instead.
+                        let commit_metadata = crate::core::manifest::CommitMetadata {
+                            discard_add_on_missing_remove: true,
+                            ..Default::default()
+                        };
                         let file_path = merged_entry.file_path.clone();
                         let index_count = merged_entry.index_files.len();
                         let remove_paths = vec![merged_entry.file_path.clone()];

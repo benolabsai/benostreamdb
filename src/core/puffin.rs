@@ -758,31 +758,277 @@ pub async fn materialize_puffin_blobs(
     Ok((temp_dir, written))
 }
 
-/// Deletion Vector blob type identifier
-pub const DELETION_VECTOR_TYPE: &str = "apache-datasketches-theta-v1";
-
-/// Read a deletion vector from a Puffin file and return the set of deleted row positions
+/// Puffin blob type identifier for Apache Iceberg V3 deletion vectors.
 ///
-/// Deletion vectors in Iceberg v3 use RoaringBitmap format to efficiently store deleted positions
+/// This is the spec identifier the Iceberg project uses to locate a deletion
+/// vector inside a Puffin container. The previous value
+/// (`"apache-datasketches-theta-v1"`) was the identifier for a *different*
+/// blob type entirely, so no external reader would ever have found our DVs.
+pub const DELETION_VECTOR_TYPE: &str = "deletion-vector-v1";
+
+/// Magic sequence that prefixes every `deletion-vector-v1` blob payload.
+///
+/// Big-endian `0xD1D33964` (equivalently little-endian `1681511377` /
+/// `0x6439D3D1`) — the value the Iceberg spec mandates. A reader that does not
+/// see these four bytes must reject the blob rather than guess.
+pub const DELETION_VECTOR_MAGIC: [u8; 4] = [0xD1, 0xD3, 0x39, 0x64];
+
+/// Bytes of framing a `deletion-vector-v1` payload carries around the bitmap:
+/// `4B` big-endian length + `4B` magic + `4B` big-endian CRC-32.
+const DELETION_VECTOR_OVERHEAD: usize = 12;
+
+/// Bytes of framing that sit *outside* the region the length field counts:
+/// the `4B` length field itself plus the trailing `4B` CRC-32.
+const DELETION_VECTOR_FRAME_BYTES: usize = 8;
+
+/// CRC-32 (IEEE 802.3, reflected, polynomial `0xEDB88320`).
+///
+/// This is the same checksum Iceberg's reference implementation applies
+/// (`java.util.zip.CRC32`). Implemented inline rather than pulled in as a
+/// dependency: it is ~15 lines, and `deny.toml` audits every crate in the graph.
+fn crc32_ieee(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// Encode a deletion vector into the Iceberg V3 `deletion-vector-v1` payload.
+///
+/// Layout (all integers big-endian except the portable roaring bitmap, which is
+/// little-endian by definition of the portable serialization format):
+///
+/// ```text
+/// +----------------+--------+----------------------+-----------+
+/// | length (4B BE) | magic  | portable 64-bit      | CRC-32    |
+/// | = 4 + N        | 4B     | roaring bitmap (N)   | 4B BE     |
+/// +----------------+--------+----------------------+-----------+
+/// ```
+///
+/// The length covers magic + bitmap only — it excludes both the length field
+/// and the trailing checksum. The CRC covers exactly the same bytes as the
+/// length (magic + bitmap).
+///
+/// Iceberg V3 stores row positions as 64-bit values. BenoStreamDB row positions
+/// are `u32` today (`RoaringBitmap`), so anything above `u32::MAX` is an error
+/// rather than a silent truncation.
+pub fn encode_deletion_vector_v1(bitmap: &roaring::RoaringBitmap) -> Result<Vec<u8>> {
+    let mut treemap = roaring::RoaringTreemap::new();
+    for position in bitmap.iter() {
+        treemap.insert(position as u64);
+    }
+
+    let mut portable = Vec::with_capacity(DELETION_VECTOR_OVERHEAD + 16);
+    treemap
+        .serialize_into(&mut portable)
+        .context("Failed to serialize portable 64-bit RoaringBitmap for deletion vector")?;
+
+    let framed_len = DELETION_VECTOR_MAGIC.len() + portable.len();
+    if framed_len > u32::MAX as usize {
+        anyhow::bail!(
+            "Deletion vector payload of {} bytes exceeds the 32-bit length field",
+            framed_len
+        );
+    }
+
+    let mut payload = Vec::with_capacity(DELETION_VECTOR_OVERHEAD + portable.len());
+    payload.extend_from_slice(&(framed_len as u32).to_be_bytes());
+    payload.extend_from_slice(&DELETION_VECTOR_MAGIC);
+    payload.extend_from_slice(&portable);
+
+    let checksum = crc32_ieee(&payload[4..4 + framed_len]);
+    payload.extend_from_slice(&checksum.to_be_bytes());
+    Ok(payload)
+}
+
+/// Decode a `deletion-vector-v1` payload into the set of deleted row positions.
+///
+/// Validates the length field, the magic sequence, and the CRC-32 before any
+/// bitmap bytes are trusted. Every rejection is
+/// [`BenoStreamError::DeletionVectorDeserialize`] so a corrupt DV surfaces as a
+/// typed error instead of a silently short delete list (which would resurrect
+/// deleted rows).
+pub fn decode_deletion_vector_v1(data: &[u8]) -> Result<roaring::RoaringBitmap> {
+    use crate::core::error::BenoStreamError;
+
+    let reject = |reason: String| -> anyhow::Error {
+        BenoStreamError::DeletionVectorDeserialize { reason }.into()
+    };
+
+    if data.len() < DELETION_VECTOR_OVERHEAD {
+        return Err(reject(format!(
+            "payload of {} bytes is shorter than the {}-byte deletion-vector framing",
+            data.len(),
+            DELETION_VECTOR_OVERHEAD
+        )));
+    }
+
+    let framed_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    if framed_len + DELETION_VECTOR_FRAME_BYTES != data.len() {
+        return Err(reject(format!(
+            "length field declares {} bytes but the payload is {} bytes (length + CRC framing adds {})",
+            framed_len,
+            data.len(),
+            DELETION_VECTOR_FRAME_BYTES
+        )));
+    }
+    if data[4..8] != DELETION_VECTOR_MAGIC {
+        return Err(reject(format!(
+            "magic {:02X?} does not match the deletion-vector-v1 sequence {:02X?}",
+            &data[4..8],
+            DELETION_VECTOR_MAGIC
+        )));
+    }
+
+    let bitmap_bytes = &data[8..4 + framed_len];
+    let expected = u32::from_be_bytes([
+        data[4 + framed_len],
+        data[5 + framed_len],
+        data[6 + framed_len],
+        data[7 + framed_len],
+    ]);
+    let actual = crc32_ieee(&data[4..4 + framed_len]);
+    if expected != actual {
+        return Err(reject(format!(
+            "CRC-32 mismatch: payload declares {expected:#010X} but computes {actual:#010X}"
+        )));
+    }
+
+    let treemap = roaring::RoaringTreemap::deserialize_from(bitmap_bytes)
+        .map_err(|e| reject(format!("failed to deserialize portable RoaringBitmap: {e}")))?;
+
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for position in treemap.iter() {
+        let position_u32 = u32::try_from(position).map_err(|_| {
+            reject(format!(
+                "deletion vector position {position} exceeds u32::MAX, which this reader cannot represent"
+            ))
+        })?;
+        bitmap.insert(position_u32);
+    }
+    Ok(bitmap)
+}
+
+/// Read a deletion vector blob from a Puffin file and return the deleted row positions.
 pub fn read_deletion_vector_from_puffin<R: Read + Seek>(
     reader: &mut PuffinReader<R>,
     blob_idx: usize,
 ) -> Result<roaring::RoaringBitmap> {
     let data = reader.read_blob(blob_idx)?;
-
-    // Deletion vectors are stored as RoaringBitmap serialized format
-    let bitmap = roaring::RoaringBitmap::deserialize_from(&data[..])
-        .context("Failed to deserialize deletion vector RoaringBitmap")?;
-
-    Ok(bitmap)
+    decode_deletion_vector_v1(&data)
 }
 
-/// Read a deletion vector from a byte range (for async/object store scenarios)
+/// Decode a deletion vector from a byte range already fetched from an object store.
+///
+/// This is the read path `HybridReader` uses: a DV manifest entry carries
+/// `content_offset` / `content_size_in_bytes`, so only the blob is fetched, not
+/// the whole Puffin file.
 pub fn read_deletion_vector_from_bytes(data: &[u8]) -> Result<roaring::RoaringBitmap> {
-    let bitmap = roaring::RoaringBitmap::deserialize_from(data)
-        .context("Failed to deserialize deletion vector RoaringBitmap")?;
+    decode_deletion_vector_v1(data)
+}
 
-    Ok(bitmap)
+#[cfg(test)]
+mod deletion_vector_tests {
+    use super::*;
+
+    fn bitmap_of(positions: &[u32]) -> roaring::RoaringBitmap {
+        let mut bm = roaring::RoaringBitmap::new();
+        for &p in positions {
+            bm.insert(p);
+        }
+        bm
+    }
+
+    #[test]
+    fn deletion_vector_v1_round_trips() {
+        let original = bitmap_of(&[0, 1, 2, 7, 63, 64, 65, 4096, 1_000_000]);
+        let payload = encode_deletion_vector_v1(&original).unwrap();
+        let decoded = decode_deletion_vector_v1(&payload).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn deletion_vector_v1_round_trips_empty_and_max_position() {
+        for positions in [vec![], vec![0u32], vec![u32::MAX]] {
+            let original = bitmap_of(&positions);
+            let payload = encode_deletion_vector_v1(&original).unwrap();
+            assert_eq!(decode_deletion_vector_v1(&payload).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn deletion_vector_v1_framing_is_spec_shaped() {
+        let payload = encode_deletion_vector_v1(&bitmap_of(&[5, 6])).unwrap();
+        let framed_len =
+            u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+        // length covers magic + bitmap, excluding the length field and the CRC
+        assert_eq!(framed_len, payload.len() - DELETION_VECTOR_FRAME_BYTES);
+        assert_eq!(framed_len, payload.len() - 8);
+        assert_eq!(&payload[4..8], &DELETION_VECTOR_MAGIC);
+        assert_eq!(
+            u32::from_be_bytes([
+                payload[4 + framed_len],
+                payload[5 + framed_len],
+                payload[6 + framed_len],
+                payload[7 + framed_len],
+            ]),
+            crc32_ieee(&payload[4..4 + framed_len])
+        );
+    }
+
+    #[test]
+    fn deletion_vector_v1_rejects_bad_magic() {
+        let mut payload = encode_deletion_vector_v1(&bitmap_of(&[3])).unwrap();
+        payload[4] ^= 0xFF;
+        let err = decode_deletion_vector_v1(&payload).unwrap_err();
+        assert!(
+            err.to_string().contains("magic"),
+            "expected a magic error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn deletion_vector_v1_rejects_corrupted_bitmap() {
+        let mut payload = encode_deletion_vector_v1(&bitmap_of(&[3, 9, 27])).unwrap();
+        let framed_len = payload.len() - DELETION_VECTOR_OVERHEAD;
+        // flip a bitmap byte (starts right after the magic) without touching framing
+        payload[8] ^= 0xFF;
+        // recompute nothing: the CRC must catch it
+        let err = decode_deletion_vector_v1(&payload).unwrap_err();
+        assert!(
+            err.to_string().contains("CRC-32"),
+            "expected a CRC error, got: {err}"
+        );
+        // sanity: restoring the byte makes it decode again
+        payload[8] ^= 0xFF;
+        assert!(decode_deletion_vector_v1(&payload).is_ok());
+        let _ = framed_len;
+    }
+
+    #[test]
+    fn deletion_vector_v1_rejects_truncated_and_overlong_payloads() {
+        let payload = encode_deletion_vector_v1(&bitmap_of(&[11, 12, 13])).unwrap();
+
+        let truncated = &payload[..payload.len() - 1];
+        assert!(decode_deletion_vector_v1(truncated).is_err());
+
+        let mut overlong = payload.clone();
+        overlong.push(0x00);
+        assert!(decode_deletion_vector_v1(&overlong).is_err());
+
+        assert!(decode_deletion_vector_v1(&[]).is_err());
+        assert!(decode_deletion_vector_v1(&payload[..8]).is_err());
+    }
+
+    #[test]
+    fn deletion_vector_type_is_the_iceberg_spec_identifier() {
+        assert_eq!(DELETION_VECTOR_TYPE, "deletion-vector-v1");
+    }
 }
 
 #[cfg(test)]

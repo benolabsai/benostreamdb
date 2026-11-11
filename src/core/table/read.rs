@@ -1559,7 +1559,7 @@ impl Table {
         Ok(combined_stream.boxed())
     }
 
-    async fn list_segments_from_store(&self) -> Result<Vec<ManifestEntry>> {
+    pub(crate) async fn list_segments_from_store(&self) -> Result<Vec<ManifestEntry>> {
         use futures::StreamExt;
         let mut entries = Vec::new();
         let mut stream = self.store.list(None);

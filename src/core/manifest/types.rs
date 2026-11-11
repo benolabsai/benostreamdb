@@ -208,6 +208,14 @@ pub enum DeleteContent {
     DeletionVector {
         /// Path to the Puffin file containing the deletion vector
         puffin_file_path: String,
+        /// The single data file this deletion vector applies to (Iceberg field `143`).
+        ///
+        /// Iceberg V3 requires this to be non-null: a DV applies to *one* data file
+        /// per snapshot, which is what lets an external reader fetch only the blob
+        /// and mask exactly those rows. `None` is accepted on read for manifests
+        /// written before the field was populated.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        referenced_data_file: Option<String>,
         /// Offset within the Puffin file where the deletion vector blob starts
         content_offset: i64,
         /// Size of the deletion vector blob in bytes

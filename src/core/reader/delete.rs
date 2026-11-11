@@ -287,6 +287,7 @@ impl HybridReader {
         for delete_file in unique.iter().copied() {
             if let crate::core::manifest::DeleteContent::DeletionVector {
                 puffin_file_path,
+                referenced_data_file: _,
                 content_offset,
                 content_size_in_bytes,
             } = &delete_file.content

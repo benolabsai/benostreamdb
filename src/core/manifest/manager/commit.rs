@@ -215,7 +215,9 @@ impl ManifestManager {
                     // Append-only fast path: write only the new entries to a new
                     // manifest file and reference the unchanged previous manifest
                     // files, instead of re-encoding every entry.
-                    let writer = crate::core::iceberg::IcebergWriter::new();
+                    let writer = crate::core::iceberg::IcebergWriter::with_format_version(
+                        current_manifest.format_version,
+                    );
                     let default_schema = crate::core::manifest::Schema::default();
                     let table_schema = metadata
                         .updated_schemas
@@ -345,7 +347,9 @@ impl ManifestManager {
                     let list_uuid = uuid::Uuid::new_v4();
                     let list_filename = format!("snap-{}-{}.avro", new_ver, list_uuid);
                     let list_path_loc = self.manifest_dir.child(list_filename);
-                    let writer = crate::core::iceberg::IcebergWriter::new();
+                    let writer = crate::core::iceberg::IcebergWriter::with_format_version(
+                        current_manifest.format_version,
+                    );
                     let list_bytes = writer.write_manifest_list(&manifest_files)?;
                     self.store.put(&list_path_loc, list_bytes.into()).await?;
 
@@ -354,7 +358,9 @@ impl ManifestManager {
                     let mut manifest_files = Vec::new();
                     let mut futures = futures::stream::FuturesUnordered::new();
 
-                    let writer = crate::core::iceberg::IcebergWriter::new();
+                    let writer = crate::core::iceberg::IcebergWriter::with_format_version(
+                        current_manifest.format_version,
+                    );
                     let default_schema = crate::core::manifest::Schema::default();
                     // Prefer the schema being written in this commit. On the very
                     // first commit `current_manifest.schemas` is still empty, so
@@ -492,7 +498,9 @@ impl ManifestManager {
                     let list_filename = format!("snap-{}-{}.avro", new_ver, list_uuid);
                     let list_path_loc = self.manifest_dir.child(list_filename);
 
-                    let writer = crate::core::iceberg::IcebergWriter::new();
+                    let writer = crate::core::iceberg::IcebergWriter::with_format_version(
+                        current_manifest.format_version,
+                    );
                     let list_bytes = writer.write_manifest_list(&manifest_files)?;
                     self.store.put(&list_path_loc, list_bytes.into()).await?;
 

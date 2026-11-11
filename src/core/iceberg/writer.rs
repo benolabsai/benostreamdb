@@ -55,6 +55,7 @@ fn attach_manifest_metadata<W: std::io::Write>(
     spec: &crate::core::manifest::PartitionSpec,
     schema: &crate::core::manifest::Schema,
     content: &str,
+    format_version: u8,
 ) -> Result<()> {
     let schema_json = serde_json::to_string(schema)?;
     // Iceberg stores the *fields array* here, not the `{"spec-id":..,"fields":..}`
@@ -63,12 +64,63 @@ fn attach_manifest_metadata<W: std::io::Write>(
     writer.add_user_metadata("schema".to_string(), schema_json)?;
     writer.add_user_metadata("partition-spec".to_string(), spec_json)?;
     writer.add_user_metadata("partition-spec-id".to_string(), spec.spec_id.to_string())?;
-    writer.add_user_metadata("format-version".to_string(), "2")?;
+    // External V3 readers inspect this key to decide how to parse the manifest
+    // entries. Hardcoding "2" made a `format-version = 3` table's manifests claim
+    // to be V2, so V3-only fields (143-145) were ignored or rejected.
+    writer.add_user_metadata(
+        "format-version".to_string(),
+        format_version.max(2).to_string(),
+    )?;
     writer.add_user_metadata("content".to_string(), content)?;
     Ok(())
 }
 
-pub struct IcebergWriter;
+/// Container format of a delete file, inferred from its extension.
+///
+/// Position deletes are Parquet, equality deletes are Avro. Anything that is
+/// neither is labelled `AVRO`, matching the pre-V3 behavior for unfamiliar
+/// sidecars.
+fn container_format_of(path: &str) -> String {
+    if path.to_ascii_lowercase().ends_with(".parquet") {
+        "PARQUET".to_string()
+    } else {
+        "AVRO".to_string()
+    }
+}
+
+/// Put an optional string into an Avro record whose field is `["null","string"]`.
+fn put_optional_string(record: &mut apache_avro::types::Record, field: &str, value: Option<&str>) {
+    record.put(
+        field,
+        match value {
+            Some(v) => apache_avro::types::Value::Union(
+                1,
+                Box::new(apache_avro::types::Value::String(v.to_string())),
+            ),
+            None => apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+        },
+    );
+}
+
+/// Put an optional `long` into an Avro record whose field is `["null","long"]`.
+fn put_optional_long(record: &mut apache_avro::types::Record, field: &str, value: Option<i64>) {
+    record.put(
+        field,
+        match value {
+            Some(v) => {
+                apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(v)))
+            }
+            None => apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+        },
+    );
+}
+
+pub struct IcebergWriter {
+    /// Table `format-version` this writer emits manifests for. `2` keeps the
+    /// historical behavior; `3` enables V3 manifest metadata and the spec-shaped
+    /// Deletion Vector entries.
+    format_version: u8,
+}
 
 impl Default for IcebergWriter {
     fn default() -> Self {
@@ -131,10 +183,19 @@ fn append_delete_record<W: std::io::Write>(
     let mut data_file = apache_avro::types::Record::new(data_file_schema)
         .ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
 
-    let content_id = match del_file.content {
-        crate::core::manifest::DeleteContent::Position => 1,
-        crate::core::manifest::DeleteContent::Equality { .. } => 2,
-        crate::core::manifest::DeleteContent::DeletionVector { .. } => 3,
+    // Iceberg V3 codes a Deletion Vector as a POSITION_DELETES entry (`content = 1`)
+    // whose `file_format` is `PUFFIN` and whose fields 143-145 locate the blob inside
+    // the Puffin container. The custom `content = 3` code is only accepted on read now
+    // (see `crate::core::iceberg::manifest`) so tables written by earlier builds still
+    // resolve.
+    let (content_id, delete_format) = match &del_file.content {
+        crate::core::manifest::DeleteContent::Position => {
+            (1, container_format_of(&del_file.file_path))
+        }
+        crate::core::manifest::DeleteContent::Equality { .. } => {
+            (2, container_format_of(&del_file.file_path))
+        }
+        crate::core::manifest::DeleteContent::DeletionVector { .. } => (1, "PUFFIN".to_string()),
     };
 
     data_file.put("content", apache_avro::types::Value::Int(content_id));
@@ -142,20 +203,12 @@ fn append_delete_record<W: std::io::Write>(
         "file_path",
         apache_avro::types::Value::String(del_file.file_path.clone()),
     );
-    // Position deletes are Parquet, equality deletes are Avro; the manifest must
-    // declare the actual container format or clients pick the wrong reader.
-    let delete_format = if del_file
-        .file_path
-        .to_ascii_lowercase()
-        .ends_with(".parquet")
-    {
-        "PARQUET"
-    } else {
-        "AVRO"
-    };
+    // The manifest must declare the actual container format or clients pick the
+    // wrong reader: position deletes are Parquet, equality deletes are Avro, and
+    // V3 deletion vectors are Puffin blobs.
     data_file.put(
         "file_format",
-        apache_avro::types::Value::String(delete_format.to_string()),
+        apache_avro::types::Value::String(delete_format),
     );
     data_file.put(
         "record_count",
@@ -217,14 +270,59 @@ fn append_delete_record<W: std::io::Write>(
         );
     }
 
+    // V3 deletion-vector coordinates (fields 143-145). Always written so the
+    // record resolves; null for every non-DV delete type.
+    match &del_file.content {
+        crate::core::manifest::DeleteContent::DeletionVector {
+            puffin_file_path: _,
+            referenced_data_file,
+            content_offset,
+            content_size_in_bytes,
+        } => {
+            put_optional_string(
+                &mut data_file,
+                "referenced_data_file",
+                referenced_data_file.as_deref(),
+            );
+            put_optional_long(&mut data_file, "content_offset", Some(*content_offset));
+            put_optional_long(
+                &mut data_file,
+                "content_size_in_bytes",
+                Some(*content_size_in_bytes),
+            );
+        }
+        _ => {
+            put_optional_string(&mut data_file, "referenced_data_file", None);
+            put_optional_long(&mut data_file, "content_offset", None);
+            put_optional_long(&mut data_file, "content_size_in_bytes", None);
+        }
+    }
+
     record.put("data_file", data_file);
     writer.append(record)?;
     Ok(())
 }
 
 impl IcebergWriter {
+    /// Writer for Iceberg V2 manifests (the default, and what every `format-version = 2`
+    /// table must keep emitting).
     pub fn new() -> Self {
-        Self {}
+        Self { format_version: 2 }
+    }
+
+    /// Writer for a specific table `format-version`.
+    ///
+    /// Versions below 2 are clamped to 2: V1 manifests predate the `content`
+    /// metadata key and nothing in this engine writes them.
+    pub fn with_format_version(format_version: i32) -> Self {
+        Self {
+            format_version: u8::try_from(format_version).unwrap_or(2).max(2),
+        }
+    }
+
+    /// The `format-version` stamped into this writer's manifest metadata.
+    pub fn format_version(&self) -> u8 {
+        self.format_version
     }
 
     /// Write a Manifest List (snap-*.avro)
@@ -324,7 +422,13 @@ impl IcebergWriter {
         let schema_json = self.generate_manifest_schema(partition_spec, table_schema);
         let schema = apache_avro::Schema::parse_str(&schema_json)?;
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-        attach_manifest_metadata(&mut writer, partition_spec, table_schema, "0")?;
+        attach_manifest_metadata(
+            &mut writer,
+            partition_spec,
+            table_schema,
+            "0",
+            self.format_version,
+        )?;
 
         for entry in entries {
             let mut record = apache_avro::types::Record::new(&schema)
@@ -468,6 +572,11 @@ impl IcebergWriter {
                     apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
                 );
             }
+
+            // V3 deletion-vector coordinates are null on data entries.
+            put_optional_string(&mut data_file, "referenced_data_file", None);
+            put_optional_long(&mut data_file, "content_offset", None);
+            put_optional_long(&mut data_file, "content_size_in_bytes", None);
 
             record.put("data_file", data_file);
             writer.append(record)?;
@@ -666,7 +775,13 @@ impl IcebergWriter {
                 written: written.clone(),
             },
         );
-        attach_manifest_metadata(&mut writer, partition_spec, schema, "0")?;
+        attach_manifest_metadata(
+            &mut writer,
+            partition_spec,
+            schema,
+            "0",
+            self.format_version,
+        )?;
 
         for entry in entries {
             let mut record = apache_avro::types::Record::new(&avro_schema)
@@ -805,6 +920,11 @@ impl IcebergWriter {
                 );
             }
 
+            // V3 deletion-vector coordinates are null on data entries.
+            put_optional_string(&mut data_file, "referenced_data_file", None);
+            put_optional_long(&mut data_file, "content_offset", None);
+            put_optional_long(&mut data_file, "content_size_in_bytes", None);
+
             record.put("data_file", data_file);
             writer.append(record)?;
             current_file_count += 1;
@@ -823,7 +943,13 @@ impl IcebergWriter {
                         written: written.clone(),
                     },
                 );
-                attach_manifest_metadata(&mut writer, partition_spec, schema, "0")?;
+                attach_manifest_metadata(
+                    &mut writer,
+                    partition_spec,
+                    schema,
+                    "0",
+                    self.format_version,
+                )?;
                 current_file_count = 0;
                 current_row_count = 0;
             }
@@ -865,7 +991,13 @@ impl IcebergWriter {
         let schema_json = self.generate_manifest_schema(partition_spec, schema);
         let avro_schema = apache_avro::Schema::parse_str(&schema_json)?;
         let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new());
-        attach_manifest_metadata(&mut writer, partition_spec, schema, "1")?;
+        attach_manifest_metadata(
+            &mut writer,
+            partition_spec,
+            schema,
+            "1",
+            self.format_version,
+        )?;
 
         let mut added = 0usize;
         let mut existing = 0usize;
@@ -945,7 +1077,10 @@ impl IcebergWriter {
                 {{"name": "equality_ids", "type": ["null", {{"type": "array", "element-id": 136, "items": "int"}}], "field-id": 135, "default": null}},
                 {{"name": "index_files", "type": ["null", "string"], "field-id": 1000, "default": null}},
                 {{"name": "file_checksum", "type": ["null", "string"], "field-id": 1001, "default": null}},
-                {{"name": "first_row_id", "type": ["null", "long"], "field-id": 142, "default": null}}
+                {{"name": "first_row_id", "type": ["null", "long"], "field-id": 142, "default": null}},
+                {{"name": "referenced_data_file", "type": ["null", "string"], "field-id": 143, "default": null}},
+                {{"name": "content_offset", "type": ["null", "long"], "field-id": 144, "default": null}},
+                {{"name": "content_size_in_bytes", "type": ["null", "long"], "field-id": 145, "default": null}}
             ]
         }}, "field-id": 2}}
     ]

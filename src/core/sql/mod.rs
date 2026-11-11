@@ -342,12 +342,17 @@ impl TableProvider for BenoStreamTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        // Fetch segments from table state
-        let mut segments = self
+        // Fetch segments *and* the uncommitted write buffer from one consistent
+        // snapshot. Reading them separately (manifest at planning, buffer at
+        // execution) lets a flush publish its manifest in between, so a flushed
+        // row is returned twice: once from the new segment, once from the batch
+        // still staged in `PendingCommit`.
+        let (mut segments, write_buffer, _manifest_version) = self
             .table
-            .get_snapshot_segments()
+            .consistent_scan_view()
             .await
             .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()))?;
+        let write_buffer = std::sync::Arc::new(write_buffer);
 
         // Keep the pre-pruning segment list so we can report the partition /
         // statistics pruning breakdown in the DataFusion plan (EXPLAIN).
@@ -942,7 +947,8 @@ impl TableProvider for BenoStreamTableProvider {
                     limit,
                     self.schema(),
                 )?
-                .with_pruning_summary(pruning_summary),
+                .with_pruning_summary(pruning_summary)
+                .with_write_buffer(write_buffer),
             ))
         }
     }

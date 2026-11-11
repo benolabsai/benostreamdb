@@ -957,20 +957,106 @@ impl Table {
         expr: Option<&FilterExpr>,
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
-        let mut result = Vec::new();
-        let batches: Vec<RecordBatch> = {
-            let pc_guard = self.pending_commit.lock();
-            let pending = self.pending_writes.read();
-            let mut combined = Vec::new();
-            if let Some(pc) = pc_guard.as_ref() {
-                if pc.phase == super::CommitPhase::Staging {
-                    combined.extend(pc.batches.iter().cloned());
-                }
-            }
-            combined.extend(pending.iter().map(|p| p.batch.clone()));
-            combined
-        };
+        let batches = self.capture_write_buffer_batches();
+        self.filter_write_buffer_batches(&batches, expr, columns)
+    }
 
+    /// Snapshot the not-yet-committed batches.
+    ///
+    /// Lock order matches every reader: `pending_commit` then `pending_writes`.
+    /// Each batch appears here exactly once, because the flush moves batches out
+    /// of `pending_writes` and into `PendingCommit::batches` in one critical
+    /// section. A caller that *also* reads the manifest must pair the two reads
+    /// (see [`Table::consistent_scan_view`]): otherwise a batch flushed between
+    /// the manifest read and this call is visible twice — once from the new
+    /// manifest and once from the still-`Staging` pending commit.
+    fn capture_write_buffer_batches(&self) -> Vec<RecordBatch> {
+        let pc_guard = self.pending_commit.lock();
+        let pending = self.pending_writes.read();
+        let mut combined = Vec::new();
+        if let Some(pc) = pc_guard.as_ref() {
+            if pc.phase == super::CommitPhase::Staging {
+                combined.extend(pc.batches.iter().cloned());
+            }
+        }
+        combined.extend(pending.iter().map(|p| p.batch.clone()));
+        combined
+    }
+
+    /// Atomically capture the committed segments and the uncommitted write
+    /// buffer for one query.
+    ///
+    /// This is the same protocol [`Table::read_expr_stream_async`] uses: read
+    /// `buffer_epoch`, load the manifest, snapshot the pending state, read
+    /// `buffer_epoch` again, and retry if it moved. A stable epoch across both
+    /// reads proves no flush transitioned `Staging → ManifestCommitted` in
+    /// between, so a row cannot appear in both halves of the result.
+    ///
+    /// Returns `(segments, write_buffer_batches, manifest_version)`.
+    pub(crate) async fn consistent_scan_view(
+        &self,
+    ) -> Result<(
+        Vec<crate::core::manifest::ManifestEntry>,
+        Vec<RecordBatch>,
+        u64,
+    )> {
+        use std::sync::atomic::Ordering;
+
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let mut force_direct = false;
+
+        for attempt in 0..8usize {
+            let epoch1 = self.buffer_epoch.load(Ordering::SeqCst);
+
+            let (version, segments) = if force_direct {
+                match manifest_manager.load_latest_direct().await {
+                    Ok((m, v)) => (v, manifest_manager.load_all_entries(&m).await?),
+                    Err(_) => (0, self.list_segments_from_store().await.unwrap_or_default()),
+                }
+            } else {
+                match manifest_manager.load_latest_full().await {
+                    Ok((_, entries, v)) => (v, entries),
+                    Err(_) => (0, self.list_segments_from_store().await.unwrap_or_default()),
+                }
+            };
+
+            let (buffer, committed_ver) = {
+                let pc_guard = self.pending_commit.lock();
+                let pending = self.pending_writes.read();
+                let mut combined = Vec::new();
+                let mut committed_ver = None;
+                if let Some(pc) = pc_guard.as_ref() {
+                    if pc.phase == super::CommitPhase::Staging {
+                        combined.extend(pc.batches.iter().cloned());
+                    } else if let Some(cm) = pc.committed_manifest.as_ref() {
+                        committed_ver = Some(cm.version);
+                    }
+                }
+                combined.extend(pending.iter().map(|p| p.batch.clone()));
+                (combined, committed_ver)
+            };
+
+            let epoch2 = self.buffer_epoch.load(Ordering::SeqCst);
+            let stale_manifest = committed_ver.is_some_and(|cv| version < cv);
+            if (epoch1 != epoch2 || stale_manifest) && attempt < 7 {
+                force_direct = true;
+                continue;
+            }
+            return Ok((segments, buffer, version));
+        }
+
+        anyhow::bail!("Failed to obtain a linearizable scan snapshot during concurrent commit")
+    }
+
+    /// Filter and project an already-captured write-buffer batch set,
+    /// evaluating predicates before projecting requested `columns`.
+    pub fn filter_write_buffer_batches(
+        &self,
+        batches: &[RecordBatch],
+        expr: Option<&FilterExpr>,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        let mut result = Vec::new();
         if batches.is_empty() {
             return Ok(result);
         }
@@ -978,7 +1064,7 @@ impl Table {
         let planner = QueryPlanner::new();
         let table_schema = self.arrow_schema();
 
-        for batch in &batches {
+        for batch in batches {
             let target_schema = if table_schema.fields().is_empty() {
                 batch.schema()
             } else {
