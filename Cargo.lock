@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb-flight"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb-mcp"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1404,7 +1404,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb-search"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "arrow",

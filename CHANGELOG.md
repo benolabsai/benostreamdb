@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.16.0] - 2026-11-11
 
 **Release classification: minor (`0.16.0`), not a patch.** The change set since
 `v0.15.1` is 14 commits across 201 files (+26,446/−7,594) and is *additive to the
