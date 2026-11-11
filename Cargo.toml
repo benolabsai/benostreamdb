@@ -175,7 +175,7 @@ base64 = "0.22.1"
 hmac = "0.12"
 ring = "0.17"
 subtle = "2.5"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "any"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres", "chrono", "uuid", "any"] }
 murmur3 = "0.5.2"
 regex = "1.10"
 

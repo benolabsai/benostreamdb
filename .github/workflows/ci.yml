@@ -252,7 +252,6 @@ jobs:
           pytest -v tests/ \
             --ignore=tests/performance \
             --ignore=tests/benchmarks \
-            --ignore=tests/integration/test_catalog.py \
             --ignore=tests/python/test_prefilter.py
 
   #########################

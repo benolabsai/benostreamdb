@@ -214,6 +214,12 @@ impl PySchema {
         }
     }
 
+    #[staticmethod]
+    fn from_arrow(schema_obj: Bound<'_, PyAny>) -> PyResult<Self> {
+        let inner = super::helpers::extract_schema(schema_obj)?;
+        Ok(Self { inner })
+    }
+
     fn __repr__(&self) -> String {
         format!("Schema(fields={:?})", self.inner.fields())
     }

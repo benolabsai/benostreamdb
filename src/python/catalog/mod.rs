@@ -3,6 +3,7 @@
 pub mod glue;
 pub mod hive;
 pub mod jdbc;
+pub mod memory;
 pub mod nessie;
 pub mod rest;
 pub mod unity;
@@ -10,6 +11,7 @@ pub mod unity;
 pub use glue::PyGlueCatalog;
 pub use hive::PyHiveCatalog;
 pub use jdbc::PyJdbcCatalog;
+pub use memory::PyMemoryCatalog;
 pub use nessie::PyNessieCatalog;
 pub use rest::PyRestCatalog;
 pub use unity::PyUnityCatalog;
@@ -27,6 +29,16 @@ pub fn create_catalog(
     config: std::collections::HashMap<String, String>,
 ) -> PyResult<Py<PyAny>> {
     match catalog_type.to_lowercase().as_str() {
+        "memory" | "mem" => {
+            let uri = config
+                .get("uri")
+                .or_else(|| config.get("url"))
+                .or_else(|| config.get("name"))
+                .cloned();
+            let warehouse = config.get("warehouse").cloned();
+            let catalog = PyMemoryCatalog::new(uri, warehouse)?;
+            Ok(Py::new(py, catalog)?.into_any())
+        }
         "nessie" => {
             let url = config.get("url").cloned().ok_or_else(|| {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>("Missing 'url' for Nessie catalog")
@@ -86,6 +98,17 @@ pub fn create_catalog_from_config(py: Python<'_>, path: String) -> PyResult<Py<P
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
 
     match config.catalog_type {
+        CatalogType::Memory => {
+            let uri = config
+                .config
+                .get("uri")
+                .or_else(|| config.config.get("url"))
+                .or_else(|| config.config.get("name"))
+                .cloned();
+            let warehouse = config.config.get("warehouse").cloned();
+            let catalog = PyMemoryCatalog::new(uri, warehouse)?;
+            Ok(Py::new(py, catalog)?.into_any())
+        }
         CatalogType::Nessie => {
             let url = config.config.get("url").cloned().ok_or_else(|| {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>("Missing 'url' for Nessie catalog")
@@ -141,6 +164,17 @@ pub fn load_default_catalog(py: Python<'_>) -> PyResult<Py<PyAny>> {
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
 
     match config.catalog_type {
+        CatalogType::Memory => {
+            let uri = config
+                .config
+                .get("uri")
+                .or_else(|| config.config.get("url"))
+                .or_else(|| config.config.get("name"))
+                .cloned();
+            let warehouse = config.config.get("warehouse").cloned();
+            let catalog = PyMemoryCatalog::new(uri, warehouse)?;
+            Ok(Py::new(py, catalog)?.into_any())
+        }
         CatalogType::Nessie => {
             let url = config.config.get("url").cloned().ok_or_else(|| {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>("Missing 'url' for Nessie catalog")

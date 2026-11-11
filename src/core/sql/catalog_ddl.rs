@@ -672,6 +672,9 @@ async fn drop_objects(
             }
             ObjectType::Schema => {
                 let (db, schema) = split_db_schema(session, &full);
+                if let Some(ext) = session.catalog_for(&db).await {
+                    ext.drop_namespace(&schema).await?;
+                }
                 if let Some(catalog) = ctx.catalog(&db) {
                     let _ = catalog.deregister_schema(&schema, true);
                 }
@@ -742,15 +745,48 @@ async fn create_table(session: &BenoStreamSession, ct: &CreateTable, raw_sql: &s
     ensure_catalog_schema(session, &db, &schema).await?;
 
     let ext = session.catalog_for(&db).await;
+    if ct.if_not_exists {
+        if let Some(cat_provider) = session.get_ctx().catalog(&db) {
+            if let Some(schema_provider) = cat_provider.schema(&schema) {
+                if schema_provider.table_exist(&table) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     if let Some(cat) = &ext {
-        cat.create_table(&schema, &table, arrow_schema.clone(), Some(&location))
-            .await?;
+        if !(ct.if_not_exists && cat.table_exists(&schema, &table).await.unwrap_or(false)) {
+            cat.create_table(&schema, &table, arrow_schema.clone(), Some(&location))
+                .await?;
+        }
     }
 
     let created = if let Some(cat) = ext {
-        Table::create_with_catalog_async(location, arrow_schema, cat, &schema, &table).await?
+        let store = crate::core::storage::create_object_store(&location)?;
+        let mm = crate::core::manifest::ManifestManager::new(store, "", &location);
+        let (_, version) = mm.load_latest_direct().await.unwrap_or_default();
+        if version > 0 {
+            Table::builder(location)
+                .with_index_all(false)
+                .with_catalog(cat, &schema, &table)
+                .build_async()
+                .await?
+        } else {
+            Table::create_with_catalog_async(location, arrow_schema, cat, &schema, &table).await?
+        }
     } else {
-        Table::create_async(location, arrow_schema).await?
+        let store = crate::core::storage::create_object_store(&location)?;
+        let mm = crate::core::manifest::ManifestManager::new(store, "", &location);
+        let (_, version) = mm.load_latest_direct().await.unwrap_or_default();
+        if ct.if_not_exists && version > 0 {
+            Table::builder(location)
+                .with_index_all(false)
+                .build_async()
+                .await?
+        } else {
+            Table::create_async(location, arrow_schema).await?
+        }
     };
 
     // Apply WITH options.

@@ -2966,6 +2966,10 @@ impl PyTable {
         }
     }
 
+    fn sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
+        self.execute_sql(py, query)
+    }
+
     fn manifest(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Load manifest info from table
         let rt = self.table.runtime();

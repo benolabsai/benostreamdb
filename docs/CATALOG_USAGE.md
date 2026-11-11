@@ -4,14 +4,66 @@ BenoStreamDB supports enterprise-grade data catalogs to provide table discovery,
 
 ## Supported Catalogs
 
-| Catalog | Protocol | Use Case |
-|---------|----------|----------|
-| **Hive Metastore** | Thrift | Enterprise standard, Hadoop ecosystem. |
-| **Project Nessie** | REST v2 | Git-like versioning (branching, merging). |
-| **AWS Glue** | Native SDK | AWS cloud-native metadata management. |
-| **Iceberg REST** | REST v1 | Vendor-neutral, interoperable standard. |
-| **Unity Catalog** | REST | Databricks ecosystem integration. |
-| **JDBC Catalog** | JDBC | SQL-database-backed Iceberg catalog (Postgres / MySQL / SQLite). |
+| Catalog | Protocol | Optimistic CAS Commit Behavior | Use Case |
+|---|---|---|---|
+| **Memory Catalog (`memory`)** | In-process `RwLock` | Validates Iceberg `TableRequirement` predicates (`assert-table-uuid`, `assert-ref-snapshot-id`, schema/spec/field ids) and emits HTTP-409 equivalent conflicts. | Zero-infrastructure unit/integration tests, shared-URI (`memory://<name>`) multi-writer convergence testing. |
+| **JDBC Catalog (`jdbc`)** | `sqlx::AnyPool` (PostgreSQL / SQLite) | Validates `TableRequirement` predicates against persisted `TableMetadata` and executes `UPDATE ... WHERE metadata_location = ?` (`$N` on Postgres) compare-and-swap, returning `409` on zero rows updated. | Embedded SQLite single-node catalogs (`sqlite::memory:` / `sqlite:///...`) and relational PostgreSQL Iceberg metadata stores. |
+| **Hive Metastore (`hive`)** | Thrift | Tracks table `metadata_location` property in HMS (native HMS `expected_parameter` CAS hardening tracked under Workstream C3.3). | Enterprise Hadoop ecosystem integration. |
+| **Project Nessie (`nessie`)** | REST v2 | Git-like branch reference optimistic locking (`expectedHash`). | Branching, tagging, and time-travel data engineering workflows. |
+| **AWS Glue (`glue`)** | Native SDK | AWS Glue Data Catalog table properties (`version_id` CAS hardening tracked under Workstream C3.2). | AWS serverless metadata management. |
+| **Iceberg REST (`rest`)** | REST v1 (Bearer / OAuth2) | Sends full Iceberg REST `requirements` + `updates` payload; retries up to 8 times on HTTP `409 Conflict` with monotonic metadata re-merge. | Vendor-neutral interoperable standard (Apache Polaris, Lakekeeper, Snowflake Open Catalog). |
+| **Unity Catalog (`unity`)** | REST | Databricks Unity Catalog table registration (Iceberg REST commit mode tracked under Workstream C3.4). | Databricks ecosystem integration. |
+
+> [!NOTE]
+> Multi-writer optimistic concurrency convergence relies on `commit_table_with_requirements` returning `BenoStreamError::CatalogRequest { status: Some(409), .. }` when a concurrent commit advances `metadata_location` or `current-snapshot-id`. Today this CAS retry loop (`MAX_CATALOG_RETRIES = 8` in [`maintenance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/maintenance.rs)) is enforced end-to-end by **Memory**, **JDBC** (SQLite/PostgreSQL), and **Iceberg REST**.
+
+---
+
+## 0. Memory and JDBC Catalogs (Zero-Infrastructure & SQL Backends)
+
+### In-Process Memory Catalog (`memory`)
+Use `memory` for deterministic tests and multi-writer conflict simulations without standing up an external metadata server. Naming two clients with the same `memory://<name>` URI shares one process-wide `RwLock` catalog state so concurrent writers observe each other's commits and `409` conflicts:
+
+```python
+import pyarrow as pa
+import benostreamdb as bsdb
+
+catalog = bsdb.create_catalog(
+    "memory",
+    {"uri": "memory://dev_catalog", "warehouse": "file:///tmp/bsdb_wh"},
+)
+catalog.create_namespace("analytics")
+
+schema = bsdb.Schema.from_arrow(pa.schema([pa.field("id", pa.int32(), nullable=False)]))
+catalog.create_table("analytics", "events", schema)
+
+table = catalog.load_table("analytics", "events")
+table.write(pa.table({"id": [1, 2, 3]}))
+table.commit()
+```
+
+### JDBC Catalog (`jdbc`: SQLite and PostgreSQL)
+BenoStreamDB's JDBC catalog routes PostgreSQL (`postgres://`, `$1..$N` parameters) and SQLite (`sqlite://`, `sqlite::memory:`, `?` parameters) through `sqlx::AnyPool`, using `VARCHAR(1024)` for `metadata_location` and conditional `WHERE metadata_location = <expected>` updates:
+
+```python
+import benostreamdb as bsdb
+
+# Embedded single-connection SQLite in-memory catalog
+mem_jdbc = bsdb.create_catalog(
+    "jdbc",
+    {"uri": "sqlite::memory:", "warehouse": "file:///tmp/bsdb_jdbc_wh", "catalog_name": "default"},
+)
+
+# File-backed SQLite or PostgreSQL catalog
+pg_jdbc = bsdb.create_catalog(
+    "jdbc",
+    {
+        "uri": "postgres://iceberg:secret@pg-host:5432/iceberg_catalog",
+        "warehouse": "s3://my-lakehouse-bucket/tables",
+        "catalog_name": "prod",
+    },
+)
+```
 
 ---
 

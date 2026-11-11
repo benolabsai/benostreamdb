@@ -37,7 +37,8 @@ These surfaces are covered by CI and are the ones we stand behind:
 
 - **Engine** — Iceberg-format tables (V2/V3 subset), WAL + MVCC commits, indexes
   (HNSW/IVF, TurboQuant variants, inverted/BM25, bitmap, CSR graph), compaction,
-  vacuum, time travel, schema evolution, multi-writer OCC.
+  vacuum, time travel, schema evolution, multi-writer OCC, and Iceberg catalogs
+  ([`docs/CATALOG_USAGE.md`](CATALOG_USAGE.md) — full `TableRequirement` + 409 CAS retry across `rest`, `memory`, and `jdbc` [PostgreSQL/SQLite]; `glue`/`hive`/`unity`/`nessie` supported with CAS parity hardening tracked in [`plans/iceberg_v3_and_catalog_parity_plan.md`](https://github.com/benolabsai/benostreamdb/blob/main/plans/iceberg_v3_and_catalog_parity_plan.md)).
 - **SQL** — the full DataFusion surface plus the engine's UDFs (vector distance,
   pgvector operators, JSON path, graph UDAFs) and the catalog DDL layer
   (`CREATE INDEX`, `ALTER TABLE`, `OPTIMIZE`, `VACUUM`, `ALTER … EXECUTE`).

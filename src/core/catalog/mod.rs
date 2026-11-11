@@ -1,9 +1,11 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
+pub mod common;
 pub mod config;
 pub mod glue;
 pub mod hive;
 pub mod jdbc;
+pub mod memory;
 pub mod nessie;
 pub mod policy;
 pub mod rest;
@@ -30,6 +32,16 @@ pub trait Catalog: Send + Sync {
     /// Catalogs that have no explicit namespace concept (e.g. Nessie, where a
     /// namespace is a branch) may leave the default no-op implementation.
     async fn create_namespace(&self, _namespace: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Check whether a namespace exists in the catalog.
+    async fn namespace_exists(&self, _namespace: &str) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Drop an empty namespace from the catalog.
+    async fn drop_namespace(&self, _namespace: &str) -> Result<()> {
         Ok(())
     }
 
@@ -97,6 +109,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogType {
+    Memory,
     Nessie,
     Rest,
     Glue,
@@ -110,6 +123,7 @@ impl FromStr for CatalogType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "memory" | "mem" => Ok(CatalogType::Memory),
             "nessie" => Ok(CatalogType::Nessie),
             "rest" => Ok(CatalogType::Rest),
             "glue" => Ok(CatalogType::Glue),
@@ -140,6 +154,22 @@ pub async fn create_catalog_async(
     }
 
     match catalog_type {
+        CatalogType::Memory => {
+            let warehouse = config.get("warehouse").cloned();
+            if let Some(uri) = config
+                .get("uri")
+                .or_else(|| config.get("url"))
+                .or_else(|| config.get("name"))
+            {
+                Ok(Box::new(memory::MemoryCatalogClient::for_uri(
+                    uri, warehouse,
+                )))
+            } else if let Some(wh) = warehouse {
+                Ok(Box::new(memory::MemoryCatalogClient::with_warehouse(wh)))
+            } else {
+                Ok(Box::new(memory::MemoryCatalogClient::new()))
+            }
+        }
         CatalogType::Nessie => {
             let url = config
                 .get("url")

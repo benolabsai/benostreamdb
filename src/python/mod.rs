@@ -51,6 +51,7 @@ pub fn migrate_benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<subscribe::PySubscription>()?;
 
     // Catalog classes
+    m.add_class::<catalog::PyMemoryCatalog>()?;
     m.add_class::<catalog::PyNessieCatalog>()?;
     m.add_class::<catalog::PyRestCatalog>()?;
     m.add_class::<catalog::PyGlueCatalog>()?;
