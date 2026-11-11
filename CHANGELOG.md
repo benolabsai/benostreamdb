@@ -1,6 +1,58 @@
 ## [Unreleased]
 
+**Release classification: minor (`0.16.0`), not a patch.** The change set since
+`v0.15.1` is 14 commits across 201 files (+26,446/−7,594) and is *additive to the
+public API* on four surfaces — two new catalog backends (`memory`, `s3tables`),
+two new Python classes (`PyMemoryCatalog`, `PyS3TablesCatalog`), a new Trino table
+function (`system.keyword_search`), and new Spark DSv2 pushdown
+(`SupportsPushDownTopN`) — plus two new `CatalogType` variants on a public,
+non-`#[non_exhaustive]` enum. A patch release is only defensible if the release
+contains the correctness fixes alone, which it does not.
+
 ### Added
+
+- **`CatalogType::Memory` — in-process reference catalog** (`src/core/catalog/memory.rs`,
+  `PyMemoryCatalog`): backed by `Arc<parking_lot::RwLock<MemoryCatalogState>>`, with
+  two clients naming the same `memory://<name>` URI sharing one process-wide state.
+  Enforces full `commit_table_with_requirements` semantics (`assert-table-uuid`,
+  `assert-ref-snapshot-id`, `assert-current-schema-id`, `assert-last-assigned-field-id`,
+  `assert-default-spec-id`) and returns `CatalogRequest { status: Some(409), .. }` on
+  conflict, so multi-writer convergence is testable with zero infrastructure. See
+  [`ADR-012`](docs/architecture/ADR_012_CATALOG_PARITY_AND_CAS_HARDENING.md).
+- **`CatalogType::S3Tables` + `RestCatalogAuth::AwsSigV4`** (`src/core/catalog/rest.rs`,
+  `PyS3TablesCatalog`): AWS SigV4 request signing over the Iceberg REST v1 protocol
+  for Amazon S3 Tables, with region derivation from the table-bucket ARN, `/v1/config`
+  warehouse-prefix discovery, and optional `Glue` `mode = "rest"`. Signing reuses the
+  `aws-sigv4` implementation already present transitively via `aws-sdk-glue` and
+  `object_store`, so no dependency was added.
+- **Atomic compare-and-swap across every catalog adapter:** `jdbc` (`$N` vs `?`
+  dialect placeholders, canonical `metadata/v0.metadata.json` pointer, `UPDATE …
+  WHERE metadata_location = ?` with zero-rows-affected → `409`), `glue`
+  (`expected_version_id` from `Table::version_id()`), `hive`
+  (`alter_table_with_environment_context` + `expected_parameter_key/value`),
+  `unity` (Databricks Iceberg REST mode), and `nessie` (explicit
+  `set-metadata-location` so metadata-only commits advance the pointer). All
+  adapters map a lost race to `CatalogRequest { status: Some(409), .. }` rather
+  than overwriting the winner's snapshot.
+- **Cross-catalog conformance suite** (`tests/test_catalog_conformance.rs`, 13 tests):
+  one contract run against in-process memory, SQLite in-memory and file-backed CAS,
+  optional PostgreSQL, and Axum mocks for Iceberg REST (OAuth2), AWS SigV4
+  (`s3tables`, Glue REST), Unity, and Nessie REST v2.
+- **`PendingCommit` transaction state machine and segmented WAL recovery** (`M2`):
+  explicit commit phases replacing implicit control flow across `write.rs`,
+  `read.rs`, `stage.rs`, `maintenance.rs`, `wal.rs`, and `metadata.rs`, with
+  linearizable reads during the `buffer`→`manifest` handoff, retained drained
+  batches across pre-manifest upload failures, and WAL truncation that cannot drop
+  transactions appended during a flush. See [`ADR-010`](docs/architecture/ADR_010_PENDING_COMMIT_STATE_MACHINE.md).
+- **Hive-partitioned indexing and query-execution conformance**: partition-constrained
+  vector routing (`TableVectorRouter::route_allowed` / `route_with_policy_allowed`),
+  cache-root/`segment_id` parity between `Table` and `HybridReader`, Hive-aware
+  data-file discovery (`is_data_parquet_path`), per-plan `FilterExpr` parsing in
+  `BenoStreamExec` / `VectorScanExec`, partition-aware and index-preserving
+  `MergePlanner`, and `is_local_uri` guards so non-local writes stop creating
+  `s3:/bucket/...` directories in the process CWD. New
+  `tests/test_partitioned_indexing.rs` (6/6). See
+  [`ADR-011`](docs/architecture/ADR_011_PARTITIONED_INDEXING_AND_QUERY_EXECUTION.md).
 - **Trino `system.keyword_search`** (`trino-benostreamdb`): BM25-only retrieval
   as a table function, the lexical counterpart of `system.hybrid_search`. It
   returns every table column plus `score`, validated against the engine's BM25
@@ -11,11 +63,74 @@
   …) LIMIT k` is rendered back into the scan SQL and reaches the engine's KNN
   optimizer rule instead of being sorted after a full scan. A pushed TopN forces
   the single SQL scan, because a per-file fan-out cannot produce a global top-k.
+- **Iceberg `timestamp_ns` / `timestamptz_ns` / `time` schema mapping**
+  (`src/core/manifest/types.rs`): V3 nanosecond timestamp types and `time`
+  resolve to their Arrow counterparts instead of falling through to a string
+  type, with nanosecond `ManifestValue` bounds decode.
+- **`reindex_inverted_column` analyzer inheritance** (`src/core/table/index_config.rs`):
+  reindexing a legacy two-column inverted index now prefers the configured
+  analyzer from `index_configs[column].tokenizer` instead of falling back to
+  `identity`, so a reindex preserves tokenization rather than flattening it.
 
 ### Changed
-- `plans/` now contains only live work. The completed connector plan became
-  `docs/architecture/ADR_009_NATIVE_CONNECTOR_ARCHITECTURE_AND_UDF_EXPOSURE.md`,
-  and ADR-006..008 were promoted alongside it.
+
+- **`CatalogType` gained two variants** (`Memory`, `S3Tables`). It is a public,
+  non-`#[non_exhaustive]` enum reachable through `benostreamdb::core::catalog`,
+  so downstream crates that `match` it exhaustively will need a new arm. This is
+  the only breaking surface in the release.
+- `plans/` now contains only live work. Completed plans are promoted to ADRs:
+  the connector plan became `ADR_009`, `ADR_010` covers `PendingCommit`,
+  `ADR_011` covers partitioned indexing and query execution, and `ADR_012`
+  covers catalog parity and CAS hardening.
+- Catalog semantics now live in one place (`src/core/catalog/common.rs`):
+  `ensure_storage_table_initialized`, `extract_metadata_location_from_updates`,
+  `load_table_metadata_from_location`, `persist_updates_to_storage`,
+  `table_root_from_metadata_location`, `validate_requirements_against_metadata`,
+  and `catalog_conflict_error` are shared by all adapters rather than
+  reimplemented per backend.
+- `M2` is described in `docs/architecture/ADR_010_PENDING_COMMIT_STATE_MACHINE.md`
+  as landing in `v0.15.2`; the accumulated scope moved that target to `v0.16.0`.
+
+### Fixed
+
+- **BM25 equality predicates were pruned before the BM25 branch could run**
+  (`src/core/sql/mod.rs`): `WHERE text = 'query'` against a tokenized column is a
+  *query*, not a row filter, but it was being fed through `prune_entries` like
+  any other equality. With column statistics present, the only segment holding
+  matches was pruned and the query returned zero rows. The BM25 keyword column is
+  now resolved before pruning and excluded from both the pruning predicate set
+  and the residual filter via `is_keyword_equality`. Regression:
+  `test_index_lifecycle_add_drop_readd`.
+- **`test_puffin_hybrid_segment_writer_and_reader` used a `/`-rooted store**
+  (`tests/test_puffin.rs`): `LocalFileSystem::new()` resolves absolute paths
+  against the filesystem root, but the writer emits paths relative to `root_uri`.
+  The test now uses `LocalFileSystem::new_with_prefix(&tmp_dir_path)`.
+- **Catalog conformance mocks rejected valid credentials**
+  (`tests/test_catalog_conformance.rs`): the Iceberg REST mock had no
+  `DELETE /v1/:prefix/namespaces/:ns` route (`drop_namespace` returned 404), and
+  the Unity Iceberg REST sub-app reused the generic load handler whose
+  `require_bearer` only accepts `Bearer mock-token-…`, so every PAT-authenticated
+  load returned 401. Both mocks now have per-surface authorization predicates.
+- **`load_initial_schema` read the always-empty `manifest.entries`**
+  (`src/core/table/mod.rs`): the tiered-manifest fallback now reads
+  `manifest_manager.load_latest_full()`, matching `read_expr_stream_async`. The
+  three remaining `entries` references in `src/core/manifest/manager/schema.rs`
+  are documented as legacy/empty-by-design rather than left as silent traps.
+
+### CI
+
+- `wal_segment` added to the [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml) matrix.
+- `test_multi_writer_differential` wired into [`scripts/pre_release_soak.sh`](scripts/pre_release_soak.sh)
+  as step 5/5 (steps renumbered 1/5…5/5).
+- Removed the dead `--ignore=tests/integration/test_catalog.py` flag from
+  [`.github/workflows/ci.yml`](.github/workflows/ci.yml); no such file exists and
+  the Rust catalog conformance suite runs on every PR.
+- Docs pipeline: `scripts/prepare_docs.sh` copies (rather than symlinks) sources so
+  Sphinx 9 registers them as real documents, `scripts/check_docs_links.py` guards
+  against broken and cross-directory relative links, `scripts/inject_canonical.py`
+  emits canonical URLs, and `myst_heading_anchors = 4` restores anchor resolution.
+  Source citations migrated to absolute GitHub blob URLs so they survive the
+  static export to the documentation site.
 
 ## [0.15.1] - 2026-11-09
 
