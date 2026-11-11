@@ -111,8 +111,14 @@ contains the correctness fixes alone, which it does not.
   hardening, and `ADR-010` covers Iceberg V3 and cross-engine conformance. Three
   former records were deleted as non-ADRs (a graph-RAG feature set, a binding
   ergonomics fix ledger, and a partitioned-indexing fix ledger); their surviving
-  content lives in this changelog. See
-  [`docs/architecture/README.md`](docs/architecture/README.md) for the standard.
+  content lives in this changelog.
+- **The ADR series was renumbered contiguously (001–010)** after those
+  deletions, and the standard is now written down in
+  [`docs/architecture/README.md`](docs/architecture/README.md): an ADR must
+  record a choice that constrains future work together with the alternatives it
+  rejected, the consequences it accepts, and the gate that enforces it.
+  What-changed narratives belong in this file. Numbers are never reused, so the
+  next record is 011.
 - Catalog semantics now live in one place (`src/core/catalog/common.rs`):
   `ensure_storage_table_initialized`, `extract_metadata_location_from_updates`,
   `load_table_metadata_from_location`, `persist_updates_to_storage`,
