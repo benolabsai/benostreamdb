@@ -243,6 +243,113 @@ async fn v2_manifest_still_declares_format_version_2() -> Result<()> {
     Ok(())
 }
 
+/// Walk `root` for the first file whose name starts with `prefix` and ends with `suffix`.
+fn find_file(root: &Path, prefix: &str, suffix: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with(prefix) && name.ends_with(suffix) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+async fn read_ids(table: &benostreamdb::core::table::Table) -> Result<Vec<i32>> {
+    let batches = table.sql("SELECT id FROM t ORDER BY id").await?;
+    let mut ids = Vec::new();
+    for b in &batches {
+        if let Some(col) = b.column_by_name("id") {
+            let arr = col
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .context("id must be Int32")?;
+            ids.extend(arr.iter().flatten());
+        }
+    }
+    Ok(ids)
+}
+
+#[tokio::test]
+async fn v3_delete_writes_a_deletion_vector_instead_of_parquet_position_deletes() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let uri = table_uri(&tmp.path().join("v3_del"));
+
+    let table = benostreamdb::core::table::Table::create_async(uri.clone(), events_schema())
+        .await
+        .context("create v3 table")?;
+    table.set_format_version(3);
+
+    let ids: Vec<i32> = (1..=5).collect();
+    let batch = RecordBatch::try_new(
+        events_schema(),
+        vec![
+            Arc::new(Int32Array::from(ids)),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
+            Arc::new(Float32Array::from(vec![0.1f32, 0.2, 0.3, 0.4, 0.5])),
+        ],
+    )?;
+    table.write_async(vec![batch]).await?;
+    table.commit_async().await?;
+    table.wait_for_background_tasks_async().await?;
+
+    assert_eq!(read_ids(&table).await?, vec![1, 2, 3, 4, 5]);
+
+    table.delete_async("id >= 3").await?;
+
+    // V3 writes a `deletion-vector-v1` Puffin blob...
+    let puffin = find_file(tmp.path(), "del-dv-", ".puffin")
+        .context("a format-version 3 delete must write a del-dv-*.puffin deletion vector")?;
+    let bytes = std::fs::read(&puffin)?;
+    assert_eq!(&bytes[..4], &[0x50, 0x46, 0x41, 0x31], "Puffin magic PFA1");
+
+    // ...and no V2 Parquet position-delete file.
+    assert!(
+        find_file(tmp.path(), "deletes", ".parquet").is_none(),
+        "V3 must not emit Parquet position-delete files"
+    );
+
+    // The delete manifest declares content = 1 (POSITION_DELETES), per spec.
+    let delete_manifest =
+        find_file(tmp.path(), "", "-d0.avro").context("expected a delete manifest (*-d0.avro)")?;
+    let meta = read_avro_header_metadata(&std::fs::read(&delete_manifest)?)?;
+    assert_eq!(
+        String::from_utf8_lossy(
+            meta.get("content")
+                .context("delete manifest is missing `content`")?
+        ),
+        "1",
+        "delete manifests declare content = 1"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(
+            meta.get("format-version")
+                .context("delete manifest is missing `format-version`")?
+        ),
+        "3",
+        "a V3 table's delete manifest must declare format-version 3"
+    );
+
+    // The reader applies the deletion vector: the rows are gone.
+    assert_eq!(
+        read_ids(&table).await?,
+        vec![1, 2],
+        "deletion vector must mask positions of ids 3,4,5"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn avro_header_reader_round_trips_a_known_header() {
     // Hand-built header: magic, one map block with two string->bytes entries,

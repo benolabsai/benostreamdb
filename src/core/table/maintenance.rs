@@ -380,33 +380,42 @@ impl Table {
 
             if !new_deletes.is_empty() {
                 any_new_deletes = true;
-                // Generate NEW Position Delete File
-                let mut file_paths = arrow::array::StringBuilder::new();
-                let mut positions = arrow::array::Int64Builder::new();
 
-                for &pos in &new_deletes {
-                    file_paths.append_value(&entry.file_path);
-                    positions.append_value(pos);
-                }
-
-                let file_path_array = file_paths.finish();
-                let pos_array = positions.finish();
-
-                let delete_writer = crate::core::iceberg::iceberg_delete::IcebergDeleteWriter::new(
-                    self.uri.clone(),
-                    2, // Format V2
-                    self.store.clone(),
-                );
-
-                let partition_data = if !entry.partition_values.is_empty() {
-                    Some((rel_parent, entry.partition_values.clone()))
+                // V3 deletes are deletion vectors: one Puffin blob per data file per
+                // snapshot. V2 tables keep Parquet position-delete files, which
+                // external V2 readers expect and can decode without the V3 spec.
+                let delete_file = if self.get_format_version() >= 3 {
+                    self.write_deletion_vector_file_async(&entry, &rel_parent, &new_deletes)
+                        .await?
                 } else {
-                    None
-                };
+                    let mut file_paths = arrow::array::StringBuilder::new();
+                    let mut positions = arrow::array::Int64Builder::new();
 
-                let delete_file = delete_writer
-                    .write_position_delete(partition_data, &file_path_array, &pos_array)
-                    .await?;
+                    for &pos in &new_deletes {
+                        file_paths.append_value(&entry.file_path);
+                        positions.append_value(pos);
+                    }
+
+                    let file_path_array = file_paths.finish();
+                    let pos_array = positions.finish();
+
+                    let delete_writer =
+                        crate::core::iceberg::iceberg_delete::IcebergDeleteWriter::new(
+                            self.uri.clone(),
+                            2, // Format V2
+                            self.store.clone(),
+                        );
+
+                    let partition_data = if !entry.partition_values.is_empty() {
+                        Some((rel_parent.clone(), entry.partition_values.clone()))
+                    } else {
+                        None
+                    };
+
+                    delete_writer
+                        .write_position_delete(partition_data, &file_path_array, &pos_array)
+                        .await?
+                };
 
                 let mut new_entry = entry.clone();
                 new_entry.delete_files.push(delete_file);
@@ -435,6 +444,77 @@ impl Table {
         }
 
         Ok(())
+    }
+
+    /// Write a V3 `deletion-vector-v1` Puffin file for a single data file.
+    ///
+    /// Iceberg V3 permits at most one deletion vector per data file per snapshot,
+    /// so positions are always encoded relative to one `referenced_data_file`.
+    /// Returns the manifest `DeleteFile` entry that points at the blob, with the
+    /// byte range (`content_offset`, `content_size_in_bytes`) the reader fetches
+    /// directly instead of reading the whole Puffin container.
+    async fn write_deletion_vector_file_async(
+        &self,
+        entry: &crate::core::manifest::ManifestEntry,
+        rel_parent: &str,
+        positions: &[i64],
+    ) -> Result<crate::core::manifest::DeleteFile> {
+        use crate::core::manifest::{DeleteContent, DeleteFile};
+
+        let mut bitmap = roaring::RoaringBitmap::new();
+        for &pos in positions {
+            let pos_u32 = u32::try_from(pos).with_context(|| {
+                format!(
+                    "deletion-vector position {pos} does not fit u32 for '{}'",
+                    entry.file_path
+                )
+            })?;
+            bitmap.insert(pos_u32);
+        }
+        let payload = crate::core::puffin::encode_deletion_vector_v1(&bitmap)?;
+
+        let mut properties = std::collections::HashMap::new();
+        properties.insert("referenced-data-file".to_string(), entry.file_path.clone());
+        properties.insert("cardinality".to_string(), bitmap.len().to_string());
+
+        let mut writer = crate::core::puffin::PuffinWriter::new(std::io::Cursor::new(Vec::new()))?;
+        let (content_offset, content_size_in_bytes) = writer.add_blob(
+            crate::core::puffin::DELETION_VECTOR_TYPE.to_string(),
+            Vec::new(),
+            0, // snapshot id: the surrounding manifest carries the real one
+            0, // sequence number: likewise
+            &payload,
+            properties,
+        )?;
+        let bytes = writer.finish()?.into_inner();
+
+        let file_name = format!("del-dv-{}.puffin", uuid::Uuid::new_v4());
+        let rel_path = if rel_parent.is_empty() {
+            file_name
+        } else {
+            format!("{}/{}", rel_parent.trim_matches('/'), file_name)
+        };
+
+        self.store
+            .put(
+                &object_store::path::Path::from(rel_path.as_str()),
+                bytes.clone().into(),
+            )
+            .await
+            .with_context(|| format!("Failed to upload deletion vector '{}'", rel_path))?;
+
+        Ok(DeleteFile {
+            file_path: rel_path.clone(),
+            content: DeleteContent::DeletionVector {
+                puffin_file_path: rel_path,
+                referenced_data_file: Some(entry.file_path.clone()),
+                content_offset,
+                content_size_in_bytes,
+            },
+            file_size_bytes: bytes.len() as i64,
+            record_count: bitmap.len() as i64,
+            partition_values: entry.partition_values.clone(),
+        })
     }
 
     /// Resolve the object store and root location where Iceberg `TableMetadata`
