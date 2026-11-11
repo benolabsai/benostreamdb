@@ -92,6 +92,7 @@ run_neurips() {
         "$NEURIPS_IMAGE" \
         --data-dir /data/vectors \
         --scratch-dir /work/scratch \
+        --db-dir "/work/scratch/${flavour}_db" \
         --out /work/scratch/results \
         --hardware d8lds --strict-hardware \
         "$@"
