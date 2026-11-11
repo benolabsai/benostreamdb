@@ -850,7 +850,7 @@ pub fn encode_deletion_vector_v1(bitmap: &roaring::RoaringBitmap) -> Result<Vec<
 ///
 /// Validates the length field, the magic sequence, and the CRC-32 before any
 /// bitmap bytes are trusted. Every rejection is
-/// [`BenoStreamError::DeletionVectorDeserialize`] so a corrupt DV surfaces as a
+/// `BenoStreamError::DeletionVectorDeserialize` so a corrupt DV surfaces as a
 /// typed error instead of a silently short delete list (which would resurrect
 /// deleted rows).
 pub fn decode_deletion_vector_v1(data: &[u8]) -> Result<roaring::RoaringBitmap> {

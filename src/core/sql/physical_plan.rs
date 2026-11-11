@@ -96,7 +96,7 @@ impl BenoStreamExec {
 
     /// Attach the write-buffer batches captured alongside `partitions`.
     ///
-    /// Must come from the same [`Table::consistent_scan_view`] call that produced
+    /// The batches must come from the same consistent scan snapshot that produced
     /// the partitions; `BenoStreamTableProvider::scan` is the only intended caller.
     pub fn with_write_buffer(mut self, buffer: Arc<Vec<arrow::record_batch::RecordBatch>>) -> Self {
         self.write_buffer = buffer;
