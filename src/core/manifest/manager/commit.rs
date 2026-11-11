@@ -93,6 +93,14 @@ impl ManifestManager {
                 .collect();
             let new_ver = current_ver + 1;
 
+            // The writer must stamp the *table's* Iceberg format version into the
+            // manifest Avro metadata, not the manifest-format version it inherited.
+            // `CommitMetadata::format_version` carries the table version (the flush
+            // path sets it from `Table::format_version`).
+            let effective_format_version = metadata
+                .format_version
+                .unwrap_or(current_manifest.format_version);
+
             // Compaction rebase: if any input was already removed by a
             // concurrent compaction, this compaction is redundant. Its output
             // would duplicate the winner's data, and removing the remaining
@@ -216,7 +224,7 @@ impl ManifestManager {
                     // manifest file and reference the unchanged previous manifest
                     // files, instead of re-encoding every entry.
                     let writer = crate::core::iceberg::IcebergWriter::with_format_version(
-                        current_manifest.format_version,
+                        effective_format_version,
                     );
                     let default_schema = crate::core::manifest::Schema::default();
                     let table_schema = metadata
@@ -348,7 +356,7 @@ impl ManifestManager {
                     let list_filename = format!("snap-{}-{}.avro", new_ver, list_uuid);
                     let list_path_loc = self.manifest_dir.child(list_filename);
                     let writer = crate::core::iceberg::IcebergWriter::with_format_version(
-                        current_manifest.format_version,
+                        effective_format_version,
                     );
                     let list_bytes = writer.write_manifest_list(&manifest_files)?;
                     self.store.put(&list_path_loc, list_bytes.into()).await?;
@@ -359,7 +367,7 @@ impl ManifestManager {
                     let mut futures = futures::stream::FuturesUnordered::new();
 
                     let writer = crate::core::iceberg::IcebergWriter::with_format_version(
-                        current_manifest.format_version,
+                        effective_format_version,
                     );
                     let default_schema = crate::core::manifest::Schema::default();
                     // Prefer the schema being written in this commit. On the very
@@ -499,7 +507,7 @@ impl ManifestManager {
                     let list_path_loc = self.manifest_dir.child(list_filename);
 
                     let writer = crate::core::iceberg::IcebergWriter::with_format_version(
-                        current_manifest.format_version,
+                        effective_format_version,
                     );
                     let list_bytes = writer.write_manifest_list(&manifest_files)?;
                     self.store.put(&list_path_loc, list_bytes.into()).await?;
