@@ -48,23 +48,31 @@ echo "=== Pre-release soak gate (soak=${SOAK_SECONDS}s / ${SOAK_MINUTES}m) ==="
 echo "started_at=${STARTED_AT}"
 
 echo
-echo "--- 1/4 Randomized differential workload (model oracle) ---"
+echo "--- 1/5 Randomized differential workload (model oracle) ---"
 cargo test --test test_randomized_differential_workload -- --nocapture
 
 echo
-echo "--- 2/4 Crash-injection workload sweep ---"
+echo "--- 2/5 Crash-injection workload sweep ---"
 cargo test --test test_crash_injection_workload -- --nocapture
 
 echo
-echo "--- 3/4 Long soak (${SOAK_SECONDS}s) ---"
+echo "--- 3/5 Long soak (${SOAK_SECONDS}s) ---"
 SOAK_LOG="$(mktemp)"
 MW_LOG="$(mktemp)"
 trap 'rm -f "${SOAK_LOG}" "${MW_LOG}"' EXIT
 cargo test --test soak -- --ignored --nocapture 2>&1 | tee "${SOAK_LOG}"
 
 echo
-echo "--- 4/4 Multi-writer soak (${SOAK_SECONDS}s) ---"
+echo "--- 4/5 Multi-writer soak (${SOAK_SECONDS}s) ---"
 cargo test --test test_multi_writer_concurrency multi_writer_soak -- --ignored --nocapture 2>&1 | tee "${MW_LOG}"
+
+echo
+echo "--- 5/5 Multi-writer differential (union model, V2 + V3) ---"
+# Two writers against a shared table, checked against an independent union
+# model after every step: the V2 differential and the V3 row-lineage variant.
+# Both are ordinary tests rather than `#[ignore]`d soaks, but they only receive
+# coverage here when a release gate runs the suite end to end.
+cargo test --test test_multi_writer_differential -- --nocapture
 
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

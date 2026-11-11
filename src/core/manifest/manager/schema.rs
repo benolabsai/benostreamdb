@@ -43,7 +43,10 @@ impl ManifestManager {
             };
             let new_ver = current_ver + 1;
 
-            // Re-use entries from latest
+            // Re-use entries from latest. The legacy inline list is empty by
+            // design (data entries live in the Avro manifest list), so this
+            // normally carries nothing; it is kept so an inline-entries manifest
+            // still survives a schema-version bump intact.
             let entries = current_manifest.entries.clone();
 
             let mut new_manifest = Manifest::new_with_spec(
@@ -125,6 +128,10 @@ impl ManifestManager {
             // embedding-space contract at the commit point. This covers SQL,
             // Python, MCP, and catalog-driven `set-properties` calls.
             crate::core::table::properties::normalize_embedding_properties(&mut properties);
+            // `entries` is the legacy inline list and stays empty — data entries
+            // live in the Avro manifest list, which `manifest_list_path` names.
+            // The first clause is kept only so an older, inline-entries manifest
+            // still counts as "has data".
             let has_data = !current_manifest.entries.is_empty()
                 || current_manifest.manifest_list_path.is_some();
             crate::core::table::properties::validate_embedding_property_transition(
@@ -276,6 +283,8 @@ impl ManifestManager {
             new_schemas.push(new_schema.clone());
 
             let new_ver = current_ver + 1;
+            // As above: the inline `entries` list is legacy and empty; the new
+            // version carries it forward unchanged rather than dropping it.
             let mut new_manifest = Manifest::new_with_spec(
                 new_ver,
                 current_manifest.entries.clone(),

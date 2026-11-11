@@ -824,8 +824,13 @@ impl Table {
                 }
             }
 
-            if !manifest.entries.is_empty() {
-                if let Some(entry) = manifest.entries.first() {
+            // `Manifest::entries` is the legacy inline list and is empty by
+            // design — data entries live in the Avro manifest list. Reading the
+            // field here made this fallback unreachable, so a manifest without
+            // `schemas` fell straight through to the path-inference sweep below.
+            // Ask the tiered accessor for the entries instead.
+            if let Ok((_manifest, entries, _)) = manifest_manager.load_latest_full().await {
+                if let Some(entry) = entries.first() {
                     let rel_parquet =
                         crate::core::segment::relativize_against(_uri, &entry.file_path);
                     let segment_id = crate::core::segment::segment_id_from_path(&rel_parquet);

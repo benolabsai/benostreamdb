@@ -33,6 +33,9 @@ jobs:
           - target: parse_dense
           - target: parse_sparse
           - target: parse_binary
+          # WAL segment parsing is the path every crash-recovery claim depends
+          # on; it was written as a target but never scheduled.
+          - target: wal_segment
           - target: sql_rewriters
           # Connector-supplied predicates and query-vector JSON (Trino/Spark).
           - target: connector_inputs
