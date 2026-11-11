@@ -238,8 +238,17 @@ jobs:
           python-version: "3.12"
 
       - name: Install Vulkan
+        # The wheel build links against Vulkan. A runner DNS blip while fetching
+        # `libvulkan-dev` failed this job with "Temporary failure resolving
+        # 'azure.archive.ubuntu.com'", so retry instead of letting infrastructure
+        # flakiness look like a test failure.
         run: |
-          sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev && exit 0
+            echo "apt attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          exit 1
 
       - name: Install maturin and build
         run: |
