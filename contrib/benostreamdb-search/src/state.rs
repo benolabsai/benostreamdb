@@ -946,7 +946,7 @@ pub async fn resolve_catalog() -> Option<(Arc<dyn benostreamdb::core::catalog::C
                     config_map.insert("uri".to_string(), u);
                 }
 
-                // Token / Credential / Prefix / Catalog ID
+                // Token / Credential / Prefix / Catalog ID / Region / Warehouse / Mode
                 if let Ok(tok) = std::env::var("BSDB_SEARCH_CATALOG_TOKEN")
                     .or_else(|_| std::env::var("BSDB_CATALOG_TOKEN"))
                 {
@@ -957,11 +957,45 @@ pub async fn resolve_catalog() -> Option<(Arc<dyn benostreamdb::core::catalog::C
                 {
                     config_map.insert("credential".to_string(), cred);
                 }
-                if let Ok(pfx) = std::env::var("BSDB_SEARCH_CATALOG_PREFIX") {
+                if let Ok(pfx) = std::env::var("BSDB_SEARCH_CATALOG_PREFIX")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_PREFIX"))
+                {
                     config_map.insert("prefix".to_string(), pfx);
                 }
-                if let Ok(cid) = std::env::var("BSDB_SEARCH_CATALOG_ID") {
+                if let Ok(cid) = std::env::var("BSDB_SEARCH_CATALOG_ID")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_ID"))
+                {
                     config_map.insert("catalog_id".to_string(), cid);
+                }
+                if let Ok(region) = std::env::var("BSDB_SEARCH_CATALOG_REGION")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_REGION"))
+                {
+                    config_map.insert("region".to_string(), region);
+                }
+                if let Ok(wh) = std::env::var("BSDB_SEARCH_CATALOG_WAREHOUSE")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_WAREHOUSE"))
+                {
+                    config_map.insert("warehouse".to_string(), wh);
+                }
+                if let Ok(mode) = std::env::var("BSDB_SEARCH_CATALOG_MODE")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_MODE"))
+                {
+                    config_map.insert("mode".to_string(), mode);
+                }
+                if let Ok(auth) = std::env::var("BSDB_SEARCH_CATALOG_AUTH")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_AUTH"))
+                {
+                    config_map.insert("auth".to_string(), auth);
+                }
+                if let Ok(service) = std::env::var("BSDB_SEARCH_CATALOG_SERVICE")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_SERVICE"))
+                {
+                    config_map.insert("service".to_string(), service);
+                }
+                if let Ok(scope) = std::env::var("BSDB_SEARCH_CATALOG_SCOPE")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_SCOPE"))
+                {
+                    config_map.insert("scope".to_string(), scope);
                 }
 
                 let namespace = std::env::var("BSDB_SEARCH_CATALOG_NAMESPACE")

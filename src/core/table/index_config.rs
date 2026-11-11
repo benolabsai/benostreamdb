@@ -847,8 +847,19 @@ impl Table {
 
             // Preserve the analyzer the existing index was built with so the
             // rebuilt index answers queries identically (only faster).
+            //
+            // A legacy two-column index carries no `analyzer` key, so reading it
+            // yields nothing. Falling back to `identity` in that case silently
+            // changed tokenization: a whole-string index answers `quick brown`
+            // with zero rows. Prefer the analyzer configured for the column
+            // (`add_index` records it) and only then the literal identity
+            // tokenizer.
+            let configured_analyzer = index_configs
+                .get(column)
+                .and_then(|cfg| cfg.tokenizer.clone());
             let analyzer = read_inverted_analyzer(&store, &table_uri, &entry, inv)
                 .await
+                .or(configured_analyzer)
                 .unwrap_or_else(|| "identity".to_string());
 
             // Force the exact analyzer on the rebuild. `build_inverted_index`

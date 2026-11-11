@@ -458,12 +458,48 @@ impl TableProvider for BenoStreamTableProvider {
             }
         }
 
+        // A keyword pushdown's equality on a BM25-indexed column is a *query*,
+        // not a row predicate: `WHERE title = 'graph'` asks to rank documents
+        // by BM25, and a matching row is almost never equal to the literal.
+        // Both later passes treat it as a real predicate, so an equality that
+        // statistics place outside the column's min/max prunes every segment
+        // and then filters out every row. That is why an index built by
+        // `add_index` (which also records column statistics) returned nothing
+        // while the same index built during the write did. Identify the column
+        // here so both passes can skip it.
+        let bm25_keyword_col: Option<String> = {
+            let mut candidates = Vec::new();
+            for filter in filters {
+                extract_bm25_eq_candidates(filter, &mut candidates);
+            }
+            let configs = self.table.indexing.index_configs.read();
+            candidates.into_iter().map(|(col, _)| col).find(|col| {
+                configs
+                    .get(col)
+                    .map(|cfg| cfg.tokenizer.is_some())
+                    .unwrap_or(false)
+            })
+        };
+
+        /// True when `expr` is the keyword equality for `col`.
+        fn is_keyword_equality(expr: &Expr, col: Option<&str>) -> bool {
+            let Some(col) = col else {
+                return false;
+            };
+            let mut candidates = Vec::new();
+            extract_bm25_eq_candidates(expr, &mut candidates);
+            candidates.iter().any(|(candidate, _)| candidate == col)
+        }
+
         // Partition & stats segment pruning BEFORE building scan partitions so
         // pruned segments are neither opened nor scheduled in DataFusion.
         // (`all_segments` was captured above so `EXPLAIN` still reports full
         // pruning counts.)
         if !filters.is_empty() && !segments.is_empty() {
-            let mut iter = filters.iter().cloned();
+            let mut iter = filters
+                .iter()
+                .filter(|filter| !is_keyword_equality(filter, bm25_keyword_col.as_deref()))
+                .cloned();
             if let Some(first) = iter.next() {
                 let combined = iter.fold(first, |acc, next| acc.and(next));
                 let filter_expr = crate::core::planner::FilterExpr::DataFusion(combined);
@@ -804,8 +840,12 @@ impl TableProvider for BenoStreamTableProvider {
                 }
             }
 
-            for (_col, sql) in expr_to_sql(filter) {
-                all_filters.push(sql);
+            // The keyword equality must not become a residual predicate: it
+            // selects by rank, not by string equality.
+            if !is_keyword_equality(filter, bm25_keyword_col.as_deref()) {
+                for (_col, sql) in expr_to_sql(filter) {
+                    all_filters.push(sql);
+                }
             }
         }
 

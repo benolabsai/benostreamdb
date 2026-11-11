@@ -4,17 +4,33 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-// use std::collections::HashMap; // Unused
+use std::collections::HashMap;
 
+use super::common::{
+    catalog_conflict_error, catalog_not_found_error, ensure_storage_table_initialized,
+    extract_metadata_location_from_updates, load_table_metadata_from_location,
+    persist_updates_to_storage, table_root_from_metadata_location,
+    validate_requirements_against_metadata,
+};
+use super::rest::RestCatalogClient;
 use super::{Catalog, TableMetadata};
+use crate::core::error::BenoStreamError;
 use arrow::datatypes::SchemaRef;
 
-/// Unity Catalog client (Databricks)
+/// Unity Catalog client (Databricks).
+///
+/// Supports both:
+/// - **Standard Unity Catalog Tables REST** (`/api/2.1/unity-catalog/...`)
+/// - **Databricks Unity Iceberg REST** (`/api/2.1/unity-catalog/iceberg-rest`),
+///   which speaks full Apache Iceberg REST `/v1` semantics (`requirements`, `updates`,
+///   and atomic `409 Conflict` retries).
 #[derive(Clone)]
 pub struct UnityCatalogClient {
     base_url: String,
     token: String,
     client: Client,
+    iceberg_rest: Option<RestCatalogClient>,
+    default_catalog: String,
 }
 
 // Request structures
@@ -27,6 +43,8 @@ struct CreateTableRequest {
     data_source_format: String, // "DELTA" or "ICEBERG"
     storage_location: String,
     columns: Vec<ColumnInfo>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    properties: HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -46,20 +64,147 @@ struct TableResponse {
     schema_name: String,
     table_type: String,
     data_source_format: String,
+    #[serde(default)]
     storage_location: String,
+    #[serde(default)]
+    properties: HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct ListUnityTablesResponse {
+    #[serde(default)]
+    tables: Vec<TableResponse>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+fn unity_http_error(status: reqwest::StatusCode, operation: &str, body: String) -> anyhow::Error {
+    anyhow::Error::new(BenoStreamError::CatalogRequest {
+        catalog: "unity".to_string(),
+        status: Some(status.as_u16()),
+        reason: format!("Failed Unity {operation} ({status}): {body}"),
+    })
+}
+
+fn parse_unity_namespace<'a>(namespace: &'a str, default_catalog: &'a str) -> (&'a str, &'a str) {
+    if let Some((catalog, schema)) = namespace.split_once('.') {
+        (catalog, schema)
+    } else {
+        (default_catalog, namespace)
+    }
+}
+
+fn arrow_type_to_unity_type_name(dt: &arrow::datatypes::DataType) -> &'static str {
+    match dt {
+        arrow::datatypes::DataType::Boolean => "BOOLEAN",
+        arrow::datatypes::DataType::Int8 | arrow::datatypes::DataType::UInt8 => "BYTE",
+        arrow::datatypes::DataType::Int16 | arrow::datatypes::DataType::UInt16 => "SHORT",
+        arrow::datatypes::DataType::Int32 | arrow::datatypes::DataType::UInt32 => "INT",
+        arrow::datatypes::DataType::Int64 | arrow::datatypes::DataType::UInt64 => "LONG",
+        arrow::datatypes::DataType::Float32 => "FLOAT",
+        arrow::datatypes::DataType::Float64 => "DOUBLE",
+        arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => "STRING",
+        arrow::datatypes::DataType::Binary
+        | arrow::datatypes::DataType::LargeBinary
+        | arrow::datatypes::DataType::FixedSizeBinary(_) => "BINARY",
+        arrow::datatypes::DataType::Date32 | arrow::datatypes::DataType::Date64 => "DATE",
+        arrow::datatypes::DataType::Timestamp(_, _) => "TIMESTAMP",
+        _ => "STRING",
+    }
 }
 
 impl UnityCatalogClient {
-    /// Create a new Unity Catalog client
-    ///
-    /// # Arguments
-    /// * `base_url` - Databricks workspace URL (e.g., `<https://my-workspace.cloud.databricks.com>`)
-    /// * `token` - Databricks personal access token
+    /// Create a standard Unity Catalog client (`/api/2.1/unity-catalog/tables/...`).
     pub fn new(base_url: String, token: String) -> Self {
+        let trimmed = base_url.trim_end_matches('/').to_string();
+        if trimmed.ends_with("/iceberg-rest") || trimmed.ends_with("/iceberg") {
+            return Self::new_iceberg_rest(trimmed, token, None, None);
+        }
         Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: trimmed,
             token,
             client: Client::new(),
+            iceberg_rest: None,
+            default_catalog: "main".to_string(),
+        }
+    }
+
+    /// Create a Unity Catalog client configured for Databricks Unity Iceberg REST
+    /// (`/api/2.1/unity-catalog/iceberg-rest`).
+    pub fn new_iceberg_rest(
+        base_url: String,
+        token: String,
+        warehouse: Option<String>,
+        prefix: Option<String>,
+    ) -> Self {
+        let trimmed = base_url.trim_end_matches('/').to_string();
+        let rest_base = if trimmed.ends_with("/iceberg-rest") || trimmed.ends_with("/iceberg") {
+            trimmed
+        } else {
+            format!("{trimmed}/api/2.1/unity-catalog/iceberg-rest")
+        };
+
+        let effective_warehouse = warehouse
+            .as_deref()
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .or_else(|| prefix.clone());
+        let discover = effective_warehouse.is_some() && prefix.is_none();
+
+        let rest_client =
+            RestCatalogClient::with_bearer_token(rest_base.clone(), prefix, token.clone())
+                .with_warehouse(effective_warehouse.clone(), discover);
+
+        Self {
+            base_url: rest_base,
+            token,
+            client: Client::new(),
+            iceberg_rest: Some(rest_client),
+            default_catalog: effective_warehouse.unwrap_or_else(|| "main".to_string()),
+        }
+    }
+
+    /// Override the default catalog name used when unqualified namespaces are passed.
+    pub fn with_default_catalog(mut self, catalog: impl Into<String>) -> Self {
+        self.default_catalog = catalog.into();
+        self
+    }
+
+    async fn fetch_unity_table(&self, full_name: &str) -> Result<TableResponse> {
+        let url = format!(
+            "{}/api/2.1/unity-catalog/tables/{}",
+            self.base_url,
+            urlencoding::encode(full_name)
+        );
+
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error = resp.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return Err(catalog_not_found_error(
+                    "unity",
+                    format!("Unity table '{full_name}' not found: {error}"),
+                ));
+            }
+            return Err(unity_http_error(status, "load_table", error));
+        }
+
+        Ok(resp.json().await?)
+    }
+
+    fn resolve_rest_namespace<'a>(&'a self, namespace: &'a str) -> &'a str {
+        if let Some((_cat, schema)) = namespace.split_once('.') {
+            schema
+        } else {
+            namespace
         }
     }
 }
@@ -67,13 +212,13 @@ impl UnityCatalogClient {
 #[async_trait]
 impl Catalog for UnityCatalogClient {
     async fn create_namespace(&self, namespace: &str) -> Result<()> {
-        // Parse namespace into catalog.schema
-        let parts: Vec<&str> = namespace.split('.').collect();
-        let (catalog, schema_name) = if parts.len() == 2 {
-            (parts[0], parts[1])
-        } else {
-            ("main", namespace)
-        };
+        if let Some(ref rest) = self.iceberg_rest {
+            return rest
+                .create_namespace(self.resolve_rest_namespace(namespace))
+                .await;
+        }
+
+        let (catalog, schema_name) = parse_unity_namespace(namespace, &self.default_catalog);
         let req = serde_json::json!({
             "name": schema_name,
             "catalog_name": catalog,
@@ -88,37 +233,104 @@ impl Catalog for UnityCatalogClient {
             .await?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!(
-                "Failed to create Unity schema ({}): {}",
-                status,
-                error
+            let error = resp.text().await.unwrap_or_default();
+            return Err(unity_http_error(status, "create_namespace", error));
+        }
+        Ok(())
+    }
+
+    async fn namespace_exists(&self, namespace: &str) -> Result<bool> {
+        if let Some(ref rest) = self.iceberg_rest {
+            return rest
+                .namespace_exists(self.resolve_rest_namespace(namespace))
+                .await;
+        }
+
+        let (catalog, schema_name) = parse_unity_namespace(namespace, &self.default_catalog);
+        let url = format!(
+            "{}/api/2.1/unity-catalog/schemas/{}",
+            self.base_url,
+            urlencoding::encode(&format!("{catalog}.{schema_name}"))
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            Ok(true)
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(false)
+        } else {
+            let status = resp.status();
+            let error = resp.text().await.unwrap_or_default();
+            Err(unity_http_error(status, "namespace_exists", error))
+        }
+    }
+
+    async fn drop_namespace(&self, namespace: &str) -> Result<()> {
+        if let Some(ref rest) = self.iceberg_rest {
+            return rest
+                .drop_namespace(self.resolve_rest_namespace(namespace))
+                .await;
+        }
+
+        let tables = self.list_tables(namespace).await?;
+        if !tables.is_empty() {
+            return Err(catalog_conflict_error(
+                "unity",
+                format!("Unity schema '{namespace}' is not empty"),
             ));
+        }
+
+        let (catalog, schema_name) = parse_unity_namespace(namespace, &self.default_catalog);
+        let url = format!(
+            "{}/api/2.1/unity-catalog/schemas/{}",
+            self.base_url,
+            urlencoding::encode(&format!("{catalog}.{schema_name}"))
+        );
+        let resp = self
+            .client
+            .delete(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error = resp.text().await.unwrap_or_default();
+            return Err(unity_http_error(status, "drop_namespace", error));
         }
         Ok(())
     }
 
     async fn create_table(
         &self,
-        namespace: &str, // catalog.schema
+        namespace: &str, // catalog.schema or schema
         table_name: &str,
         schema: SchemaRef,
         location: Option<&str>,
     ) -> Result<()> {
-        // 1. Initialize table manifest if location is provided
-        if let Some(loc) = location {
-            crate::Table::create_async(loc.to_string(), schema.clone()).await?;
+        if let Some(ref rest) = self.iceberg_rest {
+            return rest
+                .create_table(
+                    self.resolve_rest_namespace(namespace),
+                    table_name,
+                    schema,
+                    location,
+                )
+                .await;
         }
 
-        // Parse namespace into catalog.schema
-        let parts: Vec<&str> = namespace.split('.').collect();
-        let (catalog, schema_name) = if parts.len() == 2 {
-            (parts[0], parts[1])
+        let clean_root = location.map(|loc| loc.trim_end_matches('/').to_string());
+        let initial_metadata_location = if let Some(ref root) = clean_root {
+            Some(ensure_storage_table_initialized(root, &schema).await?)
         } else {
-            ("main", namespace)
+            None
         };
 
-        // 2. Extract columns from Arrow schema for Unity
+        let (catalog, schema_name) = parse_unity_namespace(namespace, &self.default_catalog);
+
         let columns: Vec<ColumnInfo> = schema
             .fields()
             .iter()
@@ -126,10 +338,16 @@ impl Catalog for UnityCatalogClient {
             .map(|(i, f)| ColumnInfo {
                 name: f.name().to_string(),
                 type_text: f.data_type().to_string(),
-                type_name: f.data_type().to_string().to_uppercase(),
+                type_name: arrow_type_to_unity_type_name(f.data_type()).to_string(),
                 position: i as i32,
             })
             .collect();
+
+        let mut properties = HashMap::new();
+        properties.insert("table_type".to_string(), "ICEBERG".to_string());
+        if let Some(meta_loc) = initial_metadata_location {
+            properties.insert("metadata_location".to_string(), meta_loc);
+        }
 
         let req = CreateTableRequest {
             name: table_name.to_string(),
@@ -137,8 +355,9 @@ impl Catalog for UnityCatalogClient {
             schema_name: schema_name.to_string(),
             table_type: "EXTERNAL".to_string(),
             data_source_format: "ICEBERG".to_string(),
-            storage_location: location.unwrap_or("").to_string(),
+            storage_location: clean_root.unwrap_or_default(),
             columns,
+            properties,
         };
 
         let url = format!("{}/api/2.1/unity-catalog/tables", self.base_url);
@@ -152,56 +371,108 @@ impl Catalog for UnityCatalogClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!(
-                "Failed to create Unity table ({}): {}",
-                status,
-                error
-            ));
+            let error = resp.text().await.unwrap_or_default();
+            return Err(unity_http_error(status, "create_table", error));
         }
 
         Ok(())
     }
 
-    async fn load_table(&self, namespace: &str, table_name: &str) -> Result<TableMetadata> {
-        // Parse namespace
-        let parts: Vec<&str> = namespace.split('.').collect();
-        let (catalog, schema_name) = if parts.len() == 2 {
-            (parts[0], parts[1])
-        } else {
-            ("main", namespace)
-        };
+    async fn drop_table(&self, namespace: &str, table_name: &str) -> Result<()> {
+        if let Some(ref rest) = self.iceberg_rest {
+            return rest
+                .drop_table(self.resolve_rest_namespace(namespace), table_name)
+                .await;
+        }
 
-        let full_name = format!("{}.{}.{}", catalog, schema_name, table_name);
+        let (catalog, schema_name) = parse_unity_namespace(namespace, &self.default_catalog);
+        let full_name = format!("{catalog}.{schema_name}.{table_name}");
         let url = format!(
             "{}/api/2.1/unity-catalog/tables/{}",
-            self.base_url, full_name
+            self.base_url,
+            urlencoding::encode(&full_name)
         );
-
         let resp = self
             .client
-            .get(&url)
+            .delete(&url)
             .bearer_auth(&self.token)
             .send()
             .await?;
-
-        if !resp.status().is_success() {
+        if !resp.status().is_success() && resp.status() != reqwest::StatusCode::NOT_FOUND {
             let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!(
-                "Failed to load Unity table ({}): {}",
-                status,
-                error
-            ));
+            let error = resp.text().await.unwrap_or_default();
+            return Err(unity_http_error(status, "drop_table", error));
+        }
+        Ok(())
+    }
+
+    async fn list_tables(&self, namespace: &str) -> Result<Vec<String>> {
+        if let Some(ref rest) = self.iceberg_rest {
+            return rest
+                .list_tables(self.resolve_rest_namespace(namespace))
+                .await;
         }
 
-        let table: TableResponse = resp.json().await?;
+        let (catalog, schema_name) = parse_unity_namespace(namespace, &self.default_catalog);
+        let mut names = Vec::new();
+        let mut page_token: Option<String> = None;
 
-        Ok(TableMetadata::minimal(table.storage_location))
+        loop {
+            let mut url = format!(
+                "{}/api/2.1/unity-catalog/tables?catalog_name={}&schema_name={}",
+                self.base_url,
+                urlencoding::encode(catalog),
+                urlencoding::encode(schema_name)
+            );
+            if let Some(ref tok) = page_token {
+                url.push_str("&page_token=");
+                url.push_str(&urlencoding::encode(tok));
+            }
+            let resp = self
+                .client
+                .get(&url)
+                .bearer_auth(&self.token)
+                .send()
+                .await?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let error = resp.text().await.unwrap_or_default();
+                return Err(unity_http_error(status, "list_tables", error));
+            }
+            let parsed: ListUnityTablesResponse = resp.json().await?;
+            names.extend(parsed.tables.into_iter().map(|t| t.name));
+            match parsed.next_page_token.filter(|t| !t.is_empty()) {
+                Some(tok) => page_token = Some(tok),
+                None => break,
+            }
+        }
+
+        names.sort();
+        Ok(names)
+    }
+
+    async fn load_table(&self, namespace: &str, table_name: &str) -> Result<TableMetadata> {
+        if let Some(ref rest) = self.iceberg_rest {
+            return rest
+                .load_table(self.resolve_rest_namespace(namespace), table_name)
+                .await;
+        }
+
+        let (catalog, schema_name) = parse_unity_namespace(namespace, &self.default_catalog);
+        let full_name = format!("{catalog}.{schema_name}.{table_name}");
+        let table = self.fetch_unity_table(&full_name).await?;
+
+        let meta_loc = table
+            .properties
+            .get("metadata_location")
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(table.storage_location);
+
+        load_table_metadata_from_location(&meta_loc).await
     }
 
     async fn create_branch(&self, _branch_name: &str, _source_ref: Option<&str>) -> Result<()> {
-        // Unity Catalog doesn't support branches (yet)
         Err(anyhow!(
             "Unity Catalog does not support branching. Use Nessie for Git-like branching."
         ))
@@ -220,60 +491,100 @@ impl Catalog for UnityCatalogClient {
         table_name: &str,
         updates: Vec<serde_json::Value>,
     ) -> Result<()> {
-        // Unity Catalog uses PATCH to update table metadata
-        // Extract catalog.schema from namespace
-        let parts: Vec<&str> = namespace.split('.').collect();
-        let (catalog_name, schema_name) = if parts.len() >= 2 {
-            (parts[0], parts[1])
-        } else {
-            return Err(anyhow!(
-                "Invalid namespace format for Unity: expected 'catalog.schema'"
-            ));
-        };
+        self.commit_table_with_requirements(namespace, table_name, updates, Vec::new())
+            .await
+    }
 
-        // Extract new metadata location from updates
-        let mut new_location: Option<String> = None;
-        for update in &updates {
-            if let Some(action) = update.get("action").and_then(|v| v.as_str()) {
-                if action == "add-snapshot" {
-                    if let Some(snapshot) = update.get("snapshot") {
-                        if let Some(manifest_list) =
-                            snapshot.get("manifest-list").and_then(|v| v.as_str())
-                        {
-                            if let Some(table_root) = manifest_list.rsplit_once("/_manifest/") {
-                                new_location = Some(table_root.0.to_string());
-                            }
-                        }
-                    }
-                }
-            }
+    async fn commit_table_with_requirements(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        updates: Vec<serde_json::Value>,
+        requirements: Vec<serde_json::Value>,
+    ) -> Result<()> {
+        if let Some(ref rest) = self.iceberg_rest {
+            return rest
+                .commit_table_with_requirements(
+                    self.resolve_rest_namespace(namespace),
+                    table_name,
+                    updates,
+                    requirements,
+                )
+                .await;
         }
 
-        let storage_location = new_location.ok_or_else(|| anyhow!("No new location in updates"))?;
+        let (catalog_name, schema_name) = parse_unity_namespace(namespace, &self.default_catalog);
+        let full_name = format!("{catalog_name}.{schema_name}.{table_name}");
+        let existing_table = self.fetch_unity_table(&full_name).await?;
+
+        let existing_meta_loc = existing_table
+            .properties
+            .get("metadata_location")
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| existing_table.storage_location.clone());
+
+        let table_root = if !existing_table.storage_location.is_empty() {
+            table_root_from_metadata_location(&existing_table.storage_location)
+        } else {
+            table_root_from_metadata_location(&existing_meta_loc)
+        };
+
+        let existing_meta = if existing_meta_loc.is_empty() {
+            None
+        } else {
+            Some(load_table_metadata_from_location(&existing_meta_loc).await?)
+        };
+
+        validate_requirements_against_metadata(&requirements, existing_meta.as_ref(), "unity")?;
+
+        let new_meta_loc = match extract_metadata_location_from_updates(&updates) {
+            Some(loc) => loc,
+            None if !table_root.is_empty() => {
+                persist_updates_to_storage(&table_root, &updates).await?
+            }
+            None => {
+                return Err(anyhow!(
+                    "Could not determine metadata location or table root for Unity table '{full_name}'"
+                ));
+            }
+        };
+
+        let mut next_props = existing_table.properties;
+        next_props
+            .entry("table_type".to_string())
+            .or_insert_with(|| "ICEBERG".to_string());
+        if !existing_meta_loc.is_empty() && existing_meta_loc != new_meta_loc {
+            next_props.insert(
+                "previous_metadata_location".to_string(),
+                existing_meta_loc.clone(),
+            );
+        }
+        next_props.insert("metadata_location".to_string(), new_meta_loc);
 
         let url = format!(
-            "{}/api/2.1/unity-catalog/tables/{}.{}.{}",
-            self.base_url, catalog_name, schema_name, table_name
+            "{}/api/2.1/unity-catalog/tables/{}",
+            self.base_url,
+            urlencoding::encode(&full_name)
         );
+
+        let patch_body = serde_json::json!({
+            "storage_location": table_root,
+            "properties": next_props,
+        });
 
         let resp = self
             .client
             .patch(&url)
             .bearer_auth(&self.token)
-            .json(&serde_json::json!({
-                "storage_location": storage_location
-            }))
+            .json(&patch_body)
             .send()
             .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!(
-                "Failed to update Unity table ({}): {}",
-                status,
-                error
-            ));
+            let error = resp.text().await.unwrap_or_default();
+            return Err(unity_http_error(status, "commit_table", error));
         }
 
         Ok(())

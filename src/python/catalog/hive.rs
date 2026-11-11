@@ -3,19 +3,12 @@
 use pyo3::prelude::*;
 use std::sync::Arc;
 
-use super::super::helpers::TOKIO_RUNTIME;
-use super::super::schema::PySchema;
+use super::super::helpers::{extract_schema, TOKIO_RUNTIME};
 use super::super::table::PyTable;
 use crate::core::catalog::hive::HiveMetastoreClient;
 use crate::core::catalog::Catalog;
 
 /// Python wrapper for Hive Metastore Catalog
-///
-/// Delegates to `HiveMetastoreClient` for table lifecycle operations.
-/// For production use, consider:
-/// - AWS Glue (Hive-compatible)
-/// - Iceberg REST Catalog
-/// - Nessie Catalog
 #[pyclass]
 pub struct PyHiveCatalog {
     client: Arc<HiveMetastoreClient>,
@@ -33,20 +26,52 @@ impl PyHiveCatalog {
         Ok(PyHiveCatalog { client })
     }
 
+    fn create_namespace(&self, database: String) -> PyResult<()> {
+        TOKIO_RUNTIME
+            .block_on(async { self.client.create_namespace(&database).await })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    fn namespace_exists(&self, database: String) -> PyResult<bool> {
+        TOKIO_RUNTIME
+            .block_on(async { self.client.namespace_exists(&database).await })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    fn drop_namespace(&self, database: String) -> PyResult<()> {
+        TOKIO_RUNTIME
+            .block_on(async { self.client.drop_namespace(&database).await })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
     /// Create a new table
+    #[pyo3(signature = (database, table_name, schema, location=None))]
     fn create_table(
         &self,
         database: String,
         table_name: String,
-        schema: PySchema,
+        schema: Bound<'_, PyAny>,
         location: Option<String>,
     ) -> PyResult<()> {
+        let arrow_schema = extract_schema(schema)?;
         TOKIO_RUNTIME
             .block_on(async {
                 self.client
-                    .create_table(&database, &table_name, schema.inner, location.as_deref())
+                    .create_table(&database, &table_name, arrow_schema, location.as_deref())
                     .await
             })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    fn drop_table(&self, database: String, table_name: String) -> PyResult<()> {
+        TOKIO_RUNTIME
+            .block_on(async { self.client.drop_table(&database, &table_name).await })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    fn list_tables(&self, database: String) -> PyResult<Vec<String>> {
+        TOKIO_RUNTIME
+            .block_on(async { self.client.list_tables(&database).await })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 

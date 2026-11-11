@@ -2,14 +2,24 @@
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use reqwest::Client;
+use aws_config::BehaviorVersion;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
+use aws_credential_types::Credentials;
+use aws_sigv4::http_request::{
+    sign, PayloadChecksumKind, SignableBody, SignableRequest, SigningParams, SigningSettings,
+};
+use aws_sigv4::sign::v4;
+use aws_smithy_runtime_api::client::identity::Identity;
+use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use std::time::{Duration, Instant, SystemTime};
+use tokio::sync::{Mutex, RwLock};
 
+use super::common::table_root_from_metadata_location;
 use super::{Catalog, TableMetadata};
+use crate::core::error::BenoStreamError;
 use arrow::datatypes::SchemaRef;
 
 /// Authentication method for REST Catalog
@@ -24,6 +34,17 @@ pub enum RestCatalogAuth {
         client_secret: String,
         scope: Option<String>,
     },
+    /// AWS Signature Version 4 (Amazon S3 Tables / AWS Glue Iceberg REST)
+    AwsSigV4 { region: String, service: String },
+}
+
+/// Iceberg `/v1/config` catalog discovery response
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct CatalogConfigResponse {
+    #[serde(default)]
+    pub overrides: HashMap<String, String>,
+    #[serde(default)]
+    pub defaults: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -37,9 +58,16 @@ struct CachedToken {
 pub struct RestCatalogClient {
     base_url: String,
     client: Client,
-    prefix: String, // Optional prefix (e.g., "warehouse")
+    prefix: Arc<RwLock<String>>,
+    prefix_explicit: bool,
+    warehouse: Option<String>,
+    discover_on_first_use: bool,
+    config_discovered: Arc<RwLock<bool>>,
+    discover_gate: Arc<Mutex<()>>,
+    config_defaults: Arc<RwLock<HashMap<String, String>>>,
     auth: Option<RestCatalogAuth>,
     token_cache: Arc<RwLock<Option<CachedToken>>>,
+    aws_credentials: Arc<RwLock<Option<SharedCredentialsProvider>>>,
 }
 
 // Request structures
@@ -75,12 +103,14 @@ struct TableIdentifier {
 #[derive(Deserialize)]
 struct ListTablesResponse {
     identifiers: Vec<TableIdentifier>,
+    #[serde(default, rename = "next-page-token")]
+    next_page_token: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct LoadTableResponse {
     #[allow(dead_code)]
-    #[serde(rename = "metadata-location")]
+    #[serde(default, rename = "metadata-location")]
     metadata_location: String,
     metadata: TableMetadata,
 }
@@ -99,6 +129,84 @@ struct OAuthTokenResponse {
     expires_in: Option<u64>,
 }
 
+#[derive(Deserialize)]
+struct IcebergErrorEnvelope {
+    error: Option<IcebergErrorBody>,
+}
+
+#[derive(Deserialize)]
+struct IcebergErrorBody {
+    message: Option<String>,
+}
+
+fn encode_segment(segment: &str) -> String {
+    urlencoding::encode(segment).into_owned()
+}
+
+/// Compute AWS SigV4 signing headers for an HTTP request.
+pub(crate) fn compute_sigv4_headers(
+    method: &str,
+    url: &str,
+    extra_headers: &[(&str, &str)],
+    body: &[u8],
+    creds: &Credentials,
+    region: &str,
+    service: &str,
+    now: SystemTime,
+) -> Result<Vec<(String, String)>> {
+    let identity: Identity = creds.clone().into();
+    let mut settings = SigningSettings::default();
+    settings.payload_checksum_kind = PayloadChecksumKind::XAmzSha256;
+
+    let signing_params = v4::SigningParams::builder()
+        .identity(&identity)
+        .region(region)
+        .name(service)
+        .time(now)
+        .settings(settings)
+        .build()
+        .map_err(|e| anyhow!("Failed to build SigV4 signing parameters: {e}"))?;
+    let params: SigningParams<'_> = signing_params.into();
+
+    let signable = SignableRequest::new(
+        method,
+        url,
+        extra_headers.iter().copied(),
+        SignableBody::Bytes(body),
+    )
+    .map_err(|e| anyhow!("Failed to construct SigV4 signable request: {e}"))?;
+
+    let (instructions, _signature) = sign(signable, &params)
+        .map_err(|e| anyhow!("Failed to compute SigV4 signature: {e}"))?
+        .into_parts();
+
+    Ok(instructions
+        .headers()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect())
+}
+
+async fn error_from_response(resp: reqwest::Response, operation: &str) -> anyhow::Error {
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    let msg = serde_json::from_str::<IcebergErrorEnvelope>(&body)
+        .ok()
+        .and_then(|env| env.error.and_then(|e| e.message))
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| {
+            if body.is_empty() {
+                format!("HTTP {status}")
+            } else {
+                body
+            }
+        });
+    anyhow::Error::new(BenoStreamError::CatalogRequest {
+        catalog: "rest".to_string(),
+        status: Some(status),
+        reason: format!("{operation}: {msg}"),
+    })
+}
+
 impl RestCatalogClient {
     /// Create a new unauthenticated REST Catalog client
     pub fn new(base_url: String, prefix: Option<String>) -> Self {
@@ -111,12 +219,23 @@ impl RestCatalogClient {
         prefix: Option<String>,
         auth: Option<RestCatalogAuth>,
     ) -> Self {
+        let prefix_explicit = prefix
+            .as_deref()
+            .is_some_and(|p| !p.trim_matches('/').is_empty());
+        let clean_prefix = prefix.unwrap_or_default().trim_matches('/').to_string();
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: Client::new(),
-            prefix: prefix.unwrap_or_default(),
+            prefix: Arc::new(RwLock::new(clean_prefix)),
+            prefix_explicit,
+            warehouse: None,
+            discover_on_first_use: false,
+            config_discovered: Arc::new(RwLock::new(false)),
+            discover_gate: Arc::new(Mutex::new(())),
+            config_defaults: Arc::new(RwLock::new(HashMap::new())),
             auth,
             token_cache: Arc::new(RwLock::new(None)),
+            aws_credentials: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -146,6 +265,78 @@ impl RestCatalogClient {
                 scope,
             }),
         )
+    }
+
+    /// Create a REST Catalog client using AWS SigV4 request signing (S3 Tables / Glue Iceberg REST).
+    pub fn with_sigv4(
+        base_url: String,
+        prefix: Option<String>,
+        region: impl Into<String>,
+        service: impl Into<String>,
+    ) -> Self {
+        Self::with_auth(
+            base_url,
+            prefix,
+            Some(RestCatalogAuth::AwsSigV4 {
+                region: region.into(),
+                service: service.into(),
+            }),
+        )
+    }
+
+    /// Attach a catalog `warehouse` identifier (e.g., S3 Tables bucket ARN) and optionally
+    /// trigger `/v1/config` discovery before the first table/namespace request.
+    pub fn with_warehouse(
+        mut self,
+        warehouse: Option<String>,
+        discover_on_first_use: bool,
+    ) -> Self {
+        self.warehouse = warehouse.filter(|w| !w.trim().is_empty());
+        self.discover_on_first_use = discover_on_first_use;
+        self
+    }
+
+    /// Provide explicit static AWS credentials for SigV4 signing (primarily for deterministic tests).
+    pub fn with_aws_credentials(self, creds: Credentials) -> Self {
+        let provider = SharedCredentialsProvider::new(creds);
+        self.with_aws_credentials_provider(provider)
+    }
+
+    /// Provide an explicit AWS [`SharedCredentialsProvider`] for SigV4 signing.
+    pub fn with_aws_credentials_provider(mut self, provider: SharedCredentialsProvider) -> Self {
+        self.aws_credentials = Arc::new(RwLock::new(Some(provider)));
+        self
+    }
+
+    /// Return the active URL routing prefix (populated either explicitly or via `/v1/config`).
+    pub async fn prefix(&self) -> String {
+        self.prefix.read().await.clone()
+    }
+
+    /// Return merged `defaults` / `overrides` learned from `/v1/config`.
+    pub async fn config_defaults(&self) -> HashMap<String, String> {
+        self.config_defaults.read().await.clone()
+    }
+
+    /// Resolve AWS credentials provider lazily via `aws_config` default chain.
+    async fn resolve_aws_credentials(&self) -> Result<Credentials> {
+        let existing = { self.aws_credentials.read().await.clone() };
+        let provider = match existing {
+            Some(p) => p,
+            None => {
+                let sdk_cfg = aws_config::load_defaults(BehaviorVersion::latest()).await;
+                let p = sdk_cfg.credentials_provider().ok_or_else(|| {
+                    anyhow!("No AWS credentials provider configured for SigV4 catalog signing")
+                })?;
+                *self.aws_credentials.write().await = Some(p.clone());
+                p
+            }
+        };
+
+        provider
+            .provide_credentials()
+            .await
+            .map_err(|e| anyhow!("Failed to load AWS credentials for SigV4 signing: {e}"))
     }
 
     /// Get current active Bearer token, fetching or refreshing via OAuth2 if required
@@ -227,27 +418,128 @@ impl RestCatalogClient {
 
                 Ok(Some(token))
             }
+            RestCatalogAuth::AwsSigV4 { .. } => Ok(None),
         }
     }
 
-    /// Decorate request builder with Authorization header if configured
-    async fn prepare_request(
+    /// Execute an HTTP request with configured authentication (Bearer, OAuth2, or AWS SigV4).
+    async fn send_request(
         &self,
-        builder: reqwest::RequestBuilder,
-    ) -> Result<reqwest::RequestBuilder> {
-        if let Some(token) = self.get_token().await? {
-            Ok(builder.bearer_auth(token))
+        method: Method,
+        url: &str,
+        json_body: Option<&serde_json::Value>,
+    ) -> Result<reqwest::Response> {
+        let body_bytes = match json_body {
+            Some(val) => serde_json::to_vec(val)?,
+            None => Vec::new(),
+        };
+
+        let mut builder = self.client.request(method.clone(), url);
+        let extra_headers: Vec<(&str, &str)> = if json_body.is_some() {
+            builder = builder.header(reqwest::header::CONTENT_TYPE, "application/json");
+            vec![("content-type", "application/json")]
         } else {
-            Ok(builder)
+            Vec::new()
+        };
+
+        match &self.auth {
+            Some(RestCatalogAuth::AwsSigV4 { region, service }) => {
+                let creds = self.resolve_aws_credentials().await?;
+                let sig_headers = compute_sigv4_headers(
+                    method.as_str(),
+                    url,
+                    &extra_headers,
+                    &body_bytes,
+                    &creds,
+                    region,
+                    service,
+                    SystemTime::now(),
+                )?;
+                for (k, v) in sig_headers {
+                    builder = builder.header(k, v);
+                }
+            }
+            Some(_) => {
+                if let Some(token) = self.get_token().await? {
+                    builder = builder.bearer_auth(token);
+                }
+            }
+            None => {}
         }
+
+        if json_body.is_some() {
+            builder = builder.body(body_bytes);
+        }
+
+        Ok(builder.send().await?)
+    }
+
+    /// Fetch Iceberg REST `/v1/config` overrides and defaults, updating active prefix unless overridden.
+    pub async fn fetch_config(&self, warehouse: Option<&str>) -> Result<CatalogConfigResponse> {
+        let wh = warehouse.or(self.warehouse.as_deref());
+        let url = match wh {
+            Some(w) if !w.trim().is_empty() => {
+                format!(
+                    "{}/v1/config?warehouse={}",
+                    self.base_url,
+                    encode_segment(w)
+                )
+            }
+            _ => format!("{}/v1/config", self.base_url),
+        };
+
+        let resp = self.send_request(Method::GET, &url, None).await?;
+        if !resp.status().is_success() {
+            return Err(error_from_response(resp, "GET /v1/config").await);
+        }
+
+        let cfg: CatalogConfigResponse = resp.json().await?;
+        if !self.prefix_explicit {
+            if let Some(pfx) = cfg
+                .overrides
+                .get("prefix")
+                .or_else(|| cfg.defaults.get("prefix"))
+            {
+                let clean = pfx.trim_matches('/').to_string();
+                if !clean.is_empty() {
+                    *self.prefix.write().await = clean;
+                }
+            }
+        }
+
+        {
+            let mut defaults = self.config_defaults.write().await;
+            for (k, v) in &cfg.defaults {
+                defaults.insert(k.clone(), v.clone());
+            }
+            for (k, v) in &cfg.overrides {
+                defaults.insert(k.clone(), v.clone());
+            }
+        }
+        *self.config_discovered.write().await = true;
+
+        Ok(cfg)
+    }
+
+    async fn ensure_config_discovered(&self) -> Result<()> {
+        if !self.discover_on_first_use || *self.config_discovered.read().await {
+            return Ok(());
+        }
+        let _guard = self.discover_gate.lock().await;
+        if *self.config_discovered.read().await {
+            return Ok(());
+        }
+        self.fetch_config(self.warehouse.as_deref()).await?;
+        Ok(())
     }
 
     /// Build full URL with optional prefix
-    fn build_url(&self, path: &str) -> String {
-        if self.prefix.is_empty() {
+    async fn build_url(&self, path: &str) -> String {
+        let pfx = self.prefix.read().await;
+        if pfx.is_empty() {
             format!("{}/v1{}", self.base_url, path)
         } else {
-            format!("{}/v1/{}{}", self.base_url, self.prefix, path)
+            format!("{}/v1/{}{}", self.base_url, pfx.trim_matches('/'), path)
         }
     }
 
@@ -258,28 +550,24 @@ impl RestCatalogClient {
         updates: Vec<serde_json::Value>,
         requirements: Option<Vec<serde_json::Value>>,
     ) -> Result<()> {
-        let url = self.build_url(&format!("/namespaces/{}/tables/{}", namespace, table_name));
+        self.ensure_config_discovered().await?;
+        let url = self
+            .build_url(&format!(
+                "/namespaces/{}/tables/{}",
+                encode_segment(namespace),
+                encode_segment(table_name)
+            ))
+            .await;
 
         let req = UpdateTableRequest {
             updates,
             requirements,
         };
+        let body = serde_json::to_value(&req)?;
 
-        let builder = self
-            .prepare_request(self.client.post(&url).json(&req))
-            .await?;
-        let resp = builder.send().await?;
-
+        let resp = self.send_request(Method::POST, &url, Some(&body)).await?;
         if !resp.status().is_success() {
-            let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow::Error::new(
-                crate::core::error::BenoStreamError::CatalogRequest {
-                    catalog: "rest".to_string(),
-                    status: Some(status.as_u16()),
-                    reason: error,
-                },
-            ));
+            return Err(error_from_response(resp, "commit_table").await);
         }
 
         Ok(())
@@ -289,23 +577,53 @@ impl RestCatalogClient {
 #[async_trait]
 impl Catalog for RestCatalogClient {
     async fn create_namespace(&self, namespace: &str) -> Result<()> {
-        let url = self.build_url("/namespaces");
+        self.ensure_config_discovered().await?;
+        let url = self.build_url("/namespaces").await;
         let req = CreateNamespaceRequest {
             namespace: vec![namespace.to_string()],
             properties: None,
         };
-        let builder = self
-            .prepare_request(self.client.post(&url).json(&req))
-            .await?;
-        let resp = builder.send().await?;
+        let body = serde_json::to_value(&req)?;
+        let resp = self.send_request(Method::POST, &url, Some(&body)).await?;
         if !resp.status().is_success() {
-            let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!(
-                "Failed to create namespace ({}): {}",
-                status,
-                error
-            ));
+            return Err(error_from_response(resp, "create_namespace").await);
+        }
+        Ok(())
+    }
+
+    async fn namespace_exists(&self, namespace: &str) -> Result<bool> {
+        self.ensure_config_discovered().await?;
+        let url = self
+            .build_url(&format!("/namespaces/{}", encode_segment(namespace)))
+            .await;
+
+        let resp = self.send_request(Method::HEAD, &url, None).await?;
+        let resp = if matches!(
+            resp.status(),
+            reqwest::StatusCode::METHOD_NOT_ALLOWED | reqwest::StatusCode::NOT_IMPLEMENTED
+        ) {
+            self.send_request(Method::GET, &url, None).await?
+        } else {
+            resp
+        };
+
+        if resp.status().is_success() {
+            Ok(true)
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(false)
+        } else {
+            Err(error_from_response(resp, "namespace_exists").await)
+        }
+    }
+
+    async fn drop_namespace(&self, namespace: &str) -> Result<()> {
+        self.ensure_config_discovered().await?;
+        let url = self
+            .build_url(&format!("/namespaces/{}", encode_segment(namespace)))
+            .await;
+        let resp = self.send_request(Method::DELETE, &url, None).await?;
+        if !resp.status().is_success() {
+            return Err(error_from_response(resp, "drop_namespace").await);
         }
         Ok(())
     }
@@ -317,7 +635,10 @@ impl Catalog for RestCatalogClient {
         schema: SchemaRef,
         location: Option<&str>,
     ) -> Result<()> {
-        let url = self.build_url(&format!("/namespaces/{}/tables", namespace));
+        self.ensure_config_discovered().await?;
+        let url = self
+            .build_url(&format!("/namespaces/{}/tables", encode_segment(namespace)))
+            .await;
 
         // Convert schema to JSON for REST API
         let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
@@ -331,36 +652,36 @@ impl Catalog for RestCatalogClient {
             write_order: None,
             properties: None,
         };
+        let body = serde_json::to_value(&req)?;
 
-        let builder = self
-            .prepare_request(self.client.post(&url).json(&req))
-            .await?;
-        let resp = builder.send().await?;
-
+        let resp = self.send_request(Method::POST, &url, Some(&body)).await?;
         if !resp.status().is_success() {
-            let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!("Failed to create table ({}): {}", status, error));
+            return Err(error_from_response(resp, "create_table").await);
         }
 
         Ok(())
     }
 
     async fn load_table(&self, namespace: &str, table_name: &str) -> Result<TableMetadata> {
-        let url = self.build_url(&format!("/namespaces/{}/tables/{}", namespace, table_name));
+        self.ensure_config_discovered().await?;
+        let url = self
+            .build_url(&format!(
+                "/namespaces/{}/tables/{}",
+                encode_segment(namespace),
+                encode_segment(table_name)
+            ))
+            .await;
 
-        let builder = self.prepare_request(self.client.get(&url)).await?;
-        let resp = builder.send().await?;
-
+        let resp = self.send_request(Method::GET, &url, None).await?;
         if !resp.status().is_success() {
-            let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!("Failed to load table ({}): {}", status, error));
+            return Err(error_from_response(resp, "load_table").await);
         }
 
-        let table_resp: LoadTableResponse = resp.json().await?;
-
-        // Note: metadata.location remains the table root, while table_resp.metadata_location is the file URI.
+        let mut table_resp: LoadTableResponse = resp.json().await?;
+        if table_resp.metadata.location.is_empty() && !table_resp.metadata_location.is_empty() {
+            table_resp.metadata.location =
+                table_root_from_metadata_location(&table_resp.metadata_location);
+        }
         Ok(table_resp.metadata)
     }
 
@@ -398,32 +719,48 @@ impl Catalog for RestCatalogClient {
     }
 
     async fn drop_table(&self, namespace: &str, table_name: &str) -> Result<()> {
-        let url = self.build_url(&format!("/namespaces/{}/tables/{}", namespace, table_name));
-        let builder = self.prepare_request(self.client.delete(&url)).await?;
-        let resp = builder.send().await?;
+        self.ensure_config_discovered().await?;
+        let url = self
+            .build_url(&format!(
+                "/namespaces/{}/tables/{}",
+                encode_segment(namespace),
+                encode_segment(table_name)
+            ))
+            .await;
+        let resp = self.send_request(Method::DELETE, &url, None).await?;
         if !resp.status().is_success() && resp.status() != reqwest::StatusCode::NOT_FOUND {
-            let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!("Failed to drop table ({}): {}", status, error));
+            return Err(error_from_response(resp, "drop_table").await);
         }
         Ok(())
     }
 
     async fn list_tables(&self, namespace: &str) -> Result<Vec<String>> {
-        let url = self.build_url(&format!("/namespaces/{}/tables", namespace));
-        let builder = self.prepare_request(self.client.get(&url)).await?;
-        let resp = builder.send().await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let error = resp.text().await?;
-            return Err(anyhow!("Failed to list tables ({}): {}", status, error));
+        self.ensure_config_discovered().await?;
+        let base_list_url = self
+            .build_url(&format!("/namespaces/{}/tables", encode_segment(namespace)))
+            .await;
+
+        let mut names = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        loop {
+            let url = match &page_token {
+                Some(tok) => format!("{base_list_url}?pageToken={}", encode_segment(tok)),
+                None => base_list_url.clone(),
+            };
+            let resp = self.send_request(Method::GET, &url, None).await?;
+            if !resp.status().is_success() {
+                return Err(error_from_response(resp, "list_tables").await);
+            }
+            let list_resp: ListTablesResponse = resp.json().await?;
+            names.extend(list_resp.identifiers.into_iter().map(|id| id.name));
+            match list_resp.next_page_token.filter(|t| !t.is_empty()) {
+                Some(tok) => page_token = Some(tok),
+                None => break,
+            }
         }
-        let list_resp: ListTablesResponse = resp.json().await?;
-        Ok(list_resp
-            .identifiers
-            .into_iter()
-            .map(|id| id.name)
-            .collect())
+
+        Ok(names)
     }
 
     async fn table_exists(&self, namespace: &str, table_name: &str) -> Result<bool> {
@@ -501,6 +838,48 @@ mod tests {
 
         assert!(!catalog.table_exists("ns", "table").await.unwrap_or(true));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_compute_sigv4_headers_includes_required_headers() -> Result<()> {
+        let creds = Credentials::new(
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            Some("session-token-123".to_string()),
+            None,
+            "unit-test",
+        );
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let headers = compute_sigv4_headers(
+            "POST",
+            "https://s3tables.us-east-1.amazonaws.com/iceberg/v1/wh/namespaces/ns/tables",
+            &[("content-type", "application/json")],
+            br#"{"name":"events"}"#,
+            &creds,
+            "us-east-1",
+            "s3tables",
+            ts,
+        )?;
+
+        let map: HashMap<String, String> = headers
+            .into_iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), v))
+            .collect();
+
+        let auth = map
+            .get("authorization")
+            .ok_or_else(|| anyhow!("missing Authorization header"))?;
+        assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"));
+        assert!(auth.contains("/us-east-1/s3tables/aws4_request"));
+        assert!(auth.contains("SignedHeaders="));
+        assert!(auth.contains("Signature="));
+        assert!(map.contains_key("x-amz-date"));
+        assert!(map.contains_key("x-amz-content-sha256"));
+        assert_eq!(
+            map.get("x-amz-security-token").map(String::as_str),
+            Some("session-token-123")
+        );
         Ok(())
     }
 }

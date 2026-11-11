@@ -8,14 +8,15 @@ BenoStreamDB supports enterprise-grade data catalogs to provide table discovery,
 |---|---|---|---|
 | **Memory Catalog (`memory`)** | In-process `RwLock` | Validates Iceberg `TableRequirement` predicates (`assert-table-uuid`, `assert-ref-snapshot-id`, schema/spec/field ids) and emits HTTP-409 equivalent conflicts. | Zero-infrastructure unit/integration tests, shared-URI (`memory://<name>`) multi-writer convergence testing. |
 | **JDBC Catalog (`jdbc`)** | `sqlx::AnyPool` (PostgreSQL / SQLite) | Validates `TableRequirement` predicates against persisted `TableMetadata` and executes `UPDATE ... WHERE metadata_location = ?` (`$N` on Postgres) compare-and-swap, returning `409` on zero rows updated. | Embedded SQLite single-node catalogs (`sqlite::memory:` / `sqlite:///...`) and relational PostgreSQL Iceberg metadata stores. |
-| **Hive Metastore (`hive`)** | Thrift | Tracks table `metadata_location` property in HMS (native HMS `expected_parameter` CAS hardening tracked under Workstream C3.3). | Enterprise Hadoop ecosystem integration. |
-| **Project Nessie (`nessie`)** | REST v2 | Git-like branch reference optimistic locking (`expectedHash`). | Branching, tagging, and time-travel data engineering workflows. |
-| **AWS Glue (`glue`)** | Native SDK | AWS Glue Data Catalog table properties (`version_id` CAS hardening tracked under Workstream C3.2). | AWS serverless metadata management. |
-| **Iceberg REST (`rest`)** | REST v1 (Bearer / OAuth2) | Sends full Iceberg REST `requirements` + `updates` payload; retries up to 8 times on HTTP `409 Conflict` with monotonic metadata re-merge. | Vendor-neutral interoperable standard (Apache Polaris, Lakekeeper, Snowflake Open Catalog). |
-| **Unity Catalog (`unity`)** | REST | Databricks Unity Catalog table registration (Iceberg REST commit mode tracked under Workstream C3.4). | Databricks ecosystem integration. |
+| **Iceberg REST (`rest`)** | REST v1 (Bearer / OAuth2 / AWS SigV4) | Sends full Iceberg REST `requirements` + `updates` payload; discovers `/v1/config` prefixes when `warehouse` is set; retries up to 8 times on HTTP `409 Conflict`. | Vendor-neutral interoperable standard (Apache Polaris, Lakekeeper, Snowflake Open Catalog, generic SigV4 REST endpoints). |
+| **Amazon S3 Tables (`s3tables`)** | Iceberg REST v1 (`SigV4`, `s3tables` service) | Auto-extracts region from table bucket ARN, signs every request with `x-amz-content-sha256` AWS SigV4, discovers prefix via `/v1/config?warehouse=<arn>`, and uses native REST `409` CAS retries. | Managed Amazon S3 Tables buckets. |
+| **AWS Glue (`glue`)** | Native SDK or Iceberg REST (`mode = "rest"`) | Validates `TableRequirement`s and commits with Glue `version_id` conditional lock (`ConcurrentModificationException` mapped to `409`), or delegates to Glue Iceberg REST (`service = "glue"`) in `mode = "rest"`. | AWS serverless metadata management. |
+| **Hive Metastore (`hive`)** | Thrift | Validates `TableRequirement`s and executes `alter_table_with_environment_context` with `expected_parameter_key = "metadata_location"`, mapping mismatch exceptions to `409`. | Enterprise Hadoop ecosystem integration. |
+| **Project Nessie (`nessie`)** | REST v2 (optional Bearer token) | Validates `TableRequirement`s, handles `set-metadata-location` and `DELETE`, commits against branch `expectedHash`, and maps HTTP `409 ReferenceConflictException` to retryable `409`. | Branching, tagging, and time-travel data engineering workflows. |
+| **Unity Catalog (`unity`)** | Databricks Unity REST & Iceberg REST | Supports both standard Unity Tables REST (`PATCH` with `previous_metadata_location` + `TableRequirement` verification) and **Databricks Unity Iceberg REST** (`/api/2.1/unity-catalog/iceberg-rest` full `/v1` `409` CAS). | Databricks Lakehouse integration. |
 
 > [!NOTE]
-> Multi-writer optimistic concurrency convergence relies on `commit_table_with_requirements` returning `BenoStreamError::CatalogRequest { status: Some(409), .. }` when a concurrent commit advances `metadata_location` or `current-snapshot-id`. Today this CAS retry loop (`MAX_CATALOG_RETRIES = 8` in [`maintenance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/maintenance.rs)) is enforced end-to-end by **Memory**, **JDBC** (SQLite/PostgreSQL), and **Iceberg REST**.
+> Multi-writer optimistic concurrency convergence relies on `commit_table_with_requirements` returning `BenoStreamError::CatalogRequest { status: Some(409), .. }` when a concurrent commit advances `metadata_location` or `current-snapshot-id`. All catalog adapters enforce this CAS contract (`MAX_CATALOG_RETRIES = 8` in [`maintenance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/table/maintenance.rs)). All remote HTTP/object-store URIs entered via `create_catalog_async` are checked by the built-in SSRF guard against loopback, private, and link-local hosts.
 
 ---
 
@@ -116,25 +117,71 @@ table = catalog.load_table("etl-job-v2", "users")
 
 ---
 
-## 3. AWS Glue Catalog
+## 3. AWS Glue Catalog & Amazon S3 Tables
 
-For AWS users, the Glue Data Catalog provides a managed, serverless metadata store.
+For AWS deployments, BenoStreamDB supports both **Amazon S3 Tables** (`s3tables`, Iceberg REST over AWS SigV4) and **AWS Glue** (native `aws-sdk-glue` with `version_id` optimistic locking or managed Glue Iceberg REST via `mode = "rest"`).
 
-### Usage
+### Amazon S3 Tables (`s3tables`)
 ```python
 import benostreamdb as bsdb
 
-# BenoStreamDB uses your local AWS credentials (IAM/Env)
-catalog = bsdb.create_catalog("glue", {})
+# Derives region (`us-east-1`) from the bucket ARN, signs requests via AWS SigV4
+# using the default AWS credential chain, and auto-discovers prefix via `/v1/config`.
+catalog = bsdb.create_catalog(
+    "s3tables",
+    {"warehouse": "arn:aws:s3tables:us-east-1:123456789012:bucket/analytics-tables"},
+)
 
-table = catalog.load_table("production_db", "clickstream_data")
+catalog.create_namespace("events")
+table = catalog.load_table("events", "clickstream_data")
+```
+
+### AWS Glue (`glue` SDK & Iceberg REST)
+```python
+import benostreamdb as bsdb
+
+# Native AWS Glue SDK (version_id CAS)
+sdk_catalog = bsdb.create_catalog("glue", {"region": "us-east-1"})
+
+# Managed AWS Glue Iceberg REST endpoint (SigV4 + /v1/config)
+rest_catalog = bsdb.create_catalog(
+    "glue",
+    {"mode": "rest", "region": "us-east-1", "catalog_id": "123456789012"},
+)
+
+table = sdk_catalog.load_table("production_db", "clickstream_data")
+```
+
+### Databricks Unity Catalog (`unity`)
+```python
+import benostreamdb as bsdb
+
+# Recommended: Databricks Unity Iceberg REST endpoint (full Iceberg CAS & 409 retries)
+unity_iceberg = bsdb.create_catalog(
+    "unity",
+    {
+        "url": "https://<workspace>.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest",
+        "token": "<DATABRICKS_PAT>",
+        "warehouse": "main",
+    },
+)
+
+# Standard Unity Tables REST API
+unity_tables = bsdb.create_catalog(
+    "unity",
+    {
+        "url": "https://<workspace>.cloud.databricks.com",
+        "token": "<DATABRICKS_PAT>",
+        "warehouse": "main",
+    },
+)
 ```
 
 ---
 
 ## 4. Iceberg REST Catalog (Snowflake / Apache Polaris & Lakekeeper)
 
-The vendor-neutral REST catalog is the most interoperable way to manage Iceberg tables across different engines (Trino, Spark, Snowflake, BenoStreamDB). BenoStreamDB natively supports the official Iceberg REST OpenAPI specification, including full OAuth2 client credentials authentication for **Snowflake / Apache Polaris** and **Lakekeeper**. Both Python direct table access and `benostreamdb-search` REST ingestion automatically synchronize new snapshots with Polaris.
+The vendor-neutral REST catalog is the most interoperable way to manage Iceberg tables across different engines (Trino, Spark, Snowflake, BenoStreamDB). BenoStreamDB natively supports the official Iceberg REST OpenAPI specification, including OAuth2 client credentials (`credential` / `client_id` + `client_secret`), static Bearer tokens (`token`), AWS SigV4 signing (`auth = "sigv4"`), and `/v1/config?warehouse=...` auto-discovery.
 
 ### Snowflake / Apache Polaris with OAuth2 Client Credentials
 ```python
@@ -144,16 +191,13 @@ import benostreamdb as bsdb
 catalog = bsdb.create_catalog("rest", {
     "url": "https://polaris.example.com/api/catalog/v1",
     "prefix": "my_warehouse",
+    "credential": "<POLARIS_CLIENT_ID>:<POLARIS_CLIENT_SECRET>",
+    "scope": "PRINCIPAL_ROLE:ALL",
 })
 table = catalog.load_table("production", "campaign_results")
 ```
 
-The embedded Python REST wrapper accepts `url` and an optional `prefix`. OAuth2 client
-credentials (`credential` / `scope`) and static bearer tokens are configured on the
-`benostreamdb-search` server (or any engine process) through `benostream.toml` or the
-`BSDB_SEARCH_CATALOG_*` environment variables. The engine then executes the OAuth2
-`/v1/oauth/tokens` exchange and caches the bearer token, refreshing it automatically
-within 60 seconds of expiration.
+All `benostreamdb` engines and servers (`benostreamdb-search`, `benostreamdb-flight`, and Python bindings) also accept catalog parameters from `benostream.toml` or `BSDB_SEARCH_CATALOG_*` / `BSDB_CATALOG_*` environment variables (`TYPE`, `URL`/`URI`, `TOKEN`, `CREDENTIAL`, `PREFIX`, `ID`, `REGION`, `WAREHOUSE`, `MODE`, `AUTH`, `SERVICE`, `SCOPE`). For OAuth2 credentials, the engine executes `/v1/oauth/tokens` exchanges and caches bearer tokens, refreshing automatically within 60 seconds of expiration.
 
 ### Static Token (Tabular / Nessie REST)
 ```python

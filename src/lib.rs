@@ -168,8 +168,10 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::open_table, m)?)?;
     m.add_class::<python_binding::PyTable>()?;
     m.add_class::<python_binding::PyMergeMode>()?;
+    m.add_class::<python_binding::PyMemoryCatalog>()?;
     m.add_class::<python_binding::PyNessieCatalog>()?;
     m.add_class::<python_binding::PyRestCatalog>()?;
+    m.add_class::<python_binding::PyS3TablesCatalog>()?;
     m.add_class::<python_binding::PyGlueCatalog>()?;
     m.add_class::<python_binding::PyHiveCatalog>()?;
     m.add_class::<python_binding::PyUnityCatalog>()?;

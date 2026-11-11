@@ -210,8 +210,14 @@ async fn test_puffin_hybrid_segment_writer_and_reader() -> Result<(), Box<dyn st
         },
     );
 
-    let store: Arc<dyn object_store::ObjectStore> =
-        Arc::new(object_store::local::LocalFileSystem::new());
+    // Root the store at the segment directory. `HybridReader` resolves object
+    // paths *relative* to `root_uri`, which is only correct when the store is
+    // rooted at that same prefix — the convention `create_object_store` uses in
+    // production. A `/`-rooted store turns `puffin_seg_001.puffin` into
+    // `/puffin_seg_001.puffin` and the byte-range read misses.
+    let store: Arc<dyn object_store::ObjectStore> = Arc::new(
+        object_store::local::LocalFileSystem::new_with_prefix(&tmp_dir_path)?,
+    );
     let writer = HybridSegmentWriter::new(config.clone())
         .with_store(store.clone())
         .with_index_configs(index_configs);

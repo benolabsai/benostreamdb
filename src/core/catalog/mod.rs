@@ -116,6 +116,8 @@ pub enum CatalogType {
     Hive,
     Unity,
     Jdbc,
+    #[serde(alias = "s3_tables", alias = "s3-tables")]
+    S3Tables,
 }
 
 impl FromStr for CatalogType {
@@ -130,9 +132,61 @@ impl FromStr for CatalogType {
             "hive" => Ok(CatalogType::Hive),
             "unity" => Ok(CatalogType::Unity),
             "jdbc" => Ok(CatalogType::Jdbc),
+            "s3tables" | "s3_tables" | "s3-tables" => Ok(CatalogType::S3Tables),
             _ => Err(anyhow::anyhow!("Unknown catalog type: {}", s)),
         }
     }
+}
+
+/// Extract an AWS region from an S3 Tables bucket ARN
+/// (`arn:aws:s3tables:<region>:<account>:bucket/<name>`).
+pub(crate) fn extract_s3tables_region_from_arn(arn: &str) -> Option<String> {
+    let mut parts = arn.trim().split(':');
+    let arn_prefix = parts.next()?;
+    let _partition = parts.next()?;
+    let service = parts.next()?;
+    let region = parts.next()?;
+    if arn_prefix == "arn" && service == "s3tables" && is_valid_aws_region(region) {
+        Some(region.to_string())
+    } else {
+        None
+    }
+}
+
+pub(crate) fn is_valid_aws_region(region: &str) -> bool {
+    !region.is_empty()
+        && region.len() <= 64
+        && region
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+pub(crate) fn resolve_aws_region_from_config(
+    config: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    config
+        .get("region")
+        .or_else(|| config.get("rest.signing-region"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            config
+                .get("warehouse")
+                .and_then(|w| extract_s3tables_region_from_arn(w))
+        })
+        .or_else(|| {
+            std::env::var("AWS_REGION")
+                .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+}
+
+fn parse_bool_flag(config: &std::collections::HashMap<String, String>, key: &str) -> Option<bool> {
+    config
+        .get(key)
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
 }
 
 /// Create a catalog instance based on type and configuration
@@ -173,8 +227,13 @@ pub async fn create_catalog_async(
         CatalogType::Nessie => {
             let url = config
                 .get("url")
+                .or_else(|| config.get("uri"))
                 .ok_or_else(|| anyhow::anyhow!("Missing 'url' config for Nessie catalog"))?;
-            Ok(Box::new(nessie::NessieClient::new(url.clone())))
+            let token = config.get("token").cloned();
+            Ok(Box::new(nessie::NessieClient::with_token(
+                url.clone(),
+                token,
+            )))
         }
         CatalogType::Rest => {
             let url = config
@@ -182,8 +241,29 @@ pub async fn create_catalog_async(
                 .or_else(|| config.get("uri"))
                 .ok_or_else(|| anyhow::anyhow!("Missing 'url' or 'uri' config for REST catalog"))?;
             let prefix = config.get("prefix").cloned();
+            let warehouse = config.get("warehouse").cloned();
 
-            let auth = if let Some(token) = config.get("token").cloned() {
+            let sigv4_requested = config.get("auth").is_some_and(|a| {
+                a.eq_ignore_ascii_case("sigv4") || a.eq_ignore_ascii_case("aws_sigv4")
+            }) || parse_bool_flag(&config, "rest.sigv4-enabled")
+                .unwrap_or(false);
+
+            let auth = if sigv4_requested {
+                let region = resolve_aws_region_from_config(&config).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Missing AWS 'region' (or 'rest.signing-region' / AWS_REGION) for SigV4 REST catalog"
+                    )
+                })?;
+                if !is_valid_aws_region(&region) {
+                    anyhow::bail!("Invalid AWS region '{region}' for SigV4 REST catalog");
+                }
+                let service = config
+                    .get("service")
+                    .or_else(|| config.get("rest.signing-name"))
+                    .cloned()
+                    .unwrap_or_else(|| "execute-api".to_string());
+                Some(rest::RestCatalogAuth::AwsSigV4 { region, service })
+            } else if let Some(token) = config.get("token").cloned() {
                 Some(rest::RestCatalogAuth::BearerToken(token))
             } else if let Some(credential) = config.get("credential") {
                 let parts: Vec<&str> = credential.splitn(2, ':').collect();
@@ -232,38 +312,133 @@ pub async fn create_catalog_async(
                 None
             };
 
-            Ok(Box::new(rest::RestCatalogClient::with_auth(
-                url.clone(),
-                prefix,
-                auth,
-            )))
+            let discover = parse_bool_flag(&config, "discover_config")
+                .unwrap_or_else(|| warehouse.is_some() && prefix.is_none());
+
+            Ok(Box::new(
+                rest::RestCatalogClient::with_auth(url.clone(), prefix, auth)
+                    .with_warehouse(warehouse, discover),
+            ))
+        }
+        CatalogType::S3Tables => {
+            let warehouse = config
+                .get("warehouse")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let explicit_url = config.get("url").or_else(|| config.get("uri")).cloned();
+            if warehouse.is_none() && explicit_url.is_none() {
+                anyhow::bail!(
+                    "Missing 'warehouse' (S3 Tables bucket ARN) or 'url' config for S3Tables catalog"
+                );
+            }
+
+            let region = resolve_aws_region_from_config(&config).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Missing 'region' (or regional 'warehouse' ARN / AWS_REGION) for S3Tables catalog"
+                )
+            })?;
+            if !is_valid_aws_region(&region) {
+                anyhow::bail!("Invalid AWS region '{region}' for S3Tables catalog");
+            }
+
+            let url = explicit_url
+                .unwrap_or_else(|| format!("https://s3tables.{region}.amazonaws.com/iceberg"));
+            if crate::core::storage::ssrf_guard_enabled() && url.contains("://") {
+                crate::core::storage::validate_external_uri(&url)?;
+            }
+
+            let prefix = config.get("prefix").cloned();
+            let discover = parse_bool_flag(&config, "discover_config")
+                .unwrap_or_else(|| warehouse.is_some() && prefix.is_none());
+
+            Ok(Box::new(
+                rest::RestCatalogClient::with_sigv4(url, prefix, region, "s3tables")
+                    .with_warehouse(warehouse, discover),
+            ))
         }
         CatalogType::Glue => {
-            let catalog_id = config.get("catalog_id").cloned();
-            let client = glue::GlueCatalogClient::new(catalog_id).await?;
-            Ok(Box::new(client))
+            let mode_rest = config
+                .get("mode")
+                .is_some_and(|m| m.eq_ignore_ascii_case("rest"));
+            if mode_rest {
+                let region = resolve_aws_region_from_config(&config).ok_or_else(|| {
+                    anyhow::anyhow!("Missing 'region' (or AWS_REGION) for Glue Iceberg REST mode")
+                })?;
+                if !is_valid_aws_region(&region) {
+                    anyhow::bail!("Invalid AWS region '{region}' for Glue Iceberg REST mode");
+                }
+                let url = config
+                    .get("url")
+                    .or_else(|| config.get("uri"))
+                    .cloned()
+                    .unwrap_or_else(|| format!("https://glue.{region}.amazonaws.com/iceberg"));
+                if crate::core::storage::ssrf_guard_enabled() && url.contains("://") {
+                    crate::core::storage::validate_external_uri(&url)?;
+                }
+                let prefix = config.get("prefix").cloned();
+                let warehouse = config
+                    .get("warehouse")
+                    .or_else(|| config.get("catalog_id"))
+                    .cloned();
+                let discover = parse_bool_flag(&config, "discover_config")
+                    .unwrap_or_else(|| warehouse.is_some() && prefix.is_none());
+
+                Ok(Box::new(
+                    rest::RestCatalogClient::with_sigv4(url, prefix, region, "glue")
+                        .with_warehouse(warehouse, discover),
+                ))
+            } else {
+                let catalog_id = config.get("catalog_id").cloned();
+                let region = config.get("region").cloned();
+                let client = glue::GlueCatalogClient::with_region(catalog_id, region).await?;
+                Ok(Box::new(client))
+            }
         }
         CatalogType::Hive => {
             let url = config
                 .get("url")
+                .or_else(|| config.get("uri"))
                 .ok_or_else(|| anyhow::anyhow!("Missing 'url' config for Hive Metastore"))?;
             Ok(Box::new(hive::HiveMetastoreClient::new(url.clone())?))
         }
         CatalogType::Unity => {
             let url = config
                 .get("url")
+                .or_else(|| config.get("uri"))
                 .ok_or_else(|| anyhow::anyhow!("Missing 'url' config for Unity Catalog"))?;
             let token = config
                 .get("token")
                 .ok_or_else(|| anyhow::anyhow!("Missing 'token' config for Unity Catalog"))?;
-            Ok(Box::new(unity::UnityCatalogClient::new(
-                url.clone(),
-                token.clone(),
-            )))
+            let warehouse = config
+                .get("warehouse")
+                .or_else(|| config.get("catalog"))
+                .cloned();
+            let prefix = config.get("prefix").cloned();
+            let trimmed_url = url.trim_end_matches('/');
+            let iceberg_rest_mode = config.get("mode").is_some_and(|m| {
+                m.eq_ignore_ascii_case("iceberg-rest") || m.eq_ignore_ascii_case("rest")
+            }) || trimmed_url.ends_with("/iceberg-rest")
+                || trimmed_url.ends_with("/iceberg");
+
+            if iceberg_rest_mode {
+                Ok(Box::new(unity::UnityCatalogClient::new_iceberg_rest(
+                    url.clone(),
+                    token.clone(),
+                    warehouse,
+                    prefix,
+                )))
+            } else {
+                let mut client = unity::UnityCatalogClient::new(url.clone(), token.clone());
+                if let Some(cat) = warehouse {
+                    client = client.with_default_catalog(cat);
+                }
+                Ok(Box::new(client))
+            }
         }
         CatalogType::Jdbc => {
             let uri = config
                 .get("uri")
+                .or_else(|| config.get("url"))
                 .ok_or_else(|| anyhow::anyhow!("Missing 'uri' config for JDBC catalog"))?;
             let warehouse = config.get("warehouse").cloned();
             let catalog_name = config
@@ -285,4 +460,98 @@ pub fn create_catalog(
     tokio::runtime::Runtime::new()
         .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime for catalog: {}", e))?
         .block_on(create_catalog_async(catalog_type, config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_s3tables_arn_region_extraction_and_validation() {
+        assert_eq!(
+            extract_s3tables_region_from_arn(
+                "arn:aws:s3tables:us-east-1:123456789012:bucket/analytics"
+            ),
+            Some("us-east-1".to_string())
+        );
+        assert_eq!(
+            extract_s3tables_region_from_arn(
+                "arn:aws-us-gov:s3tables:us-gov-west-1:123456789012:bucket/gov"
+            ),
+            Some("us-gov-west-1".to_string())
+        );
+        assert_eq!(
+            extract_s3tables_region_from_arn("arn:aws:s3:::plain-bucket"),
+            None
+        );
+        assert_eq!(
+            extract_s3tables_region_from_arn(
+                "arn:aws:s3tables:us-east-1.evil.com/path:123:bucket/bad"
+            ),
+            None
+        );
+        assert!(is_valid_aws_region("eu-central-1"));
+        assert!(!is_valid_aws_region("us-east-1/evil"));
+    }
+
+    #[test]
+    fn test_catalog_type_s3tables_aliases() -> Result<()> {
+        assert_eq!(CatalogType::from_str("s3tables")?, CatalogType::S3Tables);
+        assert_eq!(CatalogType::from_str("s3_tables")?, CatalogType::S3Tables);
+        assert_eq!(CatalogType::from_str("s3-tables")?, CatalogType::S3Tables);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_catalog_async_phase_b_modes_and_ssrf() -> Result<()> {
+        let mut s3_cfg = HashMap::new();
+        s3_cfg.insert(
+            "warehouse".to_string(),
+            "arn:aws:s3tables:us-west-2:123456789012:bucket/prod".to_string(),
+        );
+        assert!(create_catalog_async(CatalogType::S3Tables, s3_cfg)
+            .await
+            .is_ok());
+
+        let mut s3_ssrf = HashMap::new();
+        s3_ssrf.insert(
+            "warehouse".to_string(),
+            "arn:aws:s3tables:us-west-2:123456789012:bucket/prod".to_string(),
+        );
+        s3_ssrf.insert("url".to_string(), "http://127.0.0.1:9999".to_string());
+        assert!(create_catalog_async(CatalogType::S3Tables, s3_ssrf)
+            .await
+            .is_err());
+
+        let mut glue_rest = HashMap::new();
+        glue_rest.insert("mode".to_string(), "rest".to_string());
+        glue_rest.insert("region".to_string(), "eu-central-1".to_string());
+        glue_rest.insert("catalog_id".to_string(), "123456789012".to_string());
+        assert!(create_catalog_async(CatalogType::Glue, glue_rest)
+            .await
+            .is_ok());
+
+        let mut unity_rest = HashMap::new();
+        unity_rest.insert(
+            "url".to_string(),
+            "https://dbc.example.com/api/2.1/unity-catalog/iceberg-rest".to_string(),
+        );
+        unity_rest.insert("token".to_string(), "pat-123".to_string());
+        unity_rest.insert("warehouse".to_string(), "main".to_string());
+        assert!(create_catalog_async(CatalogType::Unity, unity_rest)
+            .await
+            .is_ok());
+
+        let mut rest_sigv4 = HashMap::new();
+        rest_sigv4.insert("url".to_string(), "https://api.example.com".to_string());
+        rest_sigv4.insert("auth".to_string(), "sigv4".to_string());
+        rest_sigv4.insert("region".to_string(), "us-east-1".to_string());
+        rest_sigv4.insert("service".to_string(), "s3tables".to_string());
+        assert!(create_catalog_async(CatalogType::Rest, rest_sigv4)
+            .await
+            .is_ok());
+
+        Ok(())
+    }
 }
