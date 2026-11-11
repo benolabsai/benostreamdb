@@ -89,8 +89,49 @@ impl BenoStreamExec {
         self.projection.as_ref()
     }
 
+    pub fn base_schema(&self) -> &SchemaRef {
+        &self.base_schema
+    }
+
     pub fn filter_str(&self) -> Option<&str> {
         self.filter.as_deref()
+    }
+}
+
+fn normalize_batch_to_expected(
+    b: arrow::record_batch::RecordBatch,
+    expected_schema_inner: &SchemaRef,
+) -> Result<arrow::record_batch::RecordBatch> {
+    if !expected_schema_inner.fields().is_empty()
+        && b.schema().fields().len() == expected_schema_inner.fields().len()
+    {
+        let mut cols: Vec<Arc<dyn arrow::array::Array>> = Vec::with_capacity(b.num_columns());
+        let mut ok = true;
+        for (col, field) in b
+            .columns()
+            .iter()
+            .zip(expected_schema_inner.fields().iter())
+        {
+            if col.data_type() == field.data_type() {
+                cols.push(col.clone());
+            } else {
+                match arrow::compute::cast(col.as_ref(), field.data_type()) {
+                    Ok(c) => cols.push(c),
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if ok {
+            arrow::record_batch::RecordBatch::try_new(expected_schema_inner.clone(), cols)
+                .map_err(DataFusionError::from)
+        } else {
+            Ok(b)
+        }
+    } else {
+        Ok(b)
     }
 }
 
@@ -182,116 +223,68 @@ impl ExecutionPlan for BenoStreamExec {
             self.partitions[partition].clone()
         };
 
-        // Resolve usage of projection to column names
-        let original_schema = table.arrow_schema();
-        let column_names = if let Some(ref proj) = self.projection {
-            let names: Vec<String> = proj
-                .iter()
-                .map(|i| original_schema.field(*i).name().clone())
-                .collect();
-            Some(names)
-        } else {
-            None
-        };
+        // Resolve projection against the plan's base_schema so column indices
+        // match the snapshot planned at query creation.
+        let base_schema = self.base_schema.clone();
+        let column_names = self.projection.as_ref().map(|proj| {
+            proj.iter()
+                .filter_map(|&i| base_schema.fields().get(i).map(|f| f.name().clone()))
+                .collect::<Vec<_>>()
+        });
 
-        // Pre-convert column names to &str slice
         let col_names_owned = column_names;
 
         let expected_schema = self.schema.clone();
         let expected_schema_inner = expected_schema.clone();
-        use crate::core::planner::QueryFilter;
+        use crate::core::planner::{FilterExpr, QueryFilter};
 
         let stream = async_stream::stream! {
+            let filter_expr = if let Some(ref f) = filter {
+                match FilterExpr::parse_sql(f, base_schema.clone()).await {
+                    Ok(fe) => Some(fe),
+                    Err(e) => {
+                        tracing::debug!(error = %e, filter = %f, "BenoStreamExec::execute parse_sql fallback");
+                        FilterExpr::from_filters(QueryFilter::parse_multi(f))
+                    }
+                }
+            } else {
+                None
+            };
+
+            let manifest_opt = table.manifest().await.ok();
+            let iceberg_schema = manifest_opt.as_ref().and_then(|m| {
+                m.schemas
+                    .iter()
+                    .find(|s| s.schema_id == m.current_schema_id)
+                    .or_else(|| m.schemas.last())
+                    .cloned()
+            });
+
             // For each segment in this partition
             for entry in entries {
                 let col_refs: Option<Vec<&str>> = col_names_owned.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
                 let col_slice = col_refs.as_deref();
 
-                // Apply filter parsing inside the loop or pre-parse?
-                // read_segment handles parsing if we pass QueryFilter.
-                // But here we have string filter.
-                // Better to parse once?
-                // Standard scan
-                let version = 1;
-                let query_filter = if let Some(ref f) = filter {
-                     QueryFilter::parse_multi(f).into_iter().next()
-                } else {
-                     None
-                };
-
-                let stream = table.stream_segment(&entry, query_filter.as_ref(), version, col_slice).await;
-                match stream {
-                    Ok(mut st) => {
-                        use futures::StreamExt;
-                        while let Some(batch) = st.next().await {
-                            match batch {
-                                Ok(b) => {
-                                    // Rebuild the batch with the plan's schema
-                                    // (metadata-free) so downstream operators
-                                    // see types identical to the declared ones.
-                                    // Segment batches carry the table schema,
-                                    // whose nested fields hold Iceberg metadata
-                                    // (e.g. `iceberg.id`); a mismatch there makes
-                                    // DataFusion's aggregate state coalescing
-                                    // panic inside arrow's `coalesce` kernel.
-                                    // A zero-column projection (e.g. `count(*)`)
-                                    // must be passed through untouched: rebuilding
-                                    // an empty batch fails Arrow's
-                                    // "must either specify a row count or at
-                                    // least one column" check.
-                                    if !expected_schema_inner.fields().is_empty()
-                                        && b.schema().fields().len()
-                                            == expected_schema_inner.fields().len()
-                                    {
-                                        let mut cols: Vec<Arc<dyn arrow::array::Array>> =
-                                            Vec::with_capacity(b.num_columns());
-                                        let mut ok = true;
-                                        for (col, field) in b
-                                            .columns()
-                                            .iter()
-                                            .zip(expected_schema_inner.fields().iter())
-                                        {
-                                            if col.data_type() == field.data_type() {
-                                                cols.push(col.clone());
-                                            } else {
-                                                // Cast strips the nested field
-                                                // metadata so the array type
-                                                // matches the plan schema.
-                                                match arrow::compute::cast(
-                                                    col.as_ref(),
-                                                    field.data_type(),
-                                                ) {
-                                                    Ok(c) => cols.push(c),
-                                                    Err(_) => {
-                                                        ok = false;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if ok {
-                                            match arrow::record_batch::RecordBatch::try_new(
-                                                expected_schema_inner.clone(),
-                                                cols,
-                                            ) {
-                                                Ok(rb) => yield Ok(rb),
-                                                Err(e) => yield Err(DataFusionError::from(e)),
-                                            }
-                                        } else {
-                                            yield Ok(b);
-                                        }
-                                    } else {
-                                        yield Ok(b);
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Error reading segment: {}", e);
-                                }
+                match table
+                    .read_segment_expr(
+                        &entry,
+                        filter_expr.as_ref(),
+                        1,
+                        col_slice,
+                        iceberg_schema.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(batches) => {
+                        for b in batches {
+                            match normalize_batch_to_expected(b, &expected_schema_inner) {
+                                Ok(rb) => yield Ok(rb),
+                                Err(e) => yield Err(e),
                             }
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Failed to open segment stream: {}", e);
+                        tracing::error!("Failed to read segment {}: {}", entry.file_path, e);
                     }
                 }
             }
@@ -301,30 +294,16 @@ impl ExecutionPlan for BenoStreamExec {
                 let col_refs: Option<Vec<&str>> = col_names_owned.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
                 let col_slice = col_refs.as_deref();
 
-                let query_filter = if let Some(ref f) = filter {
-                    use crate::core::planner::QueryFilter;
-                    QueryFilter::parse(f)
-                } else {
-                    None
-                };
-
-                match table.read_write_buffer(query_filter.as_ref(), col_slice) {
+                match table.read_write_buffer_expr(filter_expr.as_ref(), col_slice) {
                     Ok(batches) => {
                         for batch in batches {
-                            let mut schemas_match = batch.schema().fields().len() == expected_schema_inner.fields().len();
-                            if schemas_match {
-                                for (f1, f2) in batch.schema().fields().iter().zip(expected_schema_inner.fields().iter()) {
-                                    if f1.name() != f2.name() || f1.data_type() != f2.data_type() {
-                                        schemas_match = false;
-                                        break;
-                                    }
+                            match normalize_batch_to_expected(batch, &expected_schema_inner) {
+                                Ok(rb) => yield Ok(rb),
+                                Err(e) => {
+                                    yield Err(e);
+                                    return;
                                 }
                             }
-                            if !schemas_match {
-                                yield Err(DataFusionError::Execution(format!("Write buffer schema mismatch: expected {:?}, got {:?}", expected_schema_inner, batch.schema())));
-                                return;
-                            }
-                            yield Ok(batch);
                         }
                     },
                     Err(e) => yield Err(DataFusionError::Execution(e.to_string())),

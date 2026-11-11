@@ -12,8 +12,6 @@ use crate::core::index::VectorValue;
 use crate::core::manifest::{IndexAlgorithm, IndexFile, ManifestEntry, ManifestManager};
 use crate::core::planner::{FilterExpr, QueryFilter, QueryPlanner, VectorSearchParams};
 use crate::core::query::{QueryConfig, VectorSearchRequest};
-use crate::core::reader::HybridReader;
-use crate::SegmentConfig;
 use arrow::datatypes::Schema;
 use roaring::RoaringBitmap;
 
@@ -334,7 +332,7 @@ impl Table {
     ) -> String {
         let manifest_manager =
             crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
-        let (_manifest, all_entries, version) = manifest_manager
+        let (manifest, all_entries, version) = manifest_manager
             .load_latest_full()
             .await
             .unwrap_or((crate::core::manifest::Manifest::default(), Vec::new(), 0));
@@ -414,28 +412,23 @@ impl Table {
         if let Some(ref e) = expr {
             let sub_filters = e.extract_and_conditions();
             let mut total_hits = 0;
-            let base_uri = self.uri.clone();
 
             // Map to track which index type was used for each sub-filter
             let mut filter_index_types: HashMap<String, HashSet<&'static str>> = HashMap::new();
 
             for (entry, _) in &pruned_entries {
-                let file_path_str = entry.file_path.clone();
-                let segment_id = file_path_str
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(&file_path_str)
-                    .strip_suffix(".parquet")
-                    .unwrap_or(&file_path_str);
-
-                let config = SegmentConfig::new(&base_uri, segment_id)
-                    .with_parquet_path(entry.file_path.clone())
-                    .with_index_files(entry.index_files.clone())
-                    .with_delete_files(entry.delete_files.clone())
-                    .with_record_count(entry.record_count as u64)
-                    .with_file_checksum(entry.file_checksum.clone());
-
-                let reader = HybridReader::new(config, self.store.clone(), &base_uri);
+                let Ok(mut reader) = self.segment_reader(entry) else {
+                    total_hits += entry.record_count as usize;
+                    continue;
+                };
+                if let Some(schema) = manifest
+                    .schemas
+                    .iter()
+                    .find(|s| s.schema_id == manifest.current_schema_id)
+                    .or_else(|| manifest.schemas.last())
+                {
+                    reader = reader.with_iceberg_schema(schema.clone());
+                }
 
                 let mut seg_bm: Option<roaring::RoaringBitmap> = None;
                 for sub_f in &sub_filters {
@@ -448,13 +441,15 @@ impl Table {
                         .index_files
                         .iter()
                         .find(|f| {
-                            (f.is_lexical() || f.index_category == "bitmap")
+                            (f.is_lexical()
+                                || f.index_category == "bitmap"
+                                || f.index_category == "scalar")
                                 && f.column_name == sub_f.column.as_str()
                         })
                         .map(|f| match f.index_category.as_str() {
                             "lexical" | "inverted" => "Inverted Index (Parquet)",
                             "bm25" => "BM25 Inverted Index",
-                            "bitmap" => "Bitmap Index (.idx)",
+                            "bitmap" | "scalar" => "Bitmap Index (.idx)",
                             _ => "Full Scan",
                         })
                         .unwrap_or("Full Scan");
@@ -620,7 +615,7 @@ impl Table {
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let need_mem_index = vector_filters.is_some();
         let mut force_direct = false;
-        let (_manifest, all_entries, version, staging_snap, active_snap) = {
+        let (manifest, all_entries, version, staging_snap, active_snap) = {
             let mut resolved = None;
             for attempt in 0..8usize {
                 let epoch1 = self.buffer_epoch.load(std::sync::atomic::Ordering::SeqCst);
@@ -711,6 +706,15 @@ impl Table {
             })?
         };
 
+        // Extract Iceberg schema from the already-loaded manifest for both
+        // vector search requests and per-segment readers.
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
+
         // Table-level cluster index fast path.
         //
         // When the manifest carries a cluster-keyed artifact for the queried
@@ -718,9 +722,11 @@ impl Table {
         // artifact already holds every cluster whole, and its nodes carry
         // `(segment_id, row_id)`, so `fetch_results_by_id` hydrates the winners
         // unchanged. Restricted to a single vector filter with no scalar
-        // predicate and no uncommitted/staging buffer rows, because the artifact
-        // has no scalar-filter support and covers only persisted segments.
-        if expr.is_none() && staging_snap.is_none() && active_snap.0.is_empty() {
+        // predicate, no delete files on any entry, and no uncommitted/staging
+        // buffer rows, because the artifact has no scalar-filter or delete
+        // awareness and covers only persisted segments.
+        let has_deletes = all_entries.iter().any(|e| !e.delete_files.is_empty());
+        if !has_deletes && expr.is_none() && staging_snap.is_none() && active_snap.0.is_empty() {
             if let Some(ref vps) = vector_filters {
                 if vps.len() == 1 {
                     let vp = &vps[0];
@@ -744,37 +750,62 @@ impl Table {
             }
         }
 
-        // If vector filters are present, evaluate table-level vector routing to enable
-        // segment pruning and direct targeted cluster search across segments.
-        if let Some(ref mut vps) = vector_filters {
-            for vp in vps.iter_mut() {
-                if vp.candidate_segments.is_none() {
-                    if let Ok(Some(router)) = self.ensure_vector_router(&vp.column).await {
-                        let probes = vp.probes.unwrap_or_else(|| default_probes(router.len()));
-                        let plan = match &vp.query {
-                            crate::core::index::VectorValue::Float32(q_f32) => {
-                                Some(router.route(q_f32, probes))
-                            }
-                            _ => None,
-                        };
-                        if let Some(plan) = plan {
-                            if !plan.candidate_segments.is_empty() {
-                                tracing::info!(
-                                    column = %vp.column,
-                                    probes = probes,
-                                    candidates = plan.candidate_segments.len(),
-                                    "vector_router: routed query across global centroids"
-                                );
-                                let routed: std::collections::HashSet<String> = router
-                                    .segment_indices
-                                    .iter()
-                                    .map(|(seg, _)| seg.clone())
-                                    .collect();
-                                vp.candidate_segments =
-                                    Some(std::sync::Arc::new(plan.candidate_segments));
-                                vp.routed_segments = Some(std::sync::Arc::new(routed));
-                                vp.targeted_clusters =
-                                    Some(std::sync::Arc::new(plan.segment_clusters));
+        // First prune by partition metadata & column statistics (`expr`) BEFORE
+        // consulting `TableVectorRouter` so centroids in pruned partitions
+        // never consume global probe budget or skew adaptive thresholds.
+        let planner = QueryPlanner::new();
+        let entries_after_filter =
+            if version == 0 && manifest_manager.exists().await.unwrap_or(false) {
+                Vec::new() // Strictly follow the empty manifest
+            } else if expr.is_some() {
+                planner
+                    .prune_entries(&all_entries, expr.as_ref(), None)
+                    .into_iter()
+                    .map(|(e, _)| e)
+                    .collect()
+            } else {
+                all_entries.clone()
+            };
+
+        // If vector filters are present, evaluate table-level vector routing
+        // constrained to the surviving post-filter segments.
+        if !entries_after_filter.is_empty() {
+            if let Some(ref mut vps) = vector_filters {
+                let allowed_seg_ids: HashSet<String> = entries_after_filter
+                    .iter()
+                    .map(|e| crate::core::segment::segment_id_from_path(&e.file_path).to_string())
+                    .collect();
+
+                for vp in vps.iter_mut() {
+                    if vp.candidate_segments.is_none() {
+                        if let Ok(Some(router)) = self.ensure_vector_router(&vp.column).await {
+                            let probes = vp.probes.unwrap_or_else(|| default_probes(router.len()));
+                            let plan = match &vp.query {
+                                crate::core::index::VectorValue::Float32(q_f32) => Some(
+                                    router.route_allowed(q_f32, probes, Some(&allowed_seg_ids)),
+                                ),
+                                _ => None,
+                            };
+                            if let Some(plan) = plan {
+                                if !plan.candidate_segments.is_empty() {
+                                    tracing::info!(
+                                        column = %vp.column,
+                                        probes = probes,
+                                        candidates = plan.candidate_segments.len(),
+                                        "vector_router: routed query across allowed partition centroids"
+                                    );
+                                    let routed: std::collections::HashSet<String> = router
+                                        .segment_indices
+                                        .iter()
+                                        .map(|(seg, _)| seg.clone())
+                                        .filter(|seg| allowed_seg_ids.contains(seg))
+                                        .collect();
+                                    vp.candidate_segments =
+                                        Some(std::sync::Arc::new(plan.candidate_segments));
+                                    vp.routed_segments = Some(std::sync::Arc::new(routed));
+                                    vp.targeted_clusters =
+                                        Some(std::sync::Arc::new(plan.segment_clusters));
+                                }
                             }
                         }
                     }
@@ -782,17 +813,16 @@ impl Table {
             }
         }
 
-        let entries_to_read = if version == 0 && manifest_manager.exists().await.unwrap_or(false) {
-            Vec::new() // Strictly follow the empty manifest
-        } else if expr.is_some() || vector_filters.is_some() {
-            let planner = QueryPlanner::new();
+        let entries_to_read = if entries_after_filter.is_empty() {
+            Vec::new()
+        } else if vector_filters.is_some() {
             planner
-                .prune_entries(&all_entries, expr.as_ref(), vector_filters.as_ref())
+                .prune_entries(&entries_after_filter, None, vector_filters.as_ref())
                 .into_iter()
                 .map(|(e, _)| e)
                 .collect()
         } else {
-            all_entries.clone()
+            entries_after_filter
         };
 
         // --- SMART HYBRID TRIGGER ---
@@ -901,7 +931,8 @@ impl Table {
                     .with_targeted_clusters(vs_params.targeted_clusters.clone())
                     .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect()))
                     .with_refine_factor(vs_params.refine_factor)
-                    .with_probes(vs_params.probes),
+                    .with_probes(vs_params.probes)
+                    .with_iceberg_schema(iceberg_schema.clone()),
                 );
             }
 
@@ -994,13 +1025,6 @@ impl Table {
             return Ok(futures::stream::iter(conformed_results).boxed());
         }
 
-        // Extract Iceberg schema from the already-loaded manifest to avoid
-        // redundant manifest loads inside each per-segment read.
-        let iceberg_schema = _manifest
-            .schemas
-            .iter()
-            .find(|s| s.schema_id == _manifest.current_schema_id)
-            .cloned();
         let iceberg_schema_arc = iceberg_schema.map(Arc::new);
 
         // Capture current GPU context so it can be propagated into each async
@@ -1101,19 +1125,18 @@ impl Table {
                 if let Some(ref e) = expr_arc {
                     let planner = QueryPlanner::new();
                     for batch in aligned_buffer.iter() {
-                        let batch_to_scan = if let Some(cols) = columns {
-                            let indices: Vec<usize> = cols
-                                .iter()
-                                .filter_map(|name| batch.schema().index_of(name).ok())
-                                .collect();
-                            batch.project(&indices).unwrap_or_else(|_| batch.clone())
-                        } else {
-                            batch.clone()
-                        };
-
-                        if let Ok(filtered) = planner.filter_expr(&batch_to_scan, e) {
+                        if let Ok(filtered) = planner.filter_expr(batch, e) {
                             if filtered.num_rows() > 0 {
-                                mem_batches.push(Ok(filtered));
+                                let out_batch = if let Some(cols) = columns {
+                                    let indices: Vec<usize> = cols
+                                        .iter()
+                                        .filter_map(|name| filtered.schema().index_of(name).ok())
+                                        .collect();
+                                    filtered.project(&indices).unwrap_or(filtered)
+                                } else {
+                                    filtered
+                                };
+                                mem_batches.push(Ok(out_batch));
                             }
                         }
                     }
@@ -1250,13 +1273,7 @@ impl Table {
             columns,
             expr
         );
-        let file_path_str = entry.file_path.clone();
-        let segment_id = file_path_str
-            .split('/')
-            .next_back()
-            .unwrap_or(&file_path_str)
-            .strip_suffix(".parquet")
-            .unwrap_or(&file_path_str);
+        let segment_id = crate::core::segment::segment_id_from_path(&entry.file_path);
 
         // Use cached schema if provided by caller; otherwise fall back to manifest load.
         let iceberg_schema = if let Some(schema) = cached_iceberg_schema {
@@ -1271,28 +1288,11 @@ impl Table {
                 .schemas
                 .iter()
                 .find(|s| s.schema_id == manifest.current_schema_id)
+                .or_else(|| manifest.schemas.last())
                 .cloned()
         };
 
-        // Resolve partition-aware path
-        let path = std::path::Path::new(&file_path_str);
-        let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-        let full_base_path = if rel_parent.is_empty() {
-            self.uri.clone()
-        } else {
-            format!("{}/{}", self.uri, rel_parent)
-        };
-
-        let config = SegmentConfig::new(&full_base_path, segment_id)
-            .with_parquet_path(entry.file_path.clone())
-            .with_data_store(self.data_store.clone().unwrap_or(self.store.clone()))
-            .with_delete_files(entry.delete_files.clone())
-            .with_index_files(entry.index_files.clone())
-            .with_file_size(entry.file_size_bytes as u64)
-            .with_index_all(self.indexing.index_all)
-            .with_columns_to_index(self.indexing.index_columns.read().clone());
-
-        let mut reader = HybridReader::new(config, self.store.clone(), &self.uri);
+        let mut reader = self.segment_reader(entry)?;
         if let Some(s) = &iceberg_schema {
             reader = reader.with_iceberg_schema(s.clone());
         }
@@ -1566,11 +1566,7 @@ impl Table {
         while let Some(res) = stream.next().await {
             if let Ok(meta) = res {
                 let path = meta.location.to_string();
-                if (!path.contains("/") || path.contains("data/"))
-                    && path.ends_with(".parquet")
-                    && !path.contains(".inv.parquet")
-                    && !path.contains(".hnsw.")
-                {
+                if crate::core::segment::is_data_parquet_path(&path) {
                     entries.push(ManifestEntry {
                         file_path: path,
                         file_size_bytes: meta.size as i64,
@@ -1597,14 +1593,24 @@ impl Table {
     /// bitmap and intersects it with the KNN candidates.
     pub async fn execute_vector_search_as_scored_filtered(
         &self,
-        params: VectorSearchParams,
+        mut params: VectorSearchParams,
         filter: Option<FilterExpr>,
     ) -> Result<Vec<ScoredResult>> {
         let start_time = std::time::Instant::now();
 
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
+
         // Table-level cluster index fast path (see `read_expr_stream_async`).
-        // Only for unfiltered queries: the artifact has no scalar-filter support.
-        if filter.is_none() {
+        // Restricted to unfiltered queries with no delete files.
+        let has_deletes = all_entries.iter().any(|e| !e.delete_files.is_empty());
+        if filter.is_none() && !has_deletes {
             if let Ok(Some(index)) = self.ensure_cluster_index(&params.column).await {
                 if let crate::core::index::VectorValue::Float32(q) = &params.query {
                     let probes = params
@@ -1618,22 +1624,68 @@ impl Table {
             }
         }
 
-        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let (_, all_entries, _) = manifest_manager.load_latest_full().await?;
+        let planner = QueryPlanner::new();
+        let entries_after_filter: Vec<ManifestEntry> = if filter.is_some() {
+            planner
+                .prune_entries(&all_entries, filter.as_ref(), None)
+                .into_iter()
+                .map(|(e, _)| e)
+                .collect()
+        } else {
+            all_entries
+        };
 
-        let request = VectorSearchRequest::new(
-            params.column.clone(),
-            params.query.clone(),
-            params.k,
-            params.metric,
-            params.use_mmap,
-        )
-        .with_filter(filter)
-        .with_ef_search(params.ef_search)
-        .with_config(self.query_config.clone());
+        if entries_after_filter.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let allowed_seg_ids: HashSet<String> = entries_after_filter
+            .iter()
+            .map(|e| crate::core::segment::segment_id_from_path(&e.file_path).to_string())
+            .collect();
+
+        if params.candidate_segments.is_none() {
+            if let Ok(Some(router)) = self.ensure_vector_router(&params.column).await {
+                let probes = params
+                    .probes
+                    .unwrap_or_else(|| default_probes(router.len()));
+                if let crate::core::index::VectorValue::Float32(q_f32) = &params.query {
+                    let plan = router.route_allowed(q_f32, probes, Some(&allowed_seg_ids));
+                    if !plan.candidate_segments.is_empty() {
+                        let routed: HashSet<String> = router
+                            .segment_indices
+                            .iter()
+                            .map(|(seg, _)| seg.clone())
+                            .filter(|seg| allowed_seg_ids.contains(seg))
+                            .collect();
+                        params.candidate_segments = Some(Arc::new(plan.candidate_segments));
+                        params.routed_segments = Some(Arc::new(routed));
+                        params.targeted_clusters = Some(Arc::new(plan.segment_clusters));
+                    }
+                }
+            }
+        }
+
+        let vector_list = vec![params];
+        let candidates: Vec<ManifestEntry> = planner
+            .prune_entries(&entries_after_filter, None, Some(&vector_list))
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect();
+
+        let p = &vector_list[0];
+        let request =
+            VectorSearchRequest::new(p.column.clone(), p.query.clone(), p.k, p.metric, p.use_mmap)
+                .with_filter(filter)
+                .with_ef_search(p.ef_search)
+                .with_probes(p.probes)
+                .with_refine_factor(p.refine_factor)
+                .with_targeted_clusters(p.targeted_clusters.clone())
+                .with_iceberg_schema(iceberg_schema)
+                .with_config(self.query_config.clone());
 
         let scored_results = crate::core::query::execute_vector_search_raw_with_config(
-            all_entries,
+            candidates,
             self.store.clone(),
             self.data_store.clone(),
             &self.uri,
@@ -1665,27 +1717,33 @@ impl Table {
         filter: Option<FilterExpr>,
     ) -> Result<Vec<ScoredResult>> {
         let start_time = std::time::Instant::now();
-        let manifest = self.manifest().await?;
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+        let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
+
+        let candidates: Vec<ManifestEntry> = if filter.is_some() {
+            QueryPlanner::new()
+                .prune_entries(&all_entries, filter.as_ref(), None)
+                .into_iter()
+                .map(|(e, _)| e)
+                .collect()
+        } else {
+            all_entries
+        };
 
         let mut all_scored = Vec::new();
-        for entry in all_entries {
-            let file_path_str = entry.file_path.clone();
-            let segment_id = file_path_str
-                .split('/')
-                .next_back()
-                .unwrap_or(&file_path_str)
-                .strip_suffix(".parquet")
-                .unwrap_or(&file_path_str);
-
-            let config = SegmentConfig::new(&self.uri, segment_id)
-                .with_parquet_path(entry.file_path.clone())
-                .with_index_files(entry.index_files.clone())
-                .with_record_count(entry.record_count as u64)
-                .with_file_checksum(entry.file_checksum.clone());
-
-            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+        for entry in candidates {
+            let segment_id =
+                crate::core::segment::segment_id_from_path(&entry.file_path).to_string();
+            let mut reader = self.segment_reader(&entry)?;
+            if let Some(ref s) = iceberg_schema {
+                reader = reader.with_iceberg_schema(s.clone());
+            }
             let matches = reader
                 .keyword_search_index(
                     &params.column,
@@ -1699,7 +1757,7 @@ impl Table {
 
             for (row_id, score) in matches {
                 all_scored.push(ScoredResult {
-                    segment_id: segment_id.to_string(),
+                    segment_id: segment_id.clone(),
                     row_id: row_id as u32,
                     score,
                 });
@@ -1725,35 +1783,56 @@ impl Table {
         slop: usize,
         analyzer: Option<&str>,
     ) -> Result<Vec<ScoredResult>> {
+        self.execute_phrase_search_as_scored_filtered(column, phrase, slop, analyzer, None)
+            .await
+    }
+
+    /// Position-aware phrase search with an optional scalar pre-filter and
+    /// partition pruning.
+    #[tracing::instrument(skip(self))]
+    pub async fn execute_phrase_search_as_scored_filtered(
+        &self,
+        column: &str,
+        phrase: &str,
+        slop: usize,
+        analyzer: Option<&str>,
+        filter: Option<FilterExpr>,
+    ) -> Result<Vec<ScoredResult>> {
         let start_time = std::time::Instant::now();
-        let manifest = self.manifest().await?;
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+        let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
+
+        let candidates: Vec<ManifestEntry> = if filter.is_some() {
+            QueryPlanner::new()
+                .prune_entries(&all_entries, filter.as_ref(), None)
+                .into_iter()
+                .map(|(e, _)| e)
+                .collect()
+        } else {
+            all_entries
+        };
 
         let mut all_scored = Vec::new();
-        for entry in all_entries {
-            let file_path_str = entry.file_path.clone();
-            let segment_id = file_path_str
-                .split('/')
-                .next_back()
-                .unwrap_or(&file_path_str)
-                .strip_suffix(".parquet")
-                .unwrap_or(&file_path_str);
-
-            let config = SegmentConfig::new(&self.uri, segment_id)
-                .with_parquet_path(entry.file_path.clone())
-                .with_index_files(entry.index_files.clone())
-                .with_record_count(entry.record_count as u64)
-                .with_file_checksum(entry.file_checksum.clone());
-
-            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+        for entry in candidates {
+            let segment_id =
+                crate::core::segment::segment_id_from_path(&entry.file_path).to_string();
+            let mut reader = self.segment_reader(&entry)?;
+            if let Some(ref s) = iceberg_schema {
+                reader = reader.with_iceberg_schema(s.clone());
+            }
             let matches = reader
-                .phrase_search_index(column, phrase, 1000, slop, analyzer)
+                .phrase_search_index_filtered(column, phrase, 1000, slop, analyzer, filter.as_ref())
                 .await?;
 
             for (row_id, score) in matches {
                 all_scored.push(ScoredResult {
-                    segment_id: segment_id.to_string(),
+                    segment_id: segment_id.clone(),
                     row_id: row_id as u32,
                     score,
                 });
@@ -1817,26 +1896,33 @@ impl Table {
         }
 
         let mut final_batches = Vec::new();
-        let manifest = self.manifest().await?;
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+        let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
 
         for (seg_id, rows) in by_segment {
             if seg_id == "vector_path" {
                 continue;
             }
 
-            // Find segment in all entries
+            // Find segment in all entries by exact segment id or path equality
             let entry = all_entries
                 .iter()
-                .find(|e| e.file_path.contains(&seg_id))
+                .find(|e| {
+                    crate::core::segment::segment_id_from_path(&e.file_path) == seg_id
+                        || e.file_path == seg_id
+                })
                 .ok_or_else(|| anyhow::anyhow!("Segment {} not found in manifest", seg_id))?;
 
-            let config = SegmentConfig::new(&self.uri, &seg_id)
-                .with_parquet_path(entry.file_path.clone())
-                .with_index_files(entry.index_files.clone());
-
-            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+            let mut reader = self.segment_reader(entry)?;
+            if let Some(ref s) = iceberg_schema {
+                reader = reader.with_iceberg_schema(s.clone());
+            }
 
             // Convert fused row IDs and scores to RecordBatch
             let batch = reader.read_rows_by_id(rows, columns).await?;

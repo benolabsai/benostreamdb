@@ -8,12 +8,20 @@ pub fn avro_to_json(val: AvroValue) -> serde_json::Value {
     match val {
         AvroValue::Null => serde_json::Value::Null,
         AvroValue::Boolean(b) => serde_json::json!(b),
-        AvroValue::Int(i) => serde_json::json!(i),
-        AvroValue::Long(l) => serde_json::json!(l),
+        AvroValue::Int(i) | AvroValue::Date(i) | AvroValue::TimeMillis(i) => serde_json::json!(i),
+        AvroValue::Long(l)
+        | AvroValue::TimeMicros(l)
+        | AvroValue::TimestampMillis(l)
+        | AvroValue::TimestampMicros(l)
+        | AvroValue::TimestampNanos(l)
+        | AvroValue::LocalTimestampMillis(l)
+        | AvroValue::LocalTimestampMicros(l)
+        | AvroValue::LocalTimestampNanos(l) => serde_json::json!(l),
         AvroValue::Float(f) => serde_json::json!(f),
         AvroValue::Double(d) => serde_json::json!(d),
         AvroValue::String(s) => serde_json::json!(s),
-        AvroValue::Bytes(b) => serde_json::json!(b),
+        AvroValue::Uuid(u) => serde_json::json!(u.to_string()),
+        AvroValue::Bytes(b) | AvroValue::Fixed(_, b) => serde_json::json!(b),
         AvroValue::Union(_, b) => avro_to_json(*b),
         _ => serde_json::Value::Null,
     }

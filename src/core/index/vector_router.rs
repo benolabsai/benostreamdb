@@ -300,6 +300,25 @@ impl TableVectorRouter {
         self.route_with_policy(query_f32, total_probes, RoutingPolicy::default())
     }
 
+    /// Route a query vector constrained to `allowed_segments`, when provided.
+    ///
+    /// Segments absent from `allowed_segments` (e.g., already pruned by Hive partition
+    /// or scalar column statistics) never occupy top-`k` global probe budget and never
+    /// skew the adaptive distance threshold below surviving segments.
+    pub fn route_allowed(
+        &self,
+        query_f32: &[f32],
+        total_probes: usize,
+        allowed_segments: Option<&HashSet<String>>,
+    ) -> VectorRoutingPlan {
+        self.route_with_policy_allowed(
+            query_f32,
+            total_probes,
+            RoutingPolicy::default(),
+            allowed_segments,
+        )
+    }
+
     /// Route a query vector to candidate segments and their local cluster IDs using a specific policy.
     ///
     /// One pass over the centroid matrix with a bounded top-k heap per segment.
@@ -311,13 +330,31 @@ impl TableVectorRouter {
         probes: usize,
         policy: RoutingPolicy,
     ) -> VectorRoutingPlan {
-        if self.is_empty() || query_f32.len() != self.dim {
+        self.route_with_policy_allowed(query_f32, probes, policy, None)
+    }
+
+    /// Route a query vector with a specific policy constrained to `allowed_segments`.
+    pub fn route_with_policy_allowed(
+        &self,
+        query_f32: &[f32],
+        probes: usize,
+        policy: RoutingPolicy,
+        allowed_segments: Option<&HashSet<String>>,
+    ) -> VectorRoutingPlan {
+        if self.is_empty()
+            || query_f32.len() != self.dim
+            || allowed_segments.is_some_and(HashSet::is_empty)
+        {
             return VectorRoutingPlan {
                 candidate_segments: HashSet::new(),
                 segment_clusters: HashMap::new(),
                 min_centroid_distance: f32::MAX,
             };
         }
+
+        let is_allowed = |seg_id: &str| -> bool {
+            allowed_segments.is_none_or(|allowed| allowed.contains(seg_id))
+        };
 
         let metric = self.metric;
         let dim = self.dim;
@@ -332,6 +369,9 @@ impl TableVectorRouter {
             RoutingPolicy::GlobalPruning => {
                 let mut heap = BinaryHeap::with_capacity(k + 1);
                 for i in 0..self.targets.len() {
+                    if !is_allowed(&self.targets[i].0) {
+                        continue;
+                    }
                     let c = &matrix[i * dim..(i + 1) * dim];
                     let dist = distance_for(metric, query_f32, c);
                     if dist < global_min {
@@ -360,6 +400,9 @@ impl TableVectorRouter {
 
             RoutingPolicy::PerSegmentTargeting => {
                 for (seg_id, indices) in &self.segment_indices {
+                    if !is_allowed(seg_id) {
+                        continue;
+                    }
                     let mut heap = BinaryHeap::with_capacity(k + 1);
                     for &i in indices {
                         let c = &matrix[i * dim..(i + 1) * dim];
@@ -389,6 +432,9 @@ impl TableVectorRouter {
                     Vec::with_capacity(self.segment_indices.len());
                 let mut partitioned_min = f32::MAX;
                 for (seg_id, indices) in &self.segment_indices {
+                    if !is_allowed(seg_id) {
+                        continue;
+                    }
                     let mut heap = BinaryHeap::with_capacity(k + 1);
                     let mut seg_best = f32::MAX;
                     for &i in indices {
@@ -411,6 +457,14 @@ impl TableVectorRouter {
                         .map(|c| self.targets[c.idx].1)
                         .collect();
                     per_segment.push((seg_id, seg_best, targeted, indices.as_slice()));
+                }
+
+                if per_segment.is_empty() {
+                    return VectorRoutingPlan {
+                        candidate_segments,
+                        segment_clusters,
+                        min_centroid_distance: f32::MAX,
+                    };
                 }
 
                 let base_min = if partitioned_min < f32::MAX {
@@ -786,5 +840,59 @@ mod tests {
             !plan.candidate_segments.contains("far_clustered"),
             "spatially distant segment must still be pruned"
         );
+    }
+
+    #[test]
+    fn test_route_with_allowed_segments_ignores_pruned_decoys() {
+        let dim = 4;
+        let query = vec![0.0, 0.0, 0.0, 0.0];
+        let mut records = Vec::new();
+        // Decoy closer segment (outside allowed partition)
+        for cid in 0..4 {
+            records.push(CentroidRecord {
+                segment_id: "part_a_decoy".to_string(),
+                cluster_id: cid,
+                centroid: vec![0.1 + cid as f32 * 0.01, 0.0, 0.0, 0.0],
+            });
+        }
+        // Allowed nearer segment in partition B
+        for cid in 0..4 {
+            records.push(CentroidRecord {
+                segment_id: "part_b_near".to_string(),
+                cluster_id: cid,
+                centroid: vec![10.0 + cid as f32 * 0.05, 0.0, 0.0, 0.0],
+            });
+        }
+        // Allowed distant segment in partition B
+        for cid in 0..4 {
+            records.push(CentroidRecord {
+                segment_id: "part_b_far".to_string(),
+                cluster_id: cid,
+                centroid: vec![100.0 + cid as f32, 0.0, 0.0, 0.0],
+            });
+        }
+
+        let router = TableVectorRouter::new(dim, VectorMetric::L2, records);
+        let allowed: HashSet<String> = ["part_b_near", "part_b_far"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        for policy in [
+            RoutingPolicy::GlobalPruning,
+            RoutingPolicy::PerSegmentTargeting,
+            RoutingPolicy::Adaptive { factor: 1.35 },
+        ] {
+            let plan = router.route_with_policy_allowed(&query, 2, policy, Some(&allowed));
+            assert!(!plan.candidate_segments.contains("part_a_decoy"));
+            assert!(plan.candidate_segments.contains("part_b_near"));
+            if !matches!(policy, RoutingPolicy::PerSegmentTargeting) {
+                assert!(!plan.candidate_segments.contains("part_b_far"));
+            }
+        }
+
+        let empty_allowed = HashSet::new();
+        let empty_plan = router.route_allowed(&query, 2, Some(&empty_allowed));
+        assert!(empty_plan.candidate_segments.is_empty());
     }
 }

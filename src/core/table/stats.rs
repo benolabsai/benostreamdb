@@ -237,13 +237,17 @@ impl Table {
                     if file.indexed_columns.contains(&query_filter.column)
                         && file.has_scalar_indexes
                     {
-                        // Extract segment_id from file_path
-                        let parts: Vec<&str> = file.file_path.split('/').collect();
-                        let segment_id = parts.last().unwrap_or(&"").replace(".parquet", "");
+                        let rel_parquet =
+                            crate::core::segment::relativize_against(&self.uri, &file.file_path);
+                        let segment_id = crate::core::segment::segment_id_from_path(&rel_parquet);
 
-                        let mut config = SegmentConfig::new("", &segment_id);
-                        config = config
-                            .with_parquet_path(file.file_path.clone())
+                        let config = SegmentConfig::new("", segment_id)
+                            .with_parquet_path(rel_parquet)
+                            .with_data_store(
+                                self.data_store
+                                    .clone()
+                                    .unwrap_or_else(|| self.store.clone()),
+                            )
                             .with_index_files(file.index_files.clone())
                             .with_file_size(file.file_size_bytes);
 
@@ -326,13 +330,17 @@ impl Table {
             if let Some(query_filter) = qf_ref {
                 // Sidecar Index Pushdown (Bitmap/Inverted)
                 if file.indexed_columns.contains(&query_filter.column) && file.has_scalar_indexes {
-                    // Extract segment_id from file_path
-                    let parts: Vec<&str> = file.file_path.split('/').collect();
-                    let segment_id = parts.last().unwrap_or(&"").replace(".parquet", "");
+                    let rel_parquet =
+                        crate::core::segment::relativize_against(&self.uri, &file.file_path);
+                    let segment_id = crate::core::segment::segment_id_from_path(&rel_parquet);
 
-                    let mut config = SegmentConfig::new("", &segment_id);
-                    config = config
-                        .with_parquet_path(file.file_path.clone())
+                    let config = SegmentConfig::new("", segment_id)
+                        .with_parquet_path(rel_parquet)
+                        .with_data_store(
+                            self.data_store
+                                .clone()
+                                .unwrap_or_else(|| self.store.clone()),
+                        )
                         .with_index_files(file.index_files.clone())
                         .with_file_size(file.file_size_bytes);
 
@@ -402,132 +410,171 @@ impl Table {
         columns: Option<Vec<String>>,
         filter: Option<&str>,
     ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
-        // Use HybridReader
-        let parts: Vec<&str> = file_path.split('/').collect();
-        let filename = parts.last().unwrap_or(&"wrapper");
-        let segment_id = filename.replace(".parquet", "");
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (manifest, all_entries, _) = manager.load_latest_full().await.unwrap_or_default();
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
+        let target_rel = crate::core::segment::relativize_against(&self.uri, file_path);
+        let target_id = crate::core::segment::segment_id_from_path(&target_rel);
 
-        let (store, mut config) = if file_path.contains("://") {
-            let parse_res = url::Url::parse(file_path);
-            match parse_res {
-                Ok(url) => {
-                    let scheme = url.scheme();
-                    let store = if scheme == "file" {
-                        let path_str = url.path();
-                        let path = std::path::Path::new(path_str);
-                        let parent = path.parent().unwrap_or(std::path::Path::new("/"));
-                        let parent_uri = format!("file://{}", parent.to_string_lossy());
-                        create_object_store(&parent_uri)?
-                    } else {
-                        create_object_store(file_path)?
-                    };
-
-                    let relative_path = if scheme == "file" {
-                        let path = std::path::Path::new(url.path());
-                        path.file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("wrapper")
-                            .to_string()
-                    } else {
-                        let p = url.path();
-                        p.trim_start_matches('/').to_string()
-                    };
-
-                    let segment_id_full = relative_path;
-                    let segment_id = segment_id_full
-                        .strip_suffix(".parquet")
-                        .unwrap_or(&segment_id_full)
-                        .to_string();
-
-                    let config = SegmentConfig::new("", &segment_id);
-                    (store, config)
-                }
-                Err(_) => {
-                    let s = create_object_store(file_path)?;
-                    let config = SegmentConfig::new("", &segment_id);
-                    (s, config)
-                }
+        let reader = if let Some(entry) = all_entries.iter().find(|e| {
+            let e_rel = crate::core::segment::relativize_against(&self.uri, &e.file_path);
+            e.file_path == file_path
+                || e_rel == target_rel
+                || crate::core::segment::segment_id_from_path(&e_rel) == target_id
+        }) {
+            let mut r = self.segment_reader(entry)?;
+            if let Some(ref s) = iceberg_schema {
+                r = r.with_iceberg_schema(s.clone());
             }
+            r
         } else {
-            let config = SegmentConfig::new("", &segment_id);
-            (self.store.clone(), config)
+            let (store, config) = if file_path.contains("://") {
+                match url::Url::parse(file_path) {
+                    Ok(url) => {
+                        let scheme = url.scheme();
+                        let store = if scheme == "file" {
+                            let path_str = url.path();
+                            let path = std::path::Path::new(path_str);
+                            let parent = path.parent().unwrap_or(std::path::Path::new("/"));
+                            let parent_uri = format!("file://{}", parent.to_string_lossy());
+                            create_object_store(&parent_uri)?
+                        } else {
+                            create_object_store(file_path)?
+                        };
+
+                        let relative_path = if scheme == "file" {
+                            let path = std::path::Path::new(url.path());
+                            path.file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("wrapper")
+                                .to_string()
+                        } else {
+                            let p = url.path();
+                            p.trim_start_matches('/').to_string()
+                        };
+
+                        let seg_id = crate::core::segment::segment_id_from_path(&relative_path);
+                        let config =
+                            SegmentConfig::new("", seg_id).with_parquet_path(relative_path);
+                        (store, config)
+                    }
+                    Err(_) => {
+                        let s = create_object_store(file_path)?;
+                        let seg_id = crate::core::segment::segment_id_from_path(file_path);
+                        let config = SegmentConfig::new("", seg_id);
+                        (s, config)
+                    }
+                }
+            } else {
+                let seg_id = crate::core::segment::segment_id_from_path(file_path);
+                let config = SegmentConfig::new("", seg_id)
+                    .with_parquet_path(file_path.to_string())
+                    .with_data_store(
+                        self.data_store
+                            .clone()
+                            .unwrap_or_else(|| self.store.clone()),
+                    );
+                (self.store.clone(), config)
+            };
+
+            let mut r = HybridReader::new(config, store, &self.uri);
+            if let Some(ref s) = iceberg_schema {
+                r = r.with_iceberg_schema(s.clone());
+            }
+            r
         };
 
-        // Try to enrich config from manifest
-        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let (_manifest, all_entries, _) = manager.load_latest_full().await.unwrap_or_default();
-        if let Some(entry) = all_entries
-            .iter()
-            .find(|e| e.file_path == file_path || e.file_path.ends_with(file_path))
-        {
-            config = config
-                .with_parquet_path(entry.file_path.clone())
-                .with_delete_files(entry.delete_files.clone())
-                .with_index_files(entry.index_files.clone())
-                .with_file_size(entry.file_size_bytes as u64);
-        }
-
-        let reader = HybridReader::new(config, store, &self.uri);
         use futures::StreamExt;
 
+        let full_schema = if let Some(ref s) = iceberg_schema {
+            Arc::new(s.to_arrow())
+        } else {
+            let s = self.arrow_schema();
+            if s.fields().is_empty() {
+                reader.get_arrow_schema().await.unwrap_or(s)
+            } else {
+                s
+            }
+        };
+
         // Resolve Target Schema (Projection)
-        let target_schema = if let Some(cols) = columns {
-            let current_schema = self.arrow_schema();
+        let target_schema = columns.as_ref().map(|cols| {
             let fields: Vec<arrow::datatypes::Field> = cols
                 .iter()
-                .filter_map(|name| current_schema.field_with_name(name).ok().cloned())
+                .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
                 .collect();
-            if fields.is_empty() {
-                Some(Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new())))
-            } else {
-                Some(Arc::new(Schema::new(fields)))
-            }
+            Arc::new(Schema::new(fields))
+        });
+
+        let filter_expr_opt = if let Some(filter_str) = filter {
+            let parsed = FilterExpr::parse_sql(filter_str, full_schema.clone()).await?;
+            Some(Arc::new(parsed.coerce_literals(&full_schema)))
         } else {
             None
         };
 
-        let mut batches = Vec::new();
+        // Read all columns needed for filtering AND final projection so we
+        // never project away predicate columns prior to evaluation.
+        let read_schema = if let (Some(cols), Some(fe)) =
+            (columns.as_ref(), filter_expr_opt.as_ref())
+        {
+            let mut read_cols: std::collections::HashSet<String> = cols.iter().cloned().collect();
+            for ref_col in fe.get_referenced_columns() {
+                read_cols.insert(ref_col);
+            }
+            let fields: Vec<arrow::datatypes::Field> = read_cols
+                .iter()
+                .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                .collect();
+            Some(Arc::new(Schema::new(fields)))
+        } else {
+            target_schema.clone()
+        };
 
         // 1. Try Index Read if filter is present
+        let mut batches = Vec::new();
         let mut index_used = false;
-        if let Some(filter_str) = filter {
-            if let Some(qf) = QueryFilter::parse(filter_str) {
-                if let Ok(indexed_batches) =
-                    reader.query_index_first(&qf, target_schema.clone()).await
+        if let Some(ref fe) = filter_expr_opt {
+            let and_filters = reader.rewrite_composite_filters(fe.extract_and_conditions());
+            for qf in &and_filters {
+                if let Ok(indexed_batches) = reader.query_index_first(qf, read_schema.clone()).await
                 {
                     batches = indexed_batches;
                     index_used = true;
+                    break;
                 }
             }
         }
 
-        // 2. Fallback to Full Scan
+        // 2. Fallback to Full Scan when no index applied
         if !index_used {
-            let stream = reader.stream_all(target_schema).await?;
+            let stream = reader.stream_all(read_schema).await?;
 
-            // Apply post-filter on full scan if filter is present
-            if let Some(filter_str) = filter {
-                let filter_expr_owned =
-                    Arc::new(FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?);
+            if let Some(filter_expr_owned) = filter_expr_opt {
+                let target_schema_cloned = target_schema.clone();
                 let filtered_stream = stream.filter_map(move |batch_res| {
                     let filter_expr_cloned = filter_expr_owned.clone();
+                    let target_schema_inner = target_schema_cloned.clone();
                     async move {
                         let planner = QueryPlanner::new();
                         match batch_res {
                             Ok(b) => match planner.filter_expr(&b, &filter_expr_cloned) {
                                 Ok(filtered) => {
                                     if filtered.num_rows() > 0 {
-                                        Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(
-                                            filtered,
+                                        Some(project_to_target_schema(
+                                            &filtered,
+                                            target_schema_inner.as_ref(),
                                         ))
                                     } else {
                                         None
                                     }
                                 }
-                                Err(e) => {
-                                    tracing::error!("Error evaluating filter: {}", e);
-                                    Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(b))
-                                }
+                                Err(e) => Some(Err(e)),
                             },
                             Err(e) => Some(Err(e)),
                         }
@@ -538,31 +585,28 @@ impl Table {
             return Ok(stream.boxed());
         }
 
-        // 3. Apply post-filtering if filter is present
-        if let Some(filter_str) = filter {
-            let filter_expr_owned =
-                Arc::new(FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?);
-
+        // 3. Apply post-filtering and final projection on indexed batches
+        if let Some(filter_expr_owned) = filter_expr_opt {
+            let target_schema_cloned = target_schema.clone();
             let stream = futures::stream::iter(batches.into_iter().map(Ok)).filter_map(
                 move |batch_res: Result<RecordBatch>| {
                     let filter_expr_cloned = filter_expr_owned.clone();
+                    let target_schema_inner = target_schema_cloned.clone();
                     async move {
                         let planner = QueryPlanner::new();
                         match batch_res {
                             Ok(b) => match planner.filter_expr(&b, &filter_expr_cloned) {
                                 Ok(filtered) => {
                                     if filtered.num_rows() > 0 {
-                                        Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(
-                                            filtered,
+                                        Some(project_to_target_schema(
+                                            &filtered,
+                                            target_schema_inner.as_ref(),
                                         ))
                                     } else {
                                         None
                                     }
                                 }
-                                Err(e) => {
-                                    tracing::error!("Error evaluating filter: {}", e);
-                                    Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(b))
-                                }
+                                Err(e) => Some(Err(e)),
                             },
                             Err(e) => Some(Err(e)),
                         }
@@ -571,8 +615,11 @@ impl Table {
             );
             Ok(stream.boxed())
         } else {
-            let stream = futures::stream::iter(batches.into_iter().map(Ok::<_, anyhow::Error>));
-            Ok(stream.boxed())
+            let projected_batches: Vec<Result<RecordBatch>> = batches
+                .into_iter()
+                .map(|b| project_to_target_schema(&b, target_schema.as_ref()))
+                .collect();
+            Ok(futures::stream::iter(projected_batches).boxed())
         }
     }
 
@@ -583,124 +630,204 @@ impl Table {
         columns: Vec<String>,
         filter: Option<&str>,
     ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
-        // New Implementation: Use stream_row_groups with column pushdown
         let file_path = &split.file_path;
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (manifest, all_entries, _) = manager.load_latest_full().await.unwrap_or_default();
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
+        let target_rel = crate::core::segment::relativize_against(&self.uri, file_path);
+        let target_id = crate::core::segment::segment_id_from_path(&target_rel);
 
-        let (store, mut config) = if file_path.contains("://") {
-            match url::Url::parse(file_path) {
-                Ok(url) => {
-                    let scheme = url.scheme();
-                    let store = if scheme == "file" {
-                        let path_str = url.path();
-                        let path = std::path::Path::new(path_str);
-                        let parent = path.parent().unwrap_or(std::path::Path::new("/"));
-                        let parent_uri = format!("file://{}", parent.to_string_lossy());
-                        create_object_store(&parent_uri)?
-                    } else {
-                        create_object_store(file_path)?
-                    };
-
-                    let relative_path = if scheme == "file" {
-                        let path = std::path::Path::new(url.path());
-                        path.file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("wrapper")
-                            .to_string()
-                    } else {
-                        let p = url.path();
-                        p.trim_start_matches('/').to_string()
-                    };
-                    let segment_id_full = relative_path;
-                    let segment_id = segment_id_full
-                        .strip_suffix(".parquet")
-                        .unwrap_or(&segment_id_full)
-                        .to_string();
-                    let config = SegmentConfig::new("", &segment_id);
-                    (store, config)
-                }
-                Err(_) => {
-                    let s = create_object_store(file_path)?;
-                    let parts: Vec<&str> = file_path.split('/').collect();
-                    let filename = parts.last().unwrap_or(&"wrapper");
-                    let segment_id = filename.replace(".parquet", "");
-                    let config = SegmentConfig::new("", &segment_id);
-                    (s, config)
-                }
+        let reader = if let Some(entry) = all_entries.iter().find(|e| {
+            let e_rel = crate::core::segment::relativize_against(&self.uri, &e.file_path);
+            e.file_path == *file_path
+                || e_rel == target_rel
+                || crate::core::segment::segment_id_from_path(&e_rel) == target_id
+        }) {
+            let mut r = self.segment_reader(entry)?;
+            if let Some(ref s) = iceberg_schema {
+                r = r.with_iceberg_schema(s.clone());
             }
+            r
         } else {
-            let parts: Vec<&str> = file_path.split('/').collect();
-            let filename = parts.last().unwrap_or(&"wrapper");
-            let segment_id = filename.replace(".parquet", "");
-            let config = SegmentConfig::new("", &segment_id);
-            (self.store.clone(), config)
+            let (store, config) = if file_path.contains("://") {
+                match url::Url::parse(file_path) {
+                    Ok(url) => {
+                        let scheme = url.scheme();
+                        let store = if scheme == "file" {
+                            let path_str = url.path();
+                            let path = std::path::Path::new(path_str);
+                            let parent = path.parent().unwrap_or(std::path::Path::new("/"));
+                            let parent_uri = format!("file://{}", parent.to_string_lossy());
+                            create_object_store(&parent_uri)?
+                        } else {
+                            create_object_store(file_path)?
+                        };
+
+                        let relative_path = if scheme == "file" {
+                            let path = std::path::Path::new(url.path());
+                            path.file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("wrapper")
+                                .to_string()
+                        } else {
+                            let p = url.path();
+                            p.trim_start_matches('/').to_string()
+                        };
+                        let seg_id = crate::core::segment::segment_id_from_path(&relative_path);
+                        let config =
+                            SegmentConfig::new("", seg_id).with_parquet_path(relative_path);
+                        (store, config)
+                    }
+                    Err(_) => {
+                        let s = create_object_store(file_path)?;
+                        let seg_id = crate::core::segment::segment_id_from_path(file_path);
+                        let config = SegmentConfig::new("", seg_id);
+                        (s, config)
+                    }
+                }
+            } else {
+                let seg_id = crate::core::segment::segment_id_from_path(file_path);
+                let config = SegmentConfig::new("", seg_id)
+                    .with_parquet_path(file_path.clone())
+                    .with_data_store(
+                        self.data_store
+                            .clone()
+                            .unwrap_or_else(|| self.store.clone()),
+                    );
+                (self.store.clone(), config)
+            };
+
+            let mut r = HybridReader::new(config, store, &self.uri);
+            if let Some(ref s) = iceberg_schema {
+                r = r.with_iceberg_schema(s.clone());
+            }
+            r
         };
 
-        // Enrich config from manifest (index files, delete files, file size)
-        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        if let Ok((_, all_entries, _)) = manager.load_latest_full().await {
-            if let Some(entry) = all_entries
-                .iter()
-                .find(|e| e.file_path == *file_path || e.file_path.ends_with(file_path))
-            {
-                config = config
-                    .with_parquet_path(entry.file_path.clone())
-                    .with_delete_files(entry.delete_files.clone())
-                    .with_index_files(entry.index_files.clone())
-                    .with_file_size(entry.file_size_bytes as u64);
-            }
-        }
-
-        let reader = HybridReader::new(config, store, &self.uri);
         use futures::StreamExt;
+
+        let full_schema = if let Some(ref s) = iceberg_schema {
+            Arc::new(s.to_arrow())
+        } else {
+            let s = self.arrow_schema();
+            if s.fields().is_empty() {
+                reader.get_arrow_schema().await.unwrap_or(s)
+            } else {
+                s
+            }
+        };
 
         // Resolve Target Schema (Projection)
         let target_schema = if columns.is_empty() {
             None
         } else {
-            let current_schema = self.arrow_schema();
-            let mut fields: Vec<arrow::datatypes::Field> = columns
+            let fields: Vec<arrow::datatypes::Field> = columns
                 .iter()
-                .filter_map(|name| current_schema.field_with_name(name).ok().cloned())
+                .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
                 .collect();
-            if fields.is_empty() {
-                // Fallback: if the table schema is empty (no committed data),
-                // resolve columns against the Parquet file's own schema
-                if let Ok(file_schema) = reader.get_arrow_schema().await {
-                    fields = columns
-                        .iter()
-                        .filter_map(|name| file_schema.field_with_name(name).ok().cloned())
-                        .collect();
-                }
-                if fields.is_empty() {
-                    Some(Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new())))
-                } else {
-                    Some(Arc::new(Schema::new(fields)))
-                }
-            } else {
-                Some(Arc::new(Schema::new(fields)))
-            }
+            Some(Arc::new(Schema::new(fields)))
         };
 
+        let filter_expr_opt = if let Some(filter_str) = filter {
+            let parsed = FilterExpr::parse_sql(filter_str, full_schema.clone()).await?;
+            Some(Arc::new(parsed.coerce_literals(&full_schema)))
+        } else {
+            None
+        };
+
+        let read_schema =
+            if let (Some(_), Some(fe)) = (target_schema.as_ref(), filter_expr_opt.as_ref()) {
+                let mut read_cols: std::collections::HashSet<String> =
+                    columns.iter().cloned().collect();
+                for ref_col in fe.get_referenced_columns() {
+                    read_cols.insert(ref_col);
+                }
+                let fields: Vec<arrow::datatypes::Field> = read_cols
+                    .iter()
+                    .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                    .collect();
+                Some(Arc::new(Schema::new(fields)))
+            } else {
+                target_schema.clone()
+            };
+
         // Index acceleration path:
-        // When a filter is provided and indexes exist, query the index for a bitmap
-        // of matching rows, then stream the filtered row groups.
-        if let Some(filter_str) = filter {
-            if let Some(qf) = QueryFilter::parse(filter_str) {
-                if let Ok(indexed_batches) =
-                    reader.query_index_first(&qf, target_schema.clone()).await
-                {
-                    if !indexed_batches.is_empty() {
-                        let owned_batches: Vec<Result<RecordBatch>> =
-                            indexed_batches.into_iter().map(Ok).collect();
-                        return Ok(futures::stream::iter(owned_batches).boxed());
-                    }
+        // When a filter resolves cleanly through an index (even to 0 rows),
+        // return the post-filtered indexed result directly rather than falling
+        // through to an unfiltered row-group scan.
+        let mut index_used = false;
+        let mut indexed_batches = Vec::new();
+        if let Some(ref fe) = filter_expr_opt {
+            let and_filters = reader.rewrite_composite_filters(fe.extract_and_conditions());
+            for qf in &and_filters {
+                if let Ok(batches) = reader.query_index_first(qf, read_schema.clone()).await {
+                    indexed_batches = batches;
+                    index_used = true;
+                    break;
                 }
             }
         }
 
+        if index_used {
+            if let Some(fe) = filter_expr_opt {
+                let planner = QueryPlanner::new();
+                let mut owned_batches = Vec::new();
+                for b in indexed_batches {
+                    match planner.filter_expr(&b, &fe) {
+                        Ok(filtered) if filtered.num_rows() > 0 => {
+                            owned_batches
+                                .push(project_to_target_schema(&filtered, target_schema.as_ref()));
+                        }
+                        Ok(_) => {}
+                        Err(e) => owned_batches.push(Err(e)),
+                    }
+                }
+                return Ok(futures::stream::iter(owned_batches).boxed());
+            }
+            let owned_batches: Vec<Result<RecordBatch>> = indexed_batches
+                .into_iter()
+                .map(|b| project_to_target_schema(&b, target_schema.as_ref()))
+                .collect();
+            return Ok(futures::stream::iter(owned_batches).boxed());
+        }
+
         let stream = reader
-            .stream_row_groups(Some(&split.row_group_ids), target_schema)
+            .stream_row_groups(Some(&split.row_group_ids), read_schema)
             .await?;
+
+        if let Some(filter_expr_owned) = filter_expr_opt {
+            let target_schema_cloned = target_schema.clone();
+            let filtered_stream = stream.filter_map(move |batch_res| {
+                let filter_expr_cloned = filter_expr_owned.clone();
+                let target_schema_inner = target_schema_cloned.clone();
+                async move {
+                    let planner = QueryPlanner::new();
+                    match batch_res {
+                        Ok(b) => match planner.filter_expr(&b, &filter_expr_cloned) {
+                            Ok(filtered) => {
+                                if filtered.num_rows() > 0 {
+                                    Some(project_to_target_schema(
+                                        &filtered,
+                                        target_schema_inner.as_ref(),
+                                    ))
+                                } else {
+                                    None
+                                }
+                            }
+                            Err(e) => Some(Err(e)),
+                        },
+                        Err(e) => Some(Err(e)),
+                    }
+                }
+            });
+            return Ok(filtered_stream.boxed());
+        }
+
         Ok(stream.boxed())
     }
 
@@ -812,11 +939,22 @@ impl Table {
     // Write buffer read
     // -----------------------------------------------------------------------
 
-    /// Read from the in-memory write buffer with optional filter and projection
-    /// Used by BenoStreamExec to include uncommitted data in SQL queries
+    /// Read from the in-memory write buffer with optional filter and projection.
+    /// Used by `BenoStreamExec` to include uncommitted data in SQL queries.
     pub fn read_write_buffer(
         &self,
         filter: Option<&QueryFilter>,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        let expr = filter.map(|f| FilterExpr::DataFusion(f.to_expr()));
+        self.read_write_buffer_expr(expr.as_ref(), columns)
+    }
+
+    /// Read from the in-memory write buffer using a full [`FilterExpr`],
+    /// evaluating predicates before projecting requested `columns`.
+    pub fn read_write_buffer_expr(
+        &self,
+        expr: Option<&FilterExpr>,
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
         let mut result = Vec::new();
@@ -838,30 +976,85 @@ impl Table {
         }
 
         let planner = QueryPlanner::new();
+        let table_schema = self.arrow_schema();
 
         for batch in &batches {
-            // Apply projection first
-            let batch_to_filter = if let Some(cols) = columns {
-                let indices: Vec<usize> = cols
-                    .iter()
-                    .filter_map(|name| batch.schema().index_of(name).ok())
-                    .collect();
-                batch.project(&indices).unwrap_or(batch.clone())
+            let target_schema = if table_schema.fields().is_empty() {
+                batch.schema()
             } else {
+                table_schema.clone()
+            };
+            let aligned = if batch.schema() == target_schema {
                 batch.clone()
+            } else {
+                let mut cols = Vec::with_capacity(target_schema.fields().len());
+                for field in target_schema.fields() {
+                    let col = if let Some(c) = batch.column_by_name(field.name()) {
+                        c.clone()
+                    } else {
+                        arrow::array::new_null_array(field.data_type(), batch.num_rows())
+                    };
+                    cols.push(col);
+                }
+                RecordBatch::try_new(target_schema.clone(), cols)?
             };
 
-            // Apply filter if present
-            if let Some(f) = filter {
-                if let Ok(filtered) = planner.filter_batch(&batch_to_filter, f) {
-                    if filtered.num_rows() > 0 {
-                        result.push(filtered);
+            let coerced_expr = expr.map(|e| e.coerce_literals(&target_schema));
+
+            // Evaluate filter BEFORE projecting columns so predicates on
+            // non-projected columns work accurately.
+            let filtered = if let Some(ref e) = coerced_expr {
+                let out = planner.filter_expr(&aligned, e)?;
+                if out.num_rows() == 0 {
+                    continue;
+                }
+                out
+            } else {
+                aligned
+            };
+
+            let projected = if let Some(cols) = columns {
+                let mut proj_fields = Vec::new();
+                let mut proj_cols = Vec::new();
+                for &name in cols {
+                    if let Ok(idx) = filtered.schema().index_of(name) {
+                        proj_fields.push(filtered.schema().field(idx).clone());
+                        proj_cols.push(filtered.column(idx).clone());
                     }
                 }
+                let proj_schema = Arc::new(Schema::new(proj_fields));
+                let mut opts = arrow::record_batch::RecordBatchOptions::default();
+                opts.row_count = Some(filtered.num_rows());
+                RecordBatch::try_new_with_options(proj_schema, proj_cols, &opts)?
             } else {
-                result.push(batch_to_filter);
+                filtered
+            };
+
+            if projected.num_rows() > 0 {
+                result.push(projected);
             }
         }
         Ok(result)
     }
+}
+
+fn project_to_target_schema(
+    batch: &RecordBatch,
+    target_schema: Option<&Arc<Schema>>,
+) -> Result<RecordBatch> {
+    let Some(ts) = target_schema else {
+        return Ok(batch.clone());
+    };
+    let mut fields = Vec::new();
+    let mut cols = Vec::new();
+    for field in ts.fields() {
+        if let Ok(idx) = batch.schema().index_of(field.name()) {
+            fields.push(batch.schema().field(idx).clone());
+            cols.push(batch.column(idx).clone());
+        }
+    }
+    let proj_schema = Arc::new(Schema::new(fields));
+    let mut opts = arrow::record_batch::RecordBatchOptions::default();
+    opts.row_count = Some(batch.num_rows());
+    Ok(RecordBatch::try_new_with_options(proj_schema, cols, &opts)?)
 }

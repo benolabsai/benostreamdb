@@ -269,35 +269,33 @@ impl Table {
         let manifest = self.manifest().await?;
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let all_entries = manager.load_all_entries(&manifest).await?;
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned()
+            .unwrap_or_default();
 
         use futures::stream::{self, StreamExt};
 
+        let readers: Vec<HybridReader> = all_entries
+            .into_iter()
+            .rev()
+            .map(|entry| {
+                self.segment_reader(&entry)
+                    .map(|r| r.with_iceberg_schema(iceberg_schema.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         // Parallelize segment checks with a concurrency limit
         let concurrency = 8; // Adjust based on hardware
-        let result_stream = stream::iter(all_entries.into_iter().rev())
-            .map(|entry| {
-                let store = self.store.clone();
-                let uri = self.uri.clone();
-                let config = self.get_config();
-                let schema = manifest.schemas.last().cloned().unwrap_or_default();
+        let result_stream = stream::iter(readers)
+            .map(|reader| {
                 let column = column.to_string();
                 let value = value.clone();
-                let entry_path = entry.file_path.clone();
-                let entry_size = entry.file_size_bytes as u64;
-                let delete_files = entry.delete_files.clone();
-                let index_files = entry.index_files.clone();
 
-                async move {
-                    let mut reader =
-                        HybridReader::new(config, store, &uri).with_iceberg_schema(schema);
-
-                    reader.config.parquet_path = Some(entry_path);
-                    reader.config.file_size = Some(entry_size);
-                    reader.config.delete_files = delete_files;
-                    reader.config.index_files = index_files;
-
-                    reader.check_value_exists(&column, &value).await
-                }
+                async move { reader.check_value_exists(&column, &value).await }
             })
             .buffer_unordered(concurrency)
             .filter_map(|res| async {
@@ -407,24 +405,31 @@ impl Table {
     /// Build a [`HybridReader`] for a manifest entry, resolving the
     /// partition-aware base path and segment id.
     pub(crate) fn segment_reader(&self, entry: &ManifestEntry) -> Result<HybridReader> {
-        let path = std::path::Path::new(&entry.file_path);
-        let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+        let rel_parquet = crate::core::segment::relativize_against(&self.uri, &entry.file_path);
+        let rel_parent = match rel_parquet.rfind('/') {
+            Some(pos) => &rel_parquet[..pos],
+            None => "",
+        };
         let full_base_path = if rel_parent.is_empty() {
             self.uri.clone()
         } else {
-            format!("{}/{}", self.uri, rel_parent)
+            format!("{}/{}", self.uri.trim_end_matches('/'), rel_parent)
         };
 
-        let seg_id = entry
-            .file_path
-            .split('/')
-            .next_back()
-            .unwrap_or(&entry.file_path)
-            .replace(".parquet", "");
+        let seg_id = crate::core::segment::segment_id_from_path(&rel_parquet);
 
-        let config = SegmentConfig::new(&full_base_path, &seg_id)
+        let config = SegmentConfig::new(&full_base_path, seg_id)
+            .with_parquet_path(rel_parquet)
+            .with_data_store(
+                self.data_store
+                    .clone()
+                    .unwrap_or_else(|| self.store.clone()),
+            )
             .with_index_files(entry.index_files.clone())
-            .with_delete_files(entry.delete_files.clone());
+            .with_delete_files(entry.delete_files.clone())
+            .with_file_size(entry.file_size_bytes as u64)
+            .with_record_count(entry.record_count as u64)
+            .with_file_checksum(entry.file_checksum.clone());
         Ok(HybridReader::new(config, self.store.clone(), &self.uri))
     }
 

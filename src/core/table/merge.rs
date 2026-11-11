@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use super::Table;
 use crate::core::manifest::ManifestManager;
-use crate::core::merge::{MergeCommitAction, MergePlanner};
+use crate::core::merge::{align_batch_to_schema, MergeCommitAction, MergePlanner};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeMode {
@@ -34,8 +34,18 @@ impl Table {
             return Ok(());
         }
 
-        let schema = batches[0].schema();
-        let source_batch = arrow::compute::concat_batches(&schema, &batches)?;
+        let table_schema = self.arrow_schema();
+        let target_schema = if table_schema.fields().is_empty() {
+            batches[0].schema()
+        } else {
+            table_schema.clone()
+        };
+        let aligned_batches: Vec<RecordBatch> = batches
+            .iter()
+            .map(|b| align_batch_to_schema(b, &target_schema))
+            .collect::<Result<Vec<_>>>()?;
+        let source_batch = arrow::compute::concat_batches(&target_schema, &aligned_batches)?;
+        let schema = source_batch.schema();
 
         let key_cols: Vec<&str> = key_column.split(',').collect();
 
@@ -65,16 +75,38 @@ impl Table {
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
 
-        // Load the latest manifest.
-        let candidate_entries = self
-            .block_on_io(manifest_manager.load_latest_full())?
-            .map(|(_manifest, entries, _)| entries)?;
+        // Load the latest manifest and entries.
+        let (manifest, candidate_entries, _) =
+            self.block_on_io(manifest_manager.load_latest_full())??;
+        let iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
 
         // NOTE: `prune_segments` and `execute_merge` are synchronous entry points that each
         // drive their async I/O via a dedicated single-thread runtime (`runtime_block_on`).
         // They MUST NOT be called from inside an already-running tokio runtime, because a
         // nested `block_on` panics with "Cannot start a runtime from within a runtime".
-        let planner = MergePlanner::new();
+        let planner = MergePlanner::new().with_table_context(
+            self.store.clone(),
+            self.data_store.clone(),
+            (*self.partition_spec).clone(),
+            iceberg_schema,
+            if table_schema.fields().is_empty() {
+                None
+            } else {
+                Some(table_schema)
+            },
+            self.primary_key.read().clone(),
+            self.indexing.index_all,
+            self.indexing.index_columns.read().clone(),
+            self.indexing.index_configs.read().clone(),
+            self.indexing.default_device.read().clone(),
+            self.indexing.global_centroids.read().clone(),
+            self.get_format_version().max(2),
+        );
 
         // Prune segments
         let pruned_entries =
@@ -117,6 +149,9 @@ impl Table {
         }
 
         if !add_entries.is_empty() || !remove_paths.is_empty() {
+            for p in &remove_paths {
+                self.block_on_io(crate::core::cache::invalidate_file_caches(&self.uri, p))?;
+            }
             let new_manifest = self.block_on_io(manifest_manager.commit(
                 &add_entries,
                 &remove_paths,
@@ -126,6 +161,8 @@ impl Table {
             // pre-merge state. A merge adds and removes files without being a
             // pure append, so the spec's operation is `overwrite`.
             self.block_on_io(self.publish_snapshot_async(&new_manifest, "overwrite"))??;
+            self.indexing.cluster_indexes.write().clear();
+            self.indexing.vector_routers.write().clear();
         }
         Ok(())
     }

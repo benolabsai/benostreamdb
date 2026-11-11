@@ -19,14 +19,15 @@ pub(crate) fn check_is_in(
     use std::collections::HashSet;
 
     match col.data_type() {
-        DataType::Utf8 => {
-            let col_arr = col
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            let col_casted = arrow::compute::cast(col, &DataType::Utf8)?;
+            let col_arr = col_casted
                 .as_any()
                 .downcast_ref::<arrow::array::StringArray>()
                 .ok_or_else(|| {
                     anyhow::anyhow!("Expected StringArray in column for equality check")
                 })?;
-            let val_arr = arrow::compute::cast(values, &DataType::Utf8)?; // Ensure type match
+            let val_arr = arrow::compute::cast(values, &DataType::Utf8)?;
             let val_arr = val_arr
                 .as_any()
                 .downcast_ref::<arrow::array::StringArray>()
@@ -44,15 +45,18 @@ pub(crate) fn check_is_in(
             let mut result = arrow::array::BooleanBuilder::with_capacity(col_arr.len());
             for i in 0..col_arr.len() {
                 if col_arr.is_null(i) {
-                    result.append_value(false); // Nulls don't match (usually)
+                    result.append_value(false); // Nulls don't match
                 } else {
                     result.append_value(set.contains(col_arr.value(i)));
                 }
             }
             Ok(result.finish())
         }
-        DataType::Int64 | DataType::Date64 | DataType::Timestamp(_, _) => {
-            // Treat all as Int64 for comparison if possible, or cast
+        DataType::Int64
+        | DataType::Date64
+        | DataType::Timestamp(_, _)
+        | DataType::Time64(_)
+        | DataType::UInt32 => {
             let col_arr = arrow::compute::cast(col, &DataType::Int64)?;
             let col_arr = col_arr
                 .as_any()
@@ -86,7 +90,13 @@ pub(crate) fn check_is_in(
             }
             Ok(result.finish())
         }
-        DataType::Int32 | DataType::Date32 | DataType::Time32(_) => {
+        DataType::Int32
+        | DataType::Date32
+        | DataType::Time32(_)
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::UInt8
+        | DataType::UInt16 => {
             let col_arr = arrow::compute::cast(col, &DataType::Int32)?;
             let col_arr = col_arr
                 .as_any()
@@ -116,6 +126,82 @@ pub(crate) fn check_is_in(
                     result.append_value(false);
                 } else {
                     result.append_value(set.contains(&col_arr.value(i)));
+                }
+            }
+            Ok(result.finish())
+        }
+        DataType::UInt64 => {
+            let col_arr = arrow::compute::cast(col, &DataType::UInt64)?;
+            let col_arr = col_arr
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Expected UInt64Array in column for equality check")
+                })?;
+
+            let val_arr = arrow::compute::cast(values, &DataType::UInt64)?;
+            let val_arr = val_arr
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Expected UInt64Array in values for equality check")
+                })?;
+
+            let mut set = HashSet::with_capacity(val_arr.len());
+            for i in 0..val_arr.len() {
+                if !val_arr.is_null(i) {
+                    set.insert(val_arr.value(i));
+                }
+            }
+
+            let mut result = arrow::array::BooleanBuilder::with_capacity(col_arr.len());
+            for i in 0..col_arr.len() {
+                if col_arr.is_null(i) {
+                    result.append_value(false);
+                } else {
+                    result.append_value(set.contains(&col_arr.value(i)));
+                }
+            }
+            Ok(result.finish())
+        }
+        DataType::Boolean => {
+            let col_arr = arrow::compute::cast(col, &DataType::Boolean)?;
+            let col_arr = col_arr
+                .as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Expected BooleanArray in column for equality check")
+                })?;
+            let val_arr = arrow::compute::cast(values, &DataType::Boolean)?;
+            let val_arr = val_arr
+                .as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Expected BooleanArray in values for equality check")
+                })?;
+
+            let mut has_true = false;
+            let mut has_false = false;
+            for i in 0..val_arr.len() {
+                if !val_arr.is_null(i) {
+                    if val_arr.value(i) {
+                        has_true = true;
+                    } else {
+                        has_false = true;
+                    }
+                }
+            }
+
+            let mut result = arrow::array::BooleanBuilder::with_capacity(col_arr.len());
+            for i in 0..col_arr.len() {
+                if col_arr.is_null(i) {
+                    result.append_value(false);
+                } else {
+                    result.append_value(if col_arr.value(i) {
+                        has_true
+                    } else {
+                        has_false
+                    });
                 }
             }
             Ok(result.finish())
@@ -162,10 +248,18 @@ impl HybridReader {
         }
     }
 
+    pub(crate) fn data_store(&self) -> &Arc<dyn ObjectStore> {
+        self.config.data_store.as_ref().unwrap_or(&self.store)
+    }
+
+    pub(crate) fn cache_root(&self) -> &str {
+        self.root_uri.trim_end_matches('/')
+    }
+
     pub async fn get_parquet_metadata(&self) -> Result<Arc<ParquetMetaData>> {
         let path = self.resolve_object_path("parquet");
         let options = ArrowReaderOptions::new().with_page_index(true);
-        let mut reader = ParquetObjectReader::new(self.store.clone(), path);
+        let mut reader = ParquetObjectReader::new(self.data_store().clone(), path);
         let metadata = ArrowReaderMetadata::load_async(&mut reader, options).await?;
         Ok(metadata.metadata().clone())
     }
@@ -189,51 +283,57 @@ impl HybridReader {
         &self.config.segment_id
     }
 
+    pub(crate) fn segment_dir_prefix(&self) -> String {
+        let dir = if let Some(pq) = self
+            .config
+            .parquet_path
+            .as_deref()
+            .filter(|p| !p.is_empty())
+        {
+            let rel_pq = crate::core::segment::relativize_against(&self.root_uri, pq);
+            rel_pq
+                .rsplit_once('/')
+                .map(|(parent, _)| parent.to_string())
+                .unwrap_or_default()
+        } else {
+            crate::core::segment::relativize_against(&self.root_uri, &self.config.base_path)
+        };
+        dir.trim_matches('/').to_string()
+    }
+
+    pub(crate) fn resolve_index_path(&self, raw_path: &str) -> String {
+        let rel = crate::core::segment::relativize_against(&self.root_uri, raw_path);
+        if rel.contains('/') {
+            rel
+        } else {
+            let dir = self.segment_dir_prefix();
+            crate::core::segment::ensure_prefix(&dir, &rel)
+        }
+    }
+
     fn resolve_object_path(&self, extension: &str) -> Path {
-        // 1. Get the base string and determine if it includes the filename
-        let (base, has_filename) = if extension == "parquet" && self.config.parquet_path.is_some() {
-            (self.config.parquet_path.as_deref().unwrap_or(""), true)
+        let (base, has_filename) = if extension == "parquet" {
+            if let Some(pq) = self
+                .config
+                .parquet_path
+                .as_deref()
+                .filter(|p| !p.is_empty())
+            {
+                (pq, true)
+            } else {
+                (self.config.base_path.as_str(), false)
+            }
         } else {
             (self.config.base_path.as_str(), false)
         };
 
-        let filename = if has_filename {
-            String::new()
+        let rel = crate::core::segment::relativize_against(&self.root_uri, base);
+        let rel = if has_filename {
+            rel
         } else {
-            format!("{}.{}", self.config.segment_id, extension)
+            let filename = format!("{}.{}", self.config.segment_id, extension);
+            crate::core::segment::ensure_prefix(&rel, &filename)
         };
-
-        // 2. Helper to get local path from URI or absolute path
-        fn to_local(s: &str) -> &str {
-            s.strip_prefix("file://").unwrap_or(s)
-        }
-
-        let root_local = to_local(&self.root_uri).trim_end_matches('/');
-        let base_local = to_local(base).trim_end_matches('/');
-
-        // 3. Relativize
-        let mut rel = if !root_local.is_empty() && base_local.starts_with(root_local) {
-            let r = &base_local[root_local.len()..];
-            r.trim_start_matches('/').to_string()
-        } else if base.contains("://") {
-            // If it's a URI but not matching root, try to parse it
-            if let Ok(url) = url::Url::parse(base) {
-                url.path().trim_start_matches('/').to_string()
-            } else {
-                base_local.trim_start_matches('/').to_string()
-            }
-        } else {
-            // Fallback: just use the local part
-            base_local.trim_start_matches('/').to_string()
-        };
-
-        // Append filename if needed
-        if !filename.is_empty() {
-            if !rel.is_empty() {
-                rel.push('/');
-            }
-            rel.push_str(&filename);
-        }
 
         Path::parse(&rel).unwrap_or_else(|_| Path::from(rel))
     }
@@ -398,5 +498,55 @@ mod tests {
         assert_eq!(count, 5); // 0..5
 
         Ok(())
+    }
+
+    #[test]
+    fn test_resolve_partitioned_paths_respects_root_boundary() {
+        let store = Arc::new(InMemory::new());
+        // Relative `parquet_path` is preserved as store-relative even when `base_path`
+        // shares a non-boundary prefix (`tbl_v2` vs `tbl`), and sidecar resolution
+        // without `parquet_path` never slices `/tmp/tbl` off `/tmp/tbl_v2` into `_v2/...`.
+        let config = SegmentConfig::new("file:///tmp/tbl_v2/region=us", "seg_1")
+            .with_parquet_path("region=us/seg_1.parquet".to_string());
+        let reader = HybridReader::new(config, store.clone(), "file:///tmp/tbl");
+        assert_eq!(
+            reader.resolve_object_path("parquet").to_string(),
+            "region=us/seg_1.parquet"
+        );
+        assert_eq!(
+            reader.resolve_object_path("del").to_string(),
+            "tmp/tbl_v2/region=us/seg_1.del"
+        );
+        assert_eq!(
+            reader.resolve_index_path("seg_1.category.bitmap"),
+            "region=us/seg_1.category.bitmap"
+        );
+        assert_eq!(
+            reader.resolve_index_path("file:///tmp/tbl/region=us/seg_1.puffin"),
+            "region=us/seg_1.puffin"
+        );
+
+        let config_abs_outside = SegmentConfig::new("file:///tmp/tbl_v2/region=us", "seg_out")
+            .with_parquet_path("file:///tmp/tbl_v2/region=us/seg_out.parquet".to_string());
+        let reader_abs_outside =
+            HybridReader::new(config_abs_outside, store.clone(), "file:///tmp/tbl");
+        assert_eq!(
+            reader_abs_outside
+                .resolve_object_path("parquet")
+                .to_string(),
+            "tmp/tbl_v2/region=us/seg_out.parquet"
+        );
+
+        let config_exact = SegmentConfig::new("file:///tmp/tbl/region=us", "seg_2")
+            .with_parquet_path("file:///tmp/tbl/region=us/seg_2.parquet".to_string());
+        let reader_exact = HybridReader::new(config_exact, store, "file:///tmp/tbl");
+        assert_eq!(
+            reader_exact.resolve_object_path("parquet").to_string(),
+            "region=us/seg_2.parquet"
+        );
+        assert_eq!(
+            reader_exact.resolve_index_path("seg_2.puffin"),
+            "region=us/seg_2.puffin"
+        );
     }
 }

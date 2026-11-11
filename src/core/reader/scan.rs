@@ -11,7 +11,6 @@ use crate::core::planner::FilterExpr;
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
-use chrono::Utc;
 use futures::StreamExt;
 use object_store::{path::Path, ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
@@ -84,7 +83,7 @@ impl HybridReader {
         size: u64,
     ) -> Box<dyn parquet::arrow::async_reader::AsyncFileReader> {
         if size <= PARQUET_BYTES_CACHE_MAX_FILE {
-            let key = format!("{}/{}", self.root_uri, path);
+            let key = format!("{}/{}", self.cache_root(), path);
             if let Some(bytes) = crate::core::cache::PARQUET_BYTES_CACHE.get(&key).await {
                 return Box::new(BytesReader { bytes });
             }
@@ -123,6 +122,340 @@ impl HybridReader {
         }
         Box::new(ParquetObjectReader::new(store.clone(), path.clone()))
     }
+
+    pub(crate) fn apply_eq_deletes_keep_mask(
+        batch: &RecordBatch,
+        equality_deletes: &[EqualityDelete],
+    ) -> Result<arrow::array::BooleanArray> {
+        if equality_deletes.is_empty() || batch.num_rows() == 0 {
+            return Ok(arrow::array::BooleanArray::from(vec![
+                true;
+                batch.num_rows()
+            ]));
+        }
+        let mut keep_mask = arrow::array::BooleanArray::from(vec![true; batch.num_rows()]);
+        for delete in equality_deletes {
+            if let Some(col) = batch.column_by_name(&delete.column_name) {
+                let delete_mask = check_is_in(col, &delete.values)?;
+                let not_delete = arrow::compute::not(&delete_mask)?;
+                keep_mask = arrow::compute::and(&keep_mask, &not_delete)?;
+            }
+        }
+        Ok(keep_mask)
+    }
+
+    pub(crate) async fn pad_missing_schema_columns(
+        &self,
+        batch: RecordBatch,
+        required_cols: &[String],
+    ) -> Result<RecordBatch> {
+        let missing: Vec<&String> = required_cols
+            .iter()
+            .filter(|c| batch.column_by_name(c).is_none())
+            .collect();
+        if missing.is_empty() {
+            return Ok(batch);
+        }
+        let target_schema = self.get_arrow_schema().await?;
+        let num_rows = batch.num_rows();
+        let mut fields = batch.schema().fields().to_vec();
+        let mut columns = batch.columns().to_vec();
+        for col_name in missing {
+            if fields.iter().any(|f| f.name() == col_name) {
+                continue;
+            }
+            if let Ok(field) = target_schema.field_with_name(col_name) {
+                if !field.is_nullable() && num_rows > 0 {
+                    anyhow::bail!(
+                        "read: required column '{}' is missing from segment '{}'",
+                        field.name(),
+                        self.config.segment_id
+                    );
+                }
+                fields.push(Arc::new(field.clone()));
+                columns.push(arrow::array::new_null_array(field.data_type(), num_rows));
+            }
+        }
+        let padded = RecordBatch::try_new_with_options(
+            Arc::new(arrow::datatypes::Schema::new(fields)),
+            columns,
+            &arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(num_rows)),
+        )?;
+        Ok(padded)
+    }
+
+    fn extract_vector_at(col: &dyn Array, i: usize, expected_dim: usize) -> Option<Vec<f32>> {
+        if col.is_null(i) {
+            return None;
+        }
+        let item: arrow::array::ArrayRef = match col.data_type() {
+            arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::FixedSizeListArray>()?;
+                if list.is_null(i) {
+                    return None;
+                }
+                list.value(i)
+            }
+            arrow::datatypes::DataType::List(_) => {
+                let list = col.as_any().downcast_ref::<arrow::array::ListArray>()?;
+                if list.is_null(i) {
+                    return None;
+                }
+                list.value(i)
+            }
+            arrow::datatypes::DataType::LargeList(_) => {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::LargeListArray>()?;
+                if list.is_null(i) {
+                    return None;
+                }
+                list.value(i)
+            }
+            _ => return None,
+        };
+        if item.len() != expected_dim {
+            return None;
+        }
+        if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
+            Some(floats.values().to_vec())
+        } else {
+            item.as_any()
+                .downcast_ref::<arrow::array::Float64Array>()
+                .map(|doubles| doubles.values().iter().map(|&d| d as f32).collect())
+        }
+    }
+
+    fn compute_vector_distance_f32(v: &[f32], q: &[f32], metric: VectorMetric) -> f32 {
+        match metric {
+            VectorMetric::L2 => crate::core::index::distance::l2_distance(v, q),
+            VectorMetric::Cosine => crate::core::index::distance::cosine_distance(v, q),
+            VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(v, q),
+            VectorMetric::L1 => crate::core::index::distance::l1_distance(v, q),
+            VectorMetric::Hamming => crate::core::index::distance::hamming_distance(v, q),
+            VectorMetric::Jaccard => crate::core::index::distance::jaccard_distance(v, q),
+        }
+    }
+
+    async fn load_cached_parquet_meta(
+        &self,
+        pq_path: &Path,
+    ) -> Result<(Arc<ArrowReaderMetadata>, usize)> {
+        let pq_path_str = pq_path.to_string();
+        let cache_key = format!("{}/{}", self.cache_root(), pq_path_str);
+        if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE
+            .get_with_metrics(&cache_key, "parquet_meta")
+            .await
+        {
+            Ok((meta, size))
+        } else {
+            let store = self.data_store();
+            let object_meta = store
+                .head(pq_path)
+                .await
+                .context("Failed to get segment metadata")?;
+            let size = object_meta.size as usize;
+            let mut reader = ParquetObjectReader::new(store.clone(), object_meta.location);
+            let options = ArrowReaderOptions::new().with_page_index(true);
+            let arrow_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
+            let meta = Arc::new(arrow_meta);
+            crate::core::cache::PARQUET_META_CACHE
+                .insert(cache_key, (meta.clone(), size))
+                .await;
+            Ok((meta, size))
+        }
+    }
+
+    async fn validate_row_ids_against_filter_and_eq_deletes(
+        &self,
+        candidate_bitmap: &RoaringBitmap,
+        filter: Option<&FilterExpr>,
+        equality_deletes: &[EqualityDelete],
+    ) -> Result<RoaringBitmap> {
+        if candidate_bitmap.is_empty() || (filter.is_none() && equality_deletes.is_empty()) {
+            return Ok(candidate_bitmap.clone());
+        }
+        let pq_path = self.resolve_object_path("parquet");
+        let (meta, size) = self.load_cached_parquet_meta(&pq_path).await?;
+        let total_rows = meta.metadata().file_metadata().num_rows() as usize;
+        if total_rows == 0 {
+            return Ok(RoaringBitmap::new());
+        }
+        let mut target_bitmap = candidate_bitmap.clone();
+        target_bitmap &= RoaringBitmap::from_iter(0..(total_rows as u32));
+        if target_bitmap.is_empty() {
+            return Ok(RoaringBitmap::new());
+        }
+
+        let reader = self
+            .parquet_reader(self.data_store(), &pq_path, size as u64)
+            .await;
+        let arrow_meta = (*meta).clone();
+        let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
+
+        let groups = Self::row_groups_covering(builder.metadata(), &target_bitmap);
+        let num_groups = builder.metadata().num_row_groups();
+        if !groups.is_empty() && groups.len() < num_groups {
+            let mut shifted = RoaringBitmap::new();
+            let mut base: u32 = 0;
+            for (rg, group_start) in &groups {
+                let rows = builder.metadata().row_group(*rg).num_rows() as u32;
+                for id in target_bitmap.iter() {
+                    let id = id as usize;
+                    if id >= *group_start && id < *group_start + rows as usize {
+                        shifted.insert(base + (id as u32 - *group_start as u32));
+                    }
+                }
+                base += rows;
+            }
+            builder = builder.with_row_groups(groups.iter().map(|(rg, _)| *rg).collect());
+            let selection = self.bitmap_to_row_selection(&shifted, base as usize);
+            builder = builder.with_row_selection(selection);
+        } else {
+            let selection = self.bitmap_to_row_selection(&target_bitmap, total_rows);
+            builder = builder.with_row_selection(selection);
+        }
+
+        let mut required_cols: Vec<String> = Vec::new();
+        for del in equality_deletes {
+            if !required_cols.contains(&del.column_name) {
+                required_cols.push(del.column_name.clone());
+            }
+        }
+        let filter_cols = filter.map(|f| f.required_columns()).unwrap_or_default();
+        for col in &filter_cols {
+            if !required_cols.contains(col) {
+                required_cols.push(col.clone());
+            }
+        }
+
+        let parquet_schema = builder.metadata().file_metadata().schema_descr();
+        let file_arrow_schema = builder.schema();
+        let column_indices: Vec<usize> = required_cols
+            .iter()
+            .filter_map(|name| file_arrow_schema.index_of(name).ok())
+            .collect();
+        let projection = ProjectionMask::roots(parquet_schema, column_indices);
+        builder = builder.with_projection(projection);
+
+        let mut stream = builder.build()?;
+        let row_ids: Vec<u32> = target_bitmap.iter().collect();
+        let mut surviving = RoaringBitmap::new();
+        let mut current_offset = 0usize;
+        let planner = crate::core::planner::QueryPlanner::new();
+
+        while let Some(batch_res) = stream.next().await {
+            let batch = batch_res?;
+            let num_rows = batch.num_rows();
+            let avail = row_ids.len().saturating_sub(current_offset);
+            let rows_to_process = std::cmp::min(num_rows, avail);
+            if rows_to_process == 0 {
+                break;
+            }
+            let batch = if rows_to_process < num_rows {
+                batch.slice(0, rows_to_process)
+            } else {
+                batch
+            };
+
+            let eq_keep = if equality_deletes.is_empty() {
+                None
+            } else {
+                Some(Self::apply_eq_deletes_keep_mask(&batch, equality_deletes)?)
+            };
+
+            let filter_mask = if let Some(expr) = filter {
+                let eval_batch = if filter_cols
+                    .iter()
+                    .any(|c| batch.column_by_name(c).is_none())
+                {
+                    self.pad_missing_schema_columns(batch, &filter_cols).await?
+                } else {
+                    batch
+                };
+                let coerced = expr.coerce_literals(&eval_batch.schema());
+                Some(planner.evaluate_expr(&eval_batch, &coerced)?)
+            } else {
+                None
+            };
+
+            for i in 0..rows_to_process {
+                if let Some(ref eq_k) = eq_keep {
+                    if !eq_k.is_valid(i) || !eq_k.value(i) {
+                        continue;
+                    }
+                }
+                if let Some(ref m) = filter_mask {
+                    if !m.is_valid(i) || !m.value(i) {
+                        continue;
+                    }
+                }
+                surviving.insert(row_ids[current_offset + i]);
+            }
+            current_offset += rows_to_process;
+        }
+
+        Ok(surviving)
+    }
+
+    async fn load_inverted_bytes(
+        &self,
+        full_inv_path_str: &str,
+        idx_info: &crate::core::manifest::IndexFile,
+    ) -> Result<Vec<u8>> {
+        let inv_path = Path::from(full_inv_path_str);
+        let bytes =
+            if let (Some(offset), Some(length)) = (idx_info.blob_offset, idx_info.blob_length) {
+                let b = self
+                    .store
+                    .get_range(&inv_path, (offset as u64)..(offset as u64 + length as u64))
+                    .await?;
+                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                b.to_vec()
+            } else {
+                let res = self.store.get(&inv_path).await?;
+                let b = res.bytes().await?;
+                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                b.to_vec()
+            };
+        Ok(bytes)
+    }
+
+    async fn resolve_scalar_filter_bitmap_with_exactness(
+        &self,
+        filter: Option<&FilterExpr>,
+    ) -> (Option<RoaringBitmap>, bool) {
+        let Some(expr) = filter else {
+            return (None, true);
+        };
+        let sub_filters = self.rewrite_composite_filters(expr.extract_and_conditions());
+        let mut combined_bitmap: Option<RoaringBitmap> = None;
+        let mut all_exact = expr.is_fully_covered_by_and_filters() && !sub_filters.is_empty();
+
+        for sub_f in &sub_filters {
+            match self.get_scalar_filter_bitmap_with_exactness(sub_f).await {
+                Ok(Some((bm, sub_exact))) => {
+                    if !sub_exact {
+                        all_exact = false;
+                    }
+                    match combined_bitmap {
+                        Some(ref mut existing) => *existing &= bm,
+                        None => combined_bitmap = Some(bm),
+                    }
+                    if combined_bitmap.as_ref().is_some_and(|bm| bm.is_empty()) {
+                        return (Some(RoaringBitmap::new()), all_exact);
+                    }
+                }
+                _ => {
+                    all_exact = false;
+                }
+            }
+        }
+        (combined_bitmap, all_exact)
+    }
+
     #[tracing::instrument(skip(self, target_schema))]
     pub async fn stream_all(
         &self,
@@ -160,6 +493,9 @@ impl HybridReader {
             let mut might_match = true;
 
             for cond in &conditions {
+                if cond.negated {
+                    continue;
+                }
                 let col_name = &cond.column;
                 let col_pos = schema
                     .columns()
@@ -387,24 +723,31 @@ impl HybridReader {
         filter: &FilterExpr,
         metric: VectorMetric,
     ) -> Result<Vec<(usize, f32)>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
         let metadata = self.get_parquet_metadata().await?;
         let num_rgs = metadata.num_row_groups();
 
         let surviving_rgs = self.prune_row_groups(&metadata, filter);
 
-        let pruned = num_rgs - surviving_rgs.len();
+        let pruned = num_rgs.saturating_sub(surviving_rgs.len());
         if pruned > 0 {
             tracing::info!(
                 "Row-group pruning: skipped {}/{} row groups ({:.0}% reduction)",
                 pruned,
                 num_rgs,
-                (pruned as f64 / num_rgs as f64 * 100.0)
+                (pruned as f64 / num_rgs.max(1) as f64 * 100.0)
             );
         }
 
         if surviving_rgs.is_empty() {
             return Ok(Vec::new());
         }
+
+        let deleted = self.load_merged_deletes().await?;
+        let eq_deletes = self.load_equality_deletes().await?;
+        let required_cols = filter.required_columns();
 
         let mut rg_matches: Vec<(usize, f32)> = Vec::new();
 
@@ -413,127 +756,61 @@ impl HybridReader {
             _ => anyhow::bail!("Flat search with row-group pruning only supports Float32 vectors"),
         };
 
+        let planner = crate::core::planner::QueryPlanner::new();
+
         for rg_idx in &surviving_rgs {
             let mut offset = 0usize;
             for i in 0..*rg_idx {
                 offset += metadata.row_group(i).num_rows() as usize;
             }
 
-            let single_rg_stream = self.stream_row_groups(Some(&[*rg_idx]), None).await?;
-            use futures::StreamExt;
-
+            let single_rg_stream = self.stream_raw_row_groups(Some(&[*rg_idx]), None).await?;
             let mut local_offset = offset;
-            let mut batches: Vec<RecordBatch> = Vec::new();
             let mut rg_stream = Box::pin(single_rg_stream);
-            while let Some(batch_res) = rg_stream.next().await {
-                match batch_res {
-                    Ok(batch) => batches.push(batch),
-                    Err(e) => return Err(e),
-                }
-            }
 
-            let planner = crate::core::planner::QueryPlanner::new();
-            for batch in batches {
+            while let Some(batch_res) = rg_stream.next().await {
+                let batch = batch_res?;
                 let rows = batch.num_rows();
-                let mask = planner.evaluate_expr(&batch, filter).ok();
+                if rows == 0 {
+                    continue;
+                }
+
+                let eq_keep = if eq_deletes.is_empty() {
+                    None
+                } else {
+                    Some(Self::apply_eq_deletes_keep_mask(&batch, &eq_deletes)?)
+                };
+
+                let eval_batch = if required_cols
+                    .iter()
+                    .any(|c| batch.column_by_name(c).is_none())
+                {
+                    self.pad_missing_schema_columns(batch.clone(), &required_cols)
+                        .await?
+                } else {
+                    batch.clone()
+                };
+                let coerced_filter = filter.coerce_literals(&eval_batch.schema());
+                let mask = planner.evaluate_expr(&eval_batch, &coerced_filter)?;
 
                 if let Some(col) = batch.column_by_name(column) {
-                    let vectors: Vec<Vec<f32>> = match col.data_type() {
-                        arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                            let list = col
-                                .as_any()
-                                .downcast_ref::<arrow::array::FixedSizeListArray>()
-                                .context("Invalid cast to FixedSizeListArray")?;
-                            (0..list.len())
-                                .map(|i| {
-                                    let item = list.value(i);
-                                    if let Some(floats) =
-                                        item.as_any().downcast_ref::<arrow::array::Float32Array>()
-                                    {
-                                        floats.values().to_vec()
-                                    } else if let Some(doubles) =
-                                        item.as_any().downcast_ref::<arrow::array::Float64Array>()
-                                    {
-                                        doubles.values().iter().map(|&d| d as f32).collect()
-                                    } else {
-                                        vec![0.0; item.len()]
-                                    }
-                                })
-                                .collect()
+                    for i in 0..rows {
+                        let row_id = local_offset + i;
+                        if deleted.contains(row_id as u32) {
+                            continue;
                         }
-                        arrow::datatypes::DataType::List(_) => {
-                            let list = col
-                                .as_any()
-                                .downcast_ref::<arrow::array::ListArray>()
-                                .context("Invalid cast to ListArray")?;
-                            (0..list.len())
-                                .map(|i| {
-                                    let item = list.value(i);
-                                    if let Some(floats) =
-                                        item.as_any().downcast_ref::<arrow::array::Float32Array>()
-                                    {
-                                        floats.values().to_vec()
-                                    } else if let Some(doubles) =
-                                        item.as_any().downcast_ref::<arrow::array::Float64Array>()
-                                    {
-                                        doubles.values().iter().map(|&d| d as f32).collect()
-                                    } else {
-                                        vec![0.0; item.len()]
-                                    }
-                                })
-                                .collect()
-                        }
-                        _ => vec![],
-                    };
-
-                    for (i, v) in vectors.iter().enumerate() {
-                        if let Some(ref m) = mask {
-                            if !m.value(i) {
+                        if let Some(ref eq_k) = eq_keep {
+                            if !eq_k.is_valid(i) || !eq_k.value(i) {
                                 continue;
                             }
                         }
-                        let row_id = local_offset + i;
-                        let dist = match metric {
-                            VectorMetric::L2 => v
-                                .iter()
-                                .zip(q_vec.iter())
-                                .map(|(a, b)| (a - b) * (a - b))
-                                .sum::<f32>(),
-                            VectorMetric::Cosine => {
-                                let dot: f32 = v.iter().zip(q_vec.iter()).map(|(a, b)| a * b).sum();
-                                let mag_v: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let mag_q: f32 = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                1.0 - (dot / (mag_v * mag_q + 1e-10))
-                            }
-                            VectorMetric::InnerProduct => {
-                                -v.iter().zip(q_vec.iter()).map(|(a, b)| a * b).sum::<f32>()
-                            }
-                            VectorMetric::L1 => v
-                                .iter()
-                                .zip(q_vec.iter())
-                                .map(|(a, b)| (a - b).abs())
-                                .sum::<f32>(),
-                            VectorMetric::Hamming => {
-                                v.iter().zip(q_vec.iter()).filter(|(a, b)| a != b).count() as f32
-                            }
-                            VectorMetric::Jaccard => {
-                                let mut intersection = 0.0;
-                                let mut union = 0.0;
-                                for (x, y) in v.iter().zip(q_vec.iter()) {
-                                    if *x > 0.0 || *y > 0.0 {
-                                        if *x == *y && *x > 0.0 {
-                                            intersection += 1.0;
-                                        }
-                                        union += 1.0;
-                                    }
-                                }
-                                if union == 0.0 {
-                                    0.0
-                                } else {
-                                    1.0 - intersection / union
-                                }
-                            }
+                        if !mask.is_valid(i) || !mask.value(i) {
+                            continue;
+                        }
+                        let Some(v) = Self::extract_vector_at(col.as_ref(), i, q_vec.len()) else {
+                            continue;
                         };
+                        let dist = Self::compute_vector_distance_f32(&v, q_vec, metric);
                         rg_matches.push((row_id, dist));
                     }
                 }
@@ -545,11 +822,6 @@ impl HybridReader {
         if rg_matches.len() > k {
             rg_matches.truncate(k);
         }
-        if metric == VectorMetric::L2 {
-            for (_, dist) in &mut rg_matches {
-                *dist = dist.max(0.0).sqrt();
-            }
-        }
 
         Ok(rg_matches)
     }
@@ -558,6 +830,28 @@ impl HybridReader {
         &self,
         row_groups: Option<&[usize]>,
         target_schema: Option<arrow::datatypes::SchemaRef>,
+    ) -> Result<BoxStream<'static, Result<arrow::record_batch::RecordBatch>>> {
+        self.stream_row_groups_inner(row_groups, target_schema, true)
+            .await
+    }
+
+    /// Stream physical row groups without applying position or equality deletes
+    /// so batch row offsets map 1:1 to physical Parquet row IDs (for index
+    /// building, backfill, and delete scanning).
+    pub async fn stream_raw_row_groups(
+        &self,
+        row_groups: Option<&[usize]>,
+        target_schema: Option<arrow::datatypes::SchemaRef>,
+    ) -> Result<BoxStream<'static, Result<arrow::record_batch::RecordBatch>>> {
+        self.stream_row_groups_inner(row_groups, target_schema, false)
+            .await
+    }
+
+    async fn stream_row_groups_inner(
+        &self,
+        row_groups: Option<&[usize]>,
+        target_schema: Option<arrow::datatypes::SchemaRef>,
+        apply_deletes: bool,
     ) -> Result<BoxStream<'static, Result<arrow::record_batch::RecordBatch>>> {
         let t_total = std::time::Instant::now();
         let t_meta = std::time::Instant::now();
@@ -569,7 +863,7 @@ impl HybridReader {
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
 
-        let meta_cache_key = format!("{}/{}", self.root_uri, pq_path_str);
+        let meta_cache_key = format!("{}/{}", self.cache_root(), pq_path_str);
         let cached_meta = crate::core::cache::PARQUET_META_CACHE
             .get_with_metrics(&meta_cache_key, "parquet_meta")
             .await;
@@ -623,6 +917,31 @@ impl HybridReader {
         crate::telemetry::metrics::READ_PHASE_SECONDS
             .with_label_values(&["meta"])
             .observe(t_meta.elapsed().as_secs_f64());
+
+        let t_del = std::time::Instant::now();
+
+        // Apply Deletes when reading logical rows; skip for physical-offset raw scans.
+        // Load equality deletes before building ProjectionMask so any delete-key
+        // columns not present in `target_schema` are still projected and read.
+        let equality_deletes = if apply_deletes {
+            let deleted = self.load_merged_deletes().await?;
+            if !deleted.is_empty() {
+                let num_rows = builder.metadata().file_metadata().num_rows() as usize;
+                let full_range = RoaringBitmap::from_iter(0..num_rows as u32);
+                let valid = full_range - deleted;
+
+                let selection = self.bitmap_to_row_selection(&valid, num_rows);
+                builder = builder.with_row_selection(selection);
+            }
+
+            self.load_equality_deletes().await?
+        } else {
+            Vec::new()
+        };
+
+        crate::telemetry::metrics::READ_PHASE_SECONDS
+            .with_label_values(&["deletes"])
+            .observe(t_del.elapsed().as_secs_f64());
         let t_proj = std::time::Instant::now();
 
         // Apply Row Group Selection
@@ -631,7 +950,7 @@ impl HybridReader {
         }
 
         // Schema Evolution / Projection Logic
-        // Determine which PHYSICAL columns to read based on target_schema
+        // Determine which PHYSICAL columns to read based on target_schema + equality_deletes
         let target_schema_ref = target_schema.clone();
 
         if let Some(schema) = &target_schema_ref {
@@ -640,11 +959,19 @@ impl HybridReader {
 
             // Map logical columns to physical columns
             // Only read columns that exist in the physical file
-            let column_indices: Vec<usize> = schema
+            let mut column_indices: Vec<usize> = schema
                 .fields()
                 .iter()
                 .filter_map(|field| file_arrow_schema.index_of(field.name()).ok())
                 .collect();
+
+            for delete in &equality_deletes {
+                if let Ok(idx) = file_arrow_schema.index_of(&delete.column_name) {
+                    if !column_indices.contains(&idx) {
+                        column_indices.push(idx);
+                    }
+                }
+            }
 
             // NOTE: If column_indices is empty, ProjectionMask::roots will result in a 0-column read
             // which is exactly what we want for count queries.
@@ -655,25 +982,6 @@ impl HybridReader {
         crate::telemetry::metrics::READ_PHASE_SECONDS
             .with_label_values(&["projection"])
             .observe(t_proj.elapsed().as_secs_f64());
-        let t_del = std::time::Instant::now();
-
-        // Apply Deletes
-        let deleted = self.load_merged_deletes().await?;
-        if !deleted.is_empty() {
-            let num_rows = builder.metadata().file_metadata().num_rows() as usize;
-            let full_range = RoaringBitmap::from_iter(0..num_rows as u32);
-            let valid = full_range - deleted;
-
-            let selection = self.bitmap_to_row_selection(&valid, num_rows);
-            builder = builder.with_row_selection(selection);
-        }
-
-        // Load Equality Deletes
-        let equality_deletes = self.load_equality_deletes().await?;
-
-        crate::telemetry::metrics::READ_PHASE_SECONDS
-            .with_label_values(&["deletes"])
-            .observe(t_del.elapsed().as_secs_f64());
         let t_build = std::time::Instant::now();
 
         let stream = builder.build()?;
@@ -682,11 +990,18 @@ impl HybridReader {
             .with_label_values(&["build"])
             .observe(t_build.elapsed().as_secs_f64());
 
-        // Wrap stream to apply Schema Mapping (Evolution) and Equality Deletes
+        // Wrap stream to apply Equality Deletes (on physical columns) and Schema Mapping
         let mapped_stream = stream.map(move |res| {
             let mut batch = res.map_err(anyhow::Error::from)?;
 
-            // 1. Schema Evolution Mapping
+            // 1. Apply Equality Deletes (Anti-Join) before projection/evolution drops delete keys
+            if !equality_deletes.is_empty() {
+                let keep_mask =
+                    HybridReader::apply_eq_deletes_keep_mask(&batch, &equality_deletes)?;
+                batch = arrow::compute::filter_record_batch(&batch, &keep_mask)?;
+            }
+
+            // 2. Schema Evolution Mapping
             if let Some(target) = &target_schema_ref {
                 let mut new_columns = Vec::new();
                 for field in target.fields() {
@@ -730,38 +1045,6 @@ impl HybridReader {
                 };
             }
 
-            // 2. Apply Equality Deletes (Anti-Join)
-            if !equality_deletes.is_empty() {
-                // Initialize mask as all true (keep all rows)
-                let mut keep_mask = arrow::array::BooleanArray::from(vec![true; batch.num_rows()]);
-
-                for delete in &equality_deletes {
-                    if let Some(col) = batch.column_by_name(&delete.column_name) {
-                        // Check which rows match the delete values
-                        // is_in(left, right) returns true if left[i] is in right
-                        match check_is_in(col, &delete.values) {
-                            Ok(delete_mask) => {
-                                // We want to KEEP rows that are NOT in the delete set
-                                if let Ok(not_delete) = arrow::compute::not(&delete_mask) {
-                                    if let Ok(new_mask) =
-                                        arrow::compute::and(&keep_mask, &not_delete)
-                                    {
-                                        keep_mask = new_mask;
-                                    }
-                                }
-                            }
-                            Err(e) => tracing::warn!(
-                                "Failed to apply equality delete filter on {}: {}",
-                                delete.column_name,
-                                e
-                            ),
-                        }
-                    }
-                }
-
-                batch = arrow::compute::filter_record_batch(&batch, &keep_mask)?;
-            }
-
             Ok(batch)
         });
 
@@ -779,12 +1062,12 @@ impl HybridReader {
         allowed_bitmap: &Option<RoaringBitmap>,
         metric: VectorMetric,
     ) -> Result<Vec<(usize, f32)>> {
-        let mut stream = self
-            .stream_all(None as Option<arrow::datatypes::SchemaRef>)
-            .await?;
         if k == 0 {
             return Ok(Vec::new());
         }
+        let deleted = Arc::new(self.load_merged_deletes().await?);
+        let eq_deletes = self.load_equality_deletes().await?;
+        let mut stream = self.stream_raw_row_groups(None, None).await?;
         // Streaming top-k, kept sorted ascending by distance. The current
         // worst (k-th best) distance doubles as the early-exit threshold for
         // L2 scans, so candidates that cannot enter the top-k are abandoned
@@ -804,63 +1087,31 @@ impl HybridReader {
                 continue;
             }
 
+            let eq_keep = if eq_deletes.is_empty() {
+                None
+            } else {
+                Some(Self::apply_eq_deletes_keep_mask(&batch, &eq_deletes)?)
+            };
+
             if let Some(col) = batch.column_by_name(column) {
                 let col = col.clone();
                 let q_vec_clone = q_vec.clone();
                 let allowed_bm = allowed_bitmap.clone();
+                let deleted_bm = deleted.clone();
                 let offset = current_row_offset;
 
                 let batch_matches = tokio::task::spawn_blocking(move || {
-                    let vectors: Vec<Vec<f32>> = match col.data_type() {
-                        arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                            let list = col
-                                .as_any()
-                                .downcast_ref::<arrow::array::FixedSizeListArray>()
-                                .context("Invalid cast")?;
-                            (0..list.len())
-                                .map(|i| {
-                                    let item = list.value(i);
-                                    if let Some(floats) =
-                                        item.as_any().downcast_ref::<arrow::array::Float32Array>()
-                                    {
-                                        floats.values().to_vec()
-                                    } else if let Some(doubles) =
-                                        item.as_any().downcast_ref::<arrow::array::Float64Array>()
-                                    {
-                                        doubles.values().iter().map(|&d| d as f32).collect()
-                                    } else {
-                                        vec![0.0; item.len()]
-                                    }
-                                })
-                                .collect()
-                        }
-                        arrow::datatypes::DataType::List(_) => {
-                            let list = col
-                                .as_any()
-                                .downcast_ref::<arrow::array::ListArray>()
-                                .context("Invalid cast")?;
-                            (0..list.len())
-                                .map(|i| {
-                                    let item = list.value(i);
-                                    if let Some(floats) =
-                                        item.as_any().downcast_ref::<arrow::array::Float32Array>()
-                                    {
-                                        floats.values().to_vec()
-                                    } else if let Some(doubles) =
-                                        item.as_any().downcast_ref::<arrow::array::Float64Array>()
-                                    {
-                                        doubles.values().iter().map(|&d| d as f32).collect()
-                                    } else {
-                                        vec![0.0; item.len()]
-                                    }
-                                })
-                                .collect()
-                        }
-                        _ => vec![],
-                    };
-
-                    for (i, v) in vectors.iter().enumerate() {
+                    for i in 0..rows {
                         let row_id = offset + i;
+
+                        if deleted_bm.contains(row_id as u32) {
+                            continue;
+                        }
+                        if let Some(ref eq_k) = eq_keep {
+                            if !eq_k.is_valid(i) || !eq_k.value(i) {
+                                continue;
+                            }
+                        }
 
                         // Check filter (allowed_bitmap)
                         if let Some(ref bm) = allowed_bm {
@@ -868,6 +1119,11 @@ impl HybridReader {
                                 continue;
                             }
                         }
+
+                        let Some(v) = Self::extract_vector_at(col.as_ref(), i, q_vec_clone.len())
+                        else {
+                            continue;
+                        };
 
                         // The k-th best distance so far bounds how good a
                         // candidate must be to enter the top-k.
@@ -880,7 +1136,7 @@ impl HybridReader {
                         let dist = match metric {
                             VectorMetric::L2 => {
                                 match crate::core::index::distance::l2_distance_squared_early_exit(
-                                    v,
+                                    &v,
                                     &q_vec_clone,
                                     threshold,
                                 ) {
@@ -889,47 +1145,7 @@ impl HybridReader {
                                     None => continue,
                                 }
                             }
-                            VectorMetric::Cosine => {
-                                let dot: f32 =
-                                    v.iter().zip(q_vec_clone.iter()).map(|(a, b)| a * b).sum();
-                                let mag_v: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let mag_q: f32 =
-                                    q_vec_clone.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                1.0 - (dot / (mag_v * mag_q + 1e-10))
-                            }
-                            VectorMetric::InnerProduct => -v
-                                .iter()
-                                .zip(q_vec_clone.iter())
-                                .map(|(a, b)| a * b)
-                                .sum::<f32>(),
-                            VectorMetric::L1 => v
-                                .iter()
-                                .zip(q_vec_clone.iter())
-                                .map(|(a, b)| (a - b).abs())
-                                .sum::<f32>(),
-                            VectorMetric::Hamming => {
-                                v.iter()
-                                    .zip(q_vec_clone.iter())
-                                    .filter(|(a, b)| a != b)
-                                    .count() as f32
-                            }
-                            VectorMetric::Jaccard => {
-                                let mut intersection = 0.0;
-                                let mut union = 0.0;
-                                for (x, y) in v.iter().zip(q_vec_clone.iter()) {
-                                    if *x > 0.0 || *y > 0.0 {
-                                        if *x == *y && *x > 0.0 {
-                                            intersection += 1.0;
-                                        }
-                                        union += 1.0;
-                                    }
-                                }
-                                if union == 0.0 {
-                                    0.0
-                                } else {
-                                    1.0 - intersection / union
-                                }
-                            }
+                            other => Self::compute_vector_distance_f32(&v, &q_vec_clone, other),
                         };
 
                         // Insert into the bounded top-k (sorted ascending).
@@ -963,6 +1179,211 @@ impl HybridReader {
         Ok(topk)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn search_hnsw_ivf_with_deletes(
+        &self,
+        column: &str,
+        query: &crate::core::index::VectorValue,
+        k: usize,
+        search_k: usize,
+        metric: VectorMetric,
+        ef_search: Option<usize>,
+        use_mmap: bool,
+        target_clusters: Option<&[usize]>,
+        probes: Option<usize>,
+        prefer_full_precision: bool,
+    ) -> Result<(Vec<(usize, f32)>, bool)> {
+        if k == 0 || search_k == 0 {
+            return Ok((Vec::new(), false));
+        }
+        let deleted = self.load_merged_deletes().await?;
+        let eq_deletes = self.load_equality_deletes().await?;
+
+        let live_bitmap: Option<RoaringBitmap> = if !deleted.is_empty() {
+            let total_rows = if let Some(rc) = self.config.record_count {
+                rc as usize
+            } else {
+                self.get_parquet_metadata()
+                    .await?
+                    .file_metadata()
+                    .num_rows() as usize
+            };
+            if total_rows == 0 {
+                return Ok((Vec::new(), false));
+            }
+            let mut live = RoaringBitmap::new();
+            live.insert_range(0..(total_rows as u32));
+            live -= &deleted;
+            if live.is_empty() {
+                return Ok((Vec::new(), false));
+            }
+            Some(live)
+        } else {
+            None
+        };
+
+        // A Puffin compound bundle registers one `IndexFile` per blob
+        // (centroids, graph, mapping), so the same logical vector index
+        // appears as several entries. Deduplicate by (file_path, algorithm)
+        // so each index is searched exactly once.
+        let mut seen = std::collections::HashSet::new();
+        let vector_indices: Vec<_> = self
+            .config
+            .index_files
+            .iter()
+            .filter(|f| {
+                f.index_category == "vector"
+                    && f.column_name == column
+                    && self.config.is_index_valid(f)
+                    && !matches!(
+                        f.blob_type.as_deref(),
+                        Some(crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS)
+                            | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_MAPPING)
+                            | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_GRAPH)
+                            | Some("centroids")
+                            | Some("mapping")
+                            | Some("cluster_graph")
+                    )
+            })
+            .filter(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())))
+            .cloned()
+            .collect();
+
+        let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
+            if prefer_full_precision {
+                match f.algorithm.as_str() {
+                    "hnsw" | "hnsw_f32" => 0,
+                    "hnsw_ivf" => 1,
+                    "pq" | "hnsw_pq" => 2,
+                    "tq8" | "hnsw_tq8" | "tq4" | "hnsw_tq4" | "sq8" | "hnsw_sq8" => 3,
+                    _ => 4,
+                }
+            } else {
+                match f.algorithm.as_str() {
+                    "tq8" | "hnsw_tq8" | "tq4" | "hnsw_tq4" | "sq8" | "hnsw_sq8" => 0,
+                    "pq" | "hnsw_pq" => 1,
+                    "hnsw_ivf" => 2,
+                    "hnsw" | "hnsw_f32" => 3,
+                    _ => 4,
+                }
+            }
+        };
+        let best_rank = vector_indices.iter().map(algo_rank).min().unwrap_or(4);
+        let chunk_indices: Vec<_> = vector_indices
+            .iter()
+            .filter(|f| algo_rank(f) == best_rank)
+            .cloned()
+            .collect();
+
+        let hnsw_k = if !eq_deletes.is_empty() {
+            search_k.saturating_mul(4).max(search_k.saturating_add(64))
+        } else {
+            search_k
+        };
+
+        let mut used_flat = false;
+        let mut matches = if chunk_indices.is_empty() {
+            let idx_path = self.resolve_object_path(column).to_string();
+            let idx_info = crate::core::manifest::IndexFile {
+                file_path: idx_path,
+                index_category: "vector".to_string(),
+                column_name: column.to_string(),
+                ..Default::default()
+            };
+            match self
+                .search_hnsw_ivf(
+                    &idx_info,
+                    query,
+                    hnsw_k,
+                    &live_bitmap,
+                    metric,
+                    ef_search,
+                    use_mmap,
+                    target_clusters,
+                    probes,
+                )
+                .await
+            {
+                Ok(m) => m,
+                Err(_) => {
+                    used_flat = true;
+                    self.vector_search_flat(column, query, k, &None, metric)
+                        .await?
+                }
+            }
+        } else {
+            // Search ALL chunks for the preferred algorithm in parallel,
+            // then merge the top-k results by row_id (chunks have
+            // non-overlapping row_id ranges due to the build offset).
+            let query_c = query.clone();
+            let tc_owned = target_clusters.map(|tc| tc.to_vec());
+            let live_ref = &live_bitmap;
+            let futures: Vec<_> = chunk_indices
+                .iter()
+                .map(|idx_info| {
+                    let idx = idx_info.clone();
+                    let q = query_c.clone();
+                    let tc = tc_owned.clone();
+                    async move {
+                        self.search_hnsw_ivf(
+                            &idx,
+                            &q,
+                            hnsw_k,
+                            live_ref,
+                            metric,
+                            ef_search,
+                            use_mmap,
+                            tc.as_deref(),
+                            probes,
+                        )
+                        .await
+                    }
+                })
+                .collect();
+            let results = futures::future::join_all(futures).await;
+            let mut merged: Vec<(usize, f32)> = Vec::new();
+            let mut any_ok = false;
+            for r in results {
+                match r {
+                    Ok(m) => {
+                        any_ok = true;
+                        merged.extend(m);
+                    }
+                    Err(e) => {
+                        tracing::warn!("HNSW chunk search failed: {}", e);
+                    }
+                }
+            }
+            if !any_ok {
+                used_flat = true;
+                self.vector_search_flat(column, query, k, &None, metric)
+                    .await?
+            } else {
+                merged
+            }
+        };
+
+        if !used_flat && !eq_deletes.is_empty() && !matches.is_empty() {
+            let mut cand_bm = RoaringBitmap::new();
+            for (row_id, _) in &matches {
+                cand_bm.insert(*row_id as u32);
+            }
+            let surviving = self
+                .validate_row_ids_against_filter_and_eq_deletes(&cand_bm, None, &eq_deletes)
+                .await?;
+            matches.retain(|(id, _)| surviving.contains(*id as u32));
+            if matches.len() < k && k <= 256 {
+                used_flat = true;
+                matches = self
+                    .vector_search_flat(column, query, k, &None, metric)
+                    .await?;
+            }
+        }
+
+        matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok((matches, used_flat))
+    }
+
     #[tracing::instrument(skip(self, query, filter, target_schema))]
     #[allow(clippy::too_many_arguments)]
     pub async fn vector_search_index(
@@ -979,37 +1400,17 @@ impl HybridReader {
         refine_factor: Option<usize>,
         probes: Option<usize>,
     ) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
+        if k == 0 {
+            return Ok(vec![]);
+        }
         // Resolve scalar filter to combined bitmap if present
         tracing::debug!("vector_search_index called with filter: {:?}", filter);
-        let allowed_bitmap = if let Some(expr) = filter {
-            let sub_filters = expr.extract_and_conditions();
-            let sub_filters = self.rewrite_composite_filters(sub_filters);
-            let mut combined_bitmap: Option<RoaringBitmap> = None;
-
-            for sub_f in &sub_filters {
-                let res = self.get_scalar_filter_bitmap(sub_f).await;
-                if let Ok(Some(bm)) = res {
-                    match combined_bitmap {
-                        Some(ref mut existing) => {
-                            *existing &= bm;
-                        }
-                        None => {
-                            combined_bitmap = Some(bm);
-                        }
-                    }
-
-                    // Optimization: short-circuit if bitmap is empty
-                    if let Some(ref bm) = combined_bitmap {
-                        if bm.is_empty() {
-                            return Ok(vec![]);
-                        }
-                    }
-                }
-            }
-            combined_bitmap
-        } else {
-            None
-        };
+        let (allowed_bitmap, all_subfilters_exact) = self
+            .resolve_scalar_filter_bitmap_with_exactness(filter)
+            .await;
+        if allowed_bitmap.as_ref().is_some_and(|bm| bm.is_empty()) {
+            return Ok(vec![]);
+        }
 
         // Handle keyword search regardless of filter path
         if let crate::core::index::VectorValue::Keyword(ref q) = query {
@@ -1036,201 +1437,86 @@ impl HybridReader {
         // --- TWO-STEP APPROACH when filter is present and resolvable ---
         // Step 1: Apply scalar filters as hard filters (Parquet row selection)
         // Step 2: Run vector search on the filtered resultset
-        // If filter exists but bitmap is None (no scalar index), fall through
-        // to index search + post-filtering for correctness.
         if let Some(ref bitmap) = allowed_bitmap {
+            let residual_filter = if all_subfilters_exact { None } else { filter };
             return self
-                .vector_search_on_filtered(column, query, k, bitmap, metric, target_schema, filter)
+                .vector_search_on_filtered(
+                    column,
+                    query,
+                    k,
+                    bitmap,
+                    metric,
+                    target_schema,
+                    residual_filter,
+                )
                 .await;
         }
 
         // --- FILTER PRESENT but no scalar index bitmap ---
         // Use row-group pruning to skip entire row groups based on Parquet column stats
-        // before computing any vector distances. This avoids the O(N) vector computation
-        // on pruned row groups, which is the key optimization when no scalar index exists.
+        // before computing any vector distances.
         if let Some(filter_expr) = filter {
             let rg_matches = self
                 .vector_search_flat_with_row_group_pruning(column, query, k, filter_expr, metric)
                 .await?;
             return self
-                .fetch_rows_with_distances(rg_matches, target_schema, filter)
+                .fetch_rows_with_distances(rg_matches, target_schema, None)
                 .await;
         }
 
         // --- FAST PATH: no filter, use HNSW-IVF index ---
-        {
-            // A Puffin compound bundle registers one `IndexFile` per blob
-            // (centroids, graph, mapping), so the same logical vector index
-            // appears as several entries. Deduplicate by (file_path, algorithm)
-            // so each index is searched exactly once.
-            let mut seen = std::collections::HashSet::new();
-            let vector_indices: Vec<_> = self
-                .config
-                .index_files
-                .iter()
-                .filter(|f| {
-                    f.index_category == "vector"
-                        && f.column_name == column
-                        && self.config.is_index_valid(f)
-                        && !matches!(
-                            f.blob_type.as_deref(),
-                            Some(crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS)
-                                | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_MAPPING)
-                                | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_GRAPH)
-                                | Some("centroids")
-                                | Some("mapping")
-                                | Some("cluster_graph")
-                        )
-                })
-                .filter(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())))
-                .cloned()
-                .collect();
+        let effective_refine = refine_factor.unwrap_or(1);
+        let search_k = if effective_refine > 1 {
+            k.saturating_mul(effective_refine)
+        } else {
+            k
+        };
+        let (mut matches, used_flat) = self
+            .search_hnsw_ivf_with_deletes(
+                column,
+                query,
+                k,
+                search_k,
+                metric,
+                ef_search,
+                use_mmap,
+                target_clusters,
+                probes,
+                false,
+            )
+            .await?;
 
-            // Pick the preferred algorithm, then collect ALL chunks for it
-            // (chunked builds write one HNSW-IVF index per 100k-vector chunk,
-            // each registered as a separate IndexFile with the same blob_type).
-            let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
-                match f.algorithm.as_str() {
-                    "tq8" | "hnsw_tq8" | "tq4" | "hnsw_tq4" | "sq8" | "hnsw_sq8" => 0,
-                    "pq" | "hnsw_pq" => 1,
-                    "hnsw_ivf" => 2,
-                    "hnsw" | "hnsw_f32" => 3,
-                    _ => 4,
-                }
-            };
-            let best_rank = vector_indices.iter().map(algo_rank).min().unwrap_or(4);
-            let chunk_indices: Vec<_> = vector_indices
-                .iter()
-                .filter(|f| algo_rank(f) == best_rank)
-                .cloned()
-                .collect();
-
-            let effective_refine = refine_factor.unwrap_or(1);
-            let search_k = if effective_refine > 1 {
-                k.saturating_mul(effective_refine)
-            } else {
-                k
-            };
-
-            let mut matches = if chunk_indices.is_empty() {
-                let idx_path = self.resolve_object_path(column).to_string();
-                let idx_info = crate::core::manifest::IndexFile {
-                    file_path: idx_path,
-                    index_category: "vector".to_string(),
-                    column_name: column.to_string(),
-                    ..Default::default()
-                };
-                match self
-                    .search_hnsw_ivf(
-                        &idx_info,
-                        query,
-                        search_k,
-                        &None,
-                        metric,
-                        ef_search,
-                        use_mmap,
-                        target_clusters,
-                        probes,
-                    )
-                    .await
-                {
-                    Ok(m) => m,
-                    Err(_) => {
-                        self.vector_search_flat(column, query, k, &None, metric)
-                            .await?
-                    }
-                }
-            } else {
-                // Search ALL chunks for the preferred algorithm in parallel,
-                // then merge the top-k results by row_id (chunks have
-                // non-overlapping row_id ranges due to the build offset).
-                let query_c = query.clone();
-                let metric_c = metric;
-                let ef_c = ef_search;
-                let search_k_c = search_k;
-                let use_mmap_c = use_mmap;
-                let tc_owned = target_clusters.map(|tc| tc.to_vec());
-                let futures: Vec<_> = chunk_indices
-                    .iter()
-                    .map(|idx_info| {
-                        let idx = idx_info.clone();
-                        let q = query_c.clone();
-                        let tc = tc_owned.clone();
-                        async move {
-                            self.search_hnsw_ivf(
-                                &idx,
-                                &q,
-                                search_k_c,
-                                &None,
-                                metric_c,
-                                ef_c,
-                                use_mmap_c,
-                                tc.as_deref(),
-                                probes,
-                            )
-                            .await
-                        }
-                    })
-                    .collect();
-                let results = futures::future::join_all(futures).await;
-                let mut merged: Vec<(usize, f32)> = Vec::new();
-                let mut any_ok = false;
-                for r in results {
-                    match r {
-                        Ok(m) => {
-                            any_ok = true;
-                            merged.extend(m);
-                        }
-                        Err(e) => {
-                            tracing::warn!("HNSW chunk search failed: {}", e);
-                        }
-                    }
-                }
-                if !any_ok {
-                    self.vector_search_flat(column, query, k, &None, metric)
-                        .await?
-                } else {
-                    merged
-                }
-            };
-
-            matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            let idx_matches = if effective_refine > 1 && !matches.is_empty() {
-                matches.truncate(search_k);
-                match self
-                    .rescore_candidates(column, matches.clone(), query, metric)
-                    .await
-                {
-                    Ok(mut rescored) => {
-                        rescored.truncate(k);
-                        rescored
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Candidate rescore failed, falling back to approximate distances: {}",
-                            e
-                        );
-                        matches.truncate(k);
-                        matches
-                    }
-                }
-            } else {
-                matches.truncate(k);
-                matches
-            };
-
-            self.fetch_rows_with_distances(idx_matches, target_schema, filter)
+        let idx_matches = if !used_flat && effective_refine > 1 && !matches.is_empty() {
+            matches.truncate(search_k);
+            match self
+                .rescore_candidates(column, matches.clone(), query, metric)
                 .await
-        }
+            {
+                Ok(mut rescored) => {
+                    rescored.truncate(k);
+                    rescored
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Candidate rescore failed, falling back to approximate distances: {}",
+                        e
+                    );
+                    matches.truncate(k);
+                    matches
+                }
+            }
+        } else {
+            matches.truncate(k);
+            matches
+        };
+
+        self.fetch_rows_with_distances(idx_matches, target_schema, None)
+            .await
     }
 
-    /// Search the inverted index with Okapi BM25 scoring.
-    ///
-    /// Returns `(row_id, raw_bm25_score)` pairs sorted by score descending
-    /// (best first). Callers needing a distance-like metric convert with
-    /// `1/(1+score)` at the boundary so row order stays aligned with scores.
     /// Vector search optimized for RRF / scored-only lookup.
     /// Returns `(row_id, score)` without fetching Parquet rows.
+    #[allow(clippy::too_many_arguments)]
     pub async fn vector_search_index_raw(
         &self,
         column: &str,
@@ -1241,132 +1527,54 @@ impl HybridReader {
         use_mmap: bool,
         target_clusters: Option<&[usize]>,
         probes: Option<usize>,
+        filter: Option<&FilterExpr>,
     ) -> Result<Vec<(usize, f32)>> {
-        // Deduplicate Puffin blob entries down to one per logical vector index,
-        // ignoring auxiliary blobs (centroids/mapping/cluster-graph).
-        let mut seen = std::collections::HashSet::new();
-        let vector_indices: Vec<_> = self
-            .config
-            .index_files
-            .iter()
-            .filter(|f| {
-                f.index_category == "vector"
-                    && f.column_name == column
-                    && self.config.is_index_valid(f)
-                    && !matches!(
-                        f.blob_type.as_deref(),
-                        Some(crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS)
-                            | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_MAPPING)
-                            | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_GRAPH)
-                            | Some("centroids")
-                            | Some("mapping")
-                            | Some("cluster_graph")
-                    )
-            })
-            .filter(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())))
-            .cloned()
-            .collect();
-        // Prefer full precision: when a column somehow carries more than one
-        // vector index, rank the float HNSW first and the quantized variants
-        // last. (Previously the compressed TQ/PQ variants ranked *first*, so a
-        // column with both a float and a TQ8 index silently served TQ8.)
-        let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
-            match f.algorithm.as_str() {
-                "hnsw" | "hnsw_f32" => 0,
-                "hnsw_ivf" => 1,
-                "pq" | "hnsw_pq" => 2,
-                "tq8" | "hnsw_tq8" | "tq4" | "hnsw_tq4" | "sq8" | "hnsw_sq8" => 3,
-                _ => 4,
-            }
-        };
-        let best_rank = vector_indices.iter().map(algo_rank).min().unwrap_or(4);
-        let chunk_indices: Vec<_> = vector_indices
-            .iter()
-            .filter(|f| algo_rank(f) == best_rank)
-            .cloned()
-            .collect();
-        if chunk_indices.is_empty() {
-            let idx_path = self.resolve_object_path(column).to_string();
-            let idx_info = crate::core::manifest::IndexFile {
-                file_path: idx_path,
-                index_category: "vector".to_string(),
-                column_name: column.to_string(),
-                ..Default::default()
-            };
-            match self
-                .search_hnsw_ivf(
-                    &idx_info,
-                    query,
-                    k,
-                    &None,
-                    metric,
-                    ef_search,
-                    use_mmap,
-                    target_clusters,
-                    probes,
-                )
-                .await
-            {
-                Ok(m) => Ok(m),
-                Err(_) => {
-                    self.vector_search_flat(column, query, k, &None, metric)
-                        .await
-                }
-            }
-        } else {
-            let query_c = query.clone();
-            let metric_c = metric;
-            let ef_c = ef_search;
-            let k_c = k;
-            let use_mmap_c = use_mmap;
-            let tc_owned = target_clusters.map(|tc| tc.to_vec());
-            let futures: Vec<_> = chunk_indices
-                .iter()
-                .map(|idx_info| {
-                    let idx = idx_info.clone();
-                    let q = query_c.clone();
-                    let tc = tc_owned.clone();
-                    async move {
-                        self.search_hnsw_ivf(
-                            &idx,
-                            &q,
-                            k_c,
-                            &None,
-                            metric_c,
-                            ef_c,
-                            use_mmap_c,
-                            tc.as_deref(),
-                            probes,
-                        )
-                        .await
-                    }
-                })
-                .collect();
-            let results = futures::future::join_all(futures).await;
-            let mut merged: Vec<(usize, f32)> = Vec::new();
-            let mut any_ok = false;
-            for r in results {
-                match r {
-                    Ok(m) => {
-                        any_ok = true;
-                        merged.extend(m);
-                    }
-                    Err(e) => {
-                        tracing::warn!("HNSW chunk search failed: {}", e);
-                    }
-                }
-            }
-            if !any_ok {
-                self.vector_search_flat(column, query, k, &None, metric)
-                    .await
-            } else {
-                merged.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                merged.truncate(k);
-                Ok(merged)
-            }
+        if k == 0 {
+            return Ok(Vec::new());
         }
+        let (allowed_bitmap, all_subfilters_exact) = self
+            .resolve_scalar_filter_bitmap_with_exactness(filter)
+            .await;
+        if allowed_bitmap.as_ref().is_some_and(|bm| bm.is_empty()) {
+            return Ok(Vec::new());
+        }
+
+        if let Some(ref bitmap) = allowed_bitmap {
+            let residual_filter = if all_subfilters_exact { None } else { filter };
+            return self
+                .vector_search_on_filtered_ids(column, query, k, bitmap, metric, residual_filter)
+                .await;
+        }
+
+        if let Some(filter_expr) = filter {
+            return self
+                .vector_search_flat_with_row_group_pruning(column, query, k, filter_expr, metric)
+                .await;
+        }
+
+        let (mut matches, _) = self
+            .search_hnsw_ivf_with_deletes(
+                column,
+                query,
+                k,
+                k,
+                metric,
+                ef_search,
+                use_mmap,
+                target_clusters,
+                probes,
+                true,
+            )
+            .await?;
+        matches.truncate(k);
+        Ok(matches)
     }
 
+    /// Search the inverted index with Okapi BM25 scoring.
+    ///
+    /// Returns `(row_id, raw_bm25_score)` pairs sorted by score descending
+    /// (best first). Callers needing a distance-like metric convert with
+    /// `1/(1+score)` at the boundary so row order stays aligned with scores.
     pub async fn keyword_search_index(
         &self,
         column: &str,
@@ -1376,28 +1584,22 @@ impl HybridReader {
         analyzer: Option<&str>,
         filter: Option<&FilterExpr>,
     ) -> Result<Vec<(usize, f32)>> {
+        if k == 0 {
+            return Ok(vec![]);
+        }
         // Scalar pre-filter: resolve the predicate to a row-id bitmap before
         // scoring so filtered-out documents never enter the BM25 heap. Without
         // this the caller would have to post-filter the top-k list, which
         // silently returns fewer than k rows.
-        let allowed_bitmap = if let Some(expr) = filter {
-            let sub_filters = self.rewrite_composite_filters(expr.extract_and_conditions());
-            let mut combined: Option<RoaringBitmap> = None;
-            for sub_filter in &sub_filters {
-                if let Ok(Some(bitmap)) = self.get_scalar_filter_bitmap(sub_filter).await {
-                    match combined {
-                        Some(ref mut existing) => *existing &= bitmap,
-                        None => combined = Some(bitmap),
-                    }
-                    if combined.as_ref().is_some_and(|bitmap| bitmap.is_empty()) {
-                        return Ok(vec![]);
-                    }
-                }
-            }
-            combined
-        } else {
-            None
-        };
+        let (allowed_bitmap, all_subfilters_exact) = self
+            .resolve_scalar_filter_bitmap_with_exactness(filter)
+            .await;
+        if allowed_bitmap
+            .as_ref()
+            .is_some_and(|bitmap| bitmap.is_empty())
+        {
+            return Ok(vec![]);
+        }
 
         // 1. Find Inverted Index
         tracing::info!(
@@ -1417,50 +1619,54 @@ impl HybridReader {
             .ok_or_else(|| anyhow::anyhow!("No keyword/inverted index found for column '{}' in segment {} (Available: {:?})", column, self.config.segment_id, self.config.index_files))?;
 
         // 2. Load Inverted Index Batches
-        // (Similar to get_scalar_filter_bitmap logic)
-        let inv_path_str = &idx_info.file_path;
-        let mut dir_path = self.config.parquet_path.clone().unwrap_or_default();
-        if let Some(pos) = dir_path.rfind('/') {
-            dir_path.truncate(pos);
-        } else {
-            dir_path = "".to_string();
-        }
-
-        let full_inv_path_str = if !dir_path.is_empty() && !inv_path_str.contains('/') {
-            format!("{}/{}", dir_path, inv_path_str)
-        } else {
-            inv_path_str.clone()
-        };
+        let full_inv_path_str = self.resolve_index_path(&idx_info.file_path);
 
         let cache_key = if let Some(offset) = idx_info.blob_offset {
-            format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
+            format!("{}/{}:{}", self.cache_root(), full_inv_path_str, offset)
         } else {
-            format!("{}/{}", self.root_uri, full_inv_path_str)
+            format!("{}/{}", self.cache_root(), full_inv_path_str)
         };
 
         let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE
             .get_with_metrics(&cache_key, "inverted_index")
             .await
         {
+            if analyzer.is_none()
+                && crate::core::cache::ANALYZER_META_CACHE
+                    .get(&cache_key)
+                    .await
+                    .is_none()
+            {
+                if let Ok(inv_bytes) = self.load_inverted_bytes(&full_inv_path_str, idx_info).await
+                {
+                    if let Ok(builder) =
+                        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                            Bytes::from(inv_bytes),
+                        )
+                    {
+                        if let Some(kv_list) =
+                            builder.metadata().file_metadata().key_value_metadata()
+                        {
+                            for kv in kv_list {
+                                if kv.key == "analyzer" {
+                                    if let Some(value) = &kv.value {
+                                        crate::core::cache::ANALYZER_META_CACHE
+                                            .insert(cache_key.clone(), value.clone())
+                                            .await;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             cached.as_ref().clone()
         } else {
             // Cache Miss - Load from Disk
-            let inv_path = Path::from(full_inv_path_str.as_str());
-            let inv_bytes = if let (Some(offset), Some(length)) =
-                (idx_info.blob_offset, idx_info.blob_length)
-            {
-                let b = self
-                    .store
-                    .get_range(&inv_path, (offset as u64)..(offset as u64 + length as u64))
-                    .await?;
-                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
-                b.to_vec()
-            } else {
-                let res = self.store.get(&inv_path).await?;
-                let b = res.bytes().await?;
-                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
-                b.to_vec()
-            };
+            let inv_bytes = self
+                .load_inverted_bytes(&full_inv_path_str, idx_info)
+                .await?;
 
             let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
                 Bytes::from(inv_bytes),
@@ -1471,11 +1677,9 @@ impl HybridReader {
                 for kv in kv_list {
                     if kv.key == "analyzer" {
                         if let Some(value) = &kv.value {
-                            if analyzer.is_none() {
-                                crate::core::cache::ANALYZER_META_CACHE
-                                    .insert(cache_key.clone(), value.clone())
-                                    .await;
-                            }
+                            crate::core::cache::ANALYZER_META_CACHE
+                                .insert(cache_key.clone(), value.clone())
+                                .await;
                         }
                         break;
                     }
@@ -1528,12 +1732,7 @@ impl HybridReader {
         let mut doc_lengths: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
 
         let doclen_bytes_opt: Option<bytes::Bytes> = if let Some(d_info) = doclen_idx_info {
-            let d_path_str = &d_info.file_path;
-            let full_d_path = if !dir_path.is_empty() && !d_path_str.contains('/') {
-                format!("{}/{}", dir_path, d_path_str)
-            } else {
-                d_path_str.clone()
-            };
+            let full_d_path = self.resolve_index_path(&d_info.file_path);
             if let (Some(offset), Some(length)) = (d_info.blob_offset, d_info.blob_length) {
                 self.store
                     .get_range(
@@ -1687,11 +1886,36 @@ impl HybridReader {
             }
         }
 
-        // 6. Drop documents the scalar filter excluded, then sort by raw BM25
-        // score descending (best first) and truncate.
+        // 6. Drop deleted documents and rows excluded by scalar/residual filters
+        // or equality deletes BEFORE truncating to top-k so live rows are never
+        // displaced by deleted/filtered candidates.
+        let deleted = self.load_merged_deletes().await?;
+        if !deleted.is_empty() {
+            scores.retain(|row_id, _| !deleted.contains(*row_id));
+        }
         if let Some(bitmap) = &allowed_bitmap {
             scores.retain(|row_id, _| bitmap.contains(*row_id));
         }
+        if !scores.is_empty() {
+            let eq_deletes = self.load_equality_deletes().await?;
+            let residual_filter = if filter.is_some() && !all_subfilters_exact {
+                filter
+            } else {
+                None
+            };
+            if !eq_deletes.is_empty() || residual_filter.is_some() {
+                let cand_bm: RoaringBitmap = scores.keys().copied().collect();
+                let surviving = self
+                    .validate_row_ids_against_filter_and_eq_deletes(
+                        &cand_bm,
+                        residual_filter,
+                        &eq_deletes,
+                    )
+                    .await?;
+                scores.retain(|row_id, _| surviving.contains(*row_id));
+            }
+        }
+
         let mut results: Vec<(usize, f32)> = scores
             .into_iter()
             .map(|(rid, score)| (rid as usize, score))
@@ -1715,6 +1939,34 @@ impl HybridReader {
         slop: usize,
         analyzer: Option<&str>,
     ) -> Result<Vec<(usize, f32)>> {
+        self.phrase_search_index_filtered(column, phrase, k, slop, analyzer, None)
+            .await
+    }
+
+    /// Filtered position-aware phrase query applying scalar bitmaps, deletes,
+    /// equality deletes, and non-exact residual filters before top-k truncation.
+    pub async fn phrase_search_index_filtered(
+        &self,
+        column: &str,
+        phrase: &str,
+        k: usize,
+        slop: usize,
+        analyzer: Option<&str>,
+        filter: Option<&FilterExpr>,
+    ) -> Result<Vec<(usize, f32)>> {
+        if k == 0 {
+            return Ok(vec![]);
+        }
+        let (allowed_bitmap, all_subfilters_exact) = self
+            .resolve_scalar_filter_bitmap_with_exactness(filter)
+            .await;
+        if allowed_bitmap
+            .as_ref()
+            .is_some_and(|bitmap| bitmap.is_empty())
+        {
+            return Ok(vec![]);
+        }
+
         // 1. Find Inverted Index
         let idx_info = self
             .config
@@ -1738,52 +1990,69 @@ impl HybridReader {
             })?;
 
         // 2. Load Inverted Index Batches
-        let inv_path_str = &idx_info.file_path;
-        let mut dir_path = self.config.parquet_path.clone().unwrap_or_default();
-        if let Some(pos) = dir_path.rfind('/') {
-            dir_path.truncate(pos);
-        } else {
-            dir_path = "".to_string();
-        }
-
-        let full_inv_path_str = if !dir_path.is_empty() && !inv_path_str.contains('/') {
-            format!("{}/{}", dir_path, inv_path_str)
-        } else {
-            inv_path_str.clone()
-        };
+        let full_inv_path_str = self.resolve_index_path(&idx_info.file_path);
 
         let cache_key = if let Some(offset) = idx_info.blob_offset {
-            format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
+            format!("{}/{}:{}", self.cache_root(), full_inv_path_str, offset)
         } else {
-            format!("{}/{}", self.root_uri, full_inv_path_str)
+            format!("{}/{}", self.cache_root(), full_inv_path_str)
         };
 
         let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE
             .get_with_metrics(&cache_key, "inverted_index")
             .await
         {
+            if analyzer.is_none()
+                && crate::core::cache::ANALYZER_META_CACHE
+                    .get(&cache_key)
+                    .await
+                    .is_none()
+            {
+                if let Ok(inv_bytes) = self.load_inverted_bytes(&full_inv_path_str, idx_info).await
+                {
+                    if let Ok(builder) =
+                        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                            Bytes::from(inv_bytes),
+                        )
+                    {
+                        if let Some(kv_list) =
+                            builder.metadata().file_metadata().key_value_metadata()
+                        {
+                            for kv in kv_list {
+                                if kv.key == "analyzer" {
+                                    if let Some(value) = &kv.value {
+                                        crate::core::cache::ANALYZER_META_CACHE
+                                            .insert(cache_key.clone(), value.clone())
+                                            .await;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             cached.as_ref().clone()
         } else {
-            let inv_path = Path::from(full_inv_path_str.as_str());
-            let inv_bytes = if let (Some(offset), Some(length)) =
-                (idx_info.blob_offset, idx_info.blob_length)
-            {
-                let b = self
-                    .store
-                    .get_range(&inv_path, (offset as u64)..(offset as u64 + length as u64))
-                    .await?;
-                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
-                b.to_vec()
-            } else {
-                let res = self.store.get(&inv_path).await?;
-                let b = res.bytes().await?;
-                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
-                b.to_vec()
-            };
+            let inv_bytes = self
+                .load_inverted_bytes(&full_inv_path_str, idx_info)
+                .await?;
 
             let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
                 Bytes::from(inv_bytes),
             )?;
+            if let Some(kv_list) = builder.metadata().file_metadata().key_value_metadata() {
+                for kv in kv_list {
+                    if kv.key == "analyzer" {
+                        if let Some(value) = &kv.value {
+                            crate::core::cache::ANALYZER_META_CACHE
+                                .insert(cache_key.clone(), value.clone())
+                                .await;
+                        }
+                        break;
+                    }
+                }
+            }
             let reader = builder.build()?;
             let mut decoded = Vec::new();
             for batch_result in reader {
@@ -1818,7 +2087,7 @@ impl HybridReader {
         }
         if phrase_tokens.len() == 1 {
             return self
-                .keyword_search_index(column, phrase, k, &Bm25Params::default(), analyzer, None)
+                .keyword_search_index(column, phrase, k, &Bm25Params::default(), analyzer, filter)
                 .await;
         }
 
@@ -1889,11 +2158,22 @@ impl HybridReader {
             token_doc_positions.push(doc_map);
         }
 
+        let deleted = self.load_merged_deletes().await?;
+        let eq_deletes = self.load_equality_deletes().await?;
+
         // 5. Match phrases across candidate documents (docs present in all tokens)
         let first_docs = &token_doc_positions[0];
         let mut phrase_scores: Vec<(usize, f32)> = Vec::new();
 
         for (&doc_id, first_positions) in first_docs {
+            if deleted.contains(doc_id) {
+                continue;
+            }
+            if let Some(ref bm) = allowed_bitmap {
+                if !bm.contains(doc_id) {
+                    continue;
+                }
+            }
             let in_all = token_doc_positions[1..]
                 .iter()
                 .all(|m| m.contains_key(&doc_id));
@@ -1926,6 +2206,26 @@ impl HybridReader {
             if matches_count > 0 {
                 phrase_scores.push((doc_id as usize, matches_count as f32));
             }
+        }
+
+        let residual_filter = if filter.is_some() && !all_subfilters_exact {
+            filter
+        } else {
+            None
+        };
+        if !phrase_scores.is_empty() && (!eq_deletes.is_empty() || residual_filter.is_some()) {
+            let mut cand_bm = RoaringBitmap::new();
+            for &(doc_id, _) in &phrase_scores {
+                cand_bm.insert(doc_id as u32);
+            }
+            let surviving = self
+                .validate_row_ids_against_filter_and_eq_deletes(
+                    &cand_bm,
+                    residual_filter,
+                    &eq_deletes,
+                )
+                .await?;
+            phrase_scores.retain(|(doc_id, _)| surviving.contains(*doc_id as u32));
         }
 
         phrase_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -2004,7 +2304,7 @@ impl HybridReader {
     /// has ~500 row groups, and walking all of them per query is what made
     /// hydration cost 44 ms at 10M versus 6 ms at 1M, with *negative* thread
     /// scaling because every thread paged its way through the whole footer.
-    fn row_groups_covering(
+    pub(crate) fn row_groups_covering(
         metadata: &parquet::file::metadata::ParquetMetaData,
         bitmap: &RoaringBitmap,
     ) -> Vec<(usize, usize)> {
@@ -2063,8 +2363,7 @@ impl HybridReader {
         // Apply Deletes
         let deleted = self.load_merged_deletes().await?;
         if !deleted.is_empty() {
-            bitmap -= &deleted; // Borrow instead of move
-                                // Remove distances for deleted rows
+            bitmap -= &deleted;
             for row_id in deleted.iter() {
                 row_distances.remove(&row_id);
             }
@@ -2074,12 +2373,12 @@ impl HybridReader {
             return Ok(vec![]);
         }
 
-        // Score-only short-circuit: an empty `target_schema` means the caller
-        // named only synthesised columns — in practice just the score. The
-        // score is already in hand from the index search, so there is nothing
-        // to read from Parquet. Emit the distance column directly.
+        let eq_deletes = self.load_equality_deletes().await?;
+
+        // Score-only short-circuit: only safe when neither a residual filter
+        // nor equality deletes need physical column values.
         if let Some(schema) = target_schema.as_ref() {
-            if schema.fields().is_empty() {
+            if schema.fields().is_empty() && filter.is_none() && eq_deletes.is_empty() {
                 let row_ids: Vec<u32> = bitmap.iter().collect();
                 let batch_distances: Vec<f32> = row_ids
                     .iter()
@@ -2105,48 +2404,25 @@ impl HybridReader {
             }
         }
 
-        // Fetch Rows - use resolved path
+        // Fetch Rows - use resolved path and cache_root + data_store
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
-        let cache_key = format!("{}/{}", self.root_uri, pq_path_str);
+        let cache_key = format!("{}/{}", self.cache_root(), pq_path_str);
 
-        use crate::core::cache::CacheExt;
-
-        // 1. Ensure we have Parquet Metadata to check file size
-        let (meta, size) = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE
-            .get_with_metrics(&cache_key, "parquet_meta")
-            .await
-        {
-            (meta, size)
-        } else {
-            let object_meta = self
-                .store
-                .head(&pq_path)
-                .await
-                .context("Failed to get segment metadata")?;
-            let size = object_meta.size as usize;
-            let mut reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-            let options = ArrowReaderOptions::new().with_page_index(true);
-            let arrow_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
-            let meta = Arc::new(arrow_meta);
-            crate::core::cache::PARQUET_META_CACHE
-                .insert(cache_key.clone(), (meta.clone(), size))
-                .await;
-            (meta, size)
-        };
+        let (meta, size) = self.load_cached_parquet_meta(&pq_path).await?;
+        let data_store = self.data_store();
 
         // 2. Hot Row Cache (Fast Path)
-        //
-        // Reading the whole file into BLOCK_CACHE pays off when the file is
-        // small (a full read is cheap and the batch is reused across queries)
-        // or the requested rows are a large fraction of it. A sparse selection
-        // on a *large* file must use row selection instead — otherwise a
-        // kNN/BM25 query hydrating 10 of 100k rows reads a 100 MB+ Parquet file
-        // to return a handful of rows, the dominant cost of a gateway-style
-        // vector query. Note row selection still reads whole row groups, so for
-        // small files the cache is strictly better than re-reading per query.
         const BLOCK_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
         let total_rows = meta.metadata().file_metadata().num_rows() as usize;
+        if total_rows == 0 {
+            return Ok(vec![]);
+        }
+        bitmap &= RoaringBitmap::from_iter(0..(total_rows as u32));
+        if bitmap.is_empty() {
+            return Ok(vec![]);
+        }
+
         let sparse_selection =
             total_rows > 0 && (bitmap.len() as usize).saturating_mul(8) < total_rows;
         if size < BLOCK_CACHE_MAX_BYTES || (size < 500 * 1024 * 1024 && !sparse_selection) {
@@ -2154,31 +2430,20 @@ impl HybridReader {
                 .get_with_metrics(&cache_key, "block_cache")
                 .await;
 
-            // Miss: Read the entire file and cache it
+            // Miss: Read the entire file from data_store and cache it
             if cached_batch_opt.is_none() {
-                let object_meta = ObjectMeta {
-                    location: pq_path.clone(),
-                    last_modified: Utc::now(),
-                    size: size as u64,
-                    e_tag: None,
-                    version: None,
-                };
-                let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+                let reader = ParquetObjectReader::new(data_store.clone(), pq_path.clone());
                 let arrow_meta = (*meta).clone();
                 let builder =
                     ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
 
-                // Read all batches without row selection
                 let mut stream = builder.build()?;
                 let mut all_batches = Vec::new();
-                use futures::StreamExt;
                 while let Some(batch) = stream.next().await {
                     all_batches.push(batch?);
                 }
 
                 if !all_batches.is_empty() {
-                    // The `is_empty()` guard plus the arm split makes `remove(0)`
-                    // index-safe; `_` here means len >= 2.
                     let full_batch = match all_batches.len() {
                         1 => all_batches.remove(0),
                         _ => {
@@ -2195,7 +2460,14 @@ impl HybridReader {
 
             // Hit: Use take_record_batch to instantly grab rows
             if let Some(arc_batch) = cached_batch_opt {
-                let row_ids: Vec<u32> = bitmap.iter().collect();
+                let batch_rows = arc_batch.num_rows();
+                let row_ids: Vec<u32> = bitmap
+                    .iter()
+                    .filter(|&id| (id as usize) < batch_rows)
+                    .collect();
+                if row_ids.is_empty() {
+                    return Ok(vec![]);
+                }
                 let indices = arrow::array::UInt32Array::from(row_ids.clone());
                 let taken_batch = arrow::compute::take_record_batch(&arc_batch, &indices)?;
 
@@ -2208,53 +2480,90 @@ impl HybridReader {
                     batch_distances.push(distance);
                 }
 
+                // Apply equality deletes FIRST (on physical columns)
+                if !eq_deletes.is_empty() {
+                    let eq_keep = Self::apply_eq_deletes_keep_mask(&final_batch, &eq_deletes)?;
+                    let prev_rows = final_batch.num_rows();
+                    final_batch = arrow::compute::filter_record_batch(&final_batch, &eq_keep)?;
+                    let mut filtered_distances = Vec::with_capacity(final_batch.num_rows());
+                    for i in 0..prev_rows {
+                        if eq_keep.is_valid(i) && eq_keep.value(i) {
+                            filtered_distances.push(batch_distances[i]);
+                        }
+                    }
+                    batch_distances = filtered_distances;
+                    if final_batch.num_rows() == 0 {
+                        return Ok(vec![]);
+                    }
+                }
+
                 // Apply post-filtering if a filter was provided (BEFORE schema evolution / projection)
                 if let Some(expr) = filter {
                     let planner = crate::core::planner::QueryPlanner::new();
-                    match planner.evaluate_expr(&final_batch, expr) {
-                        Ok(mask) => {
-                            let prev_rows = final_batch.num_rows();
-                            final_batch = arrow::compute::filter_record_batch(&final_batch, &mask)?;
+                    let required_cols = expr.required_columns();
+                    let eval_batch = if required_cols
+                        .iter()
+                        .any(|c| final_batch.column_by_name(c).is_none())
+                    {
+                        self.pad_missing_schema_columns(final_batch.clone(), &required_cols)
+                            .await?
+                    } else {
+                        final_batch.clone()
+                    };
+                    let coerced = expr.coerce_literals(&eval_batch.schema());
+                    let mask = planner.evaluate_expr(&eval_batch, &coerced)?;
+                    let prev_rows = final_batch.num_rows();
+                    final_batch = arrow::compute::filter_record_batch(&final_batch, &mask)?;
 
-                            let mut filtered_distances = Vec::with_capacity(final_batch.num_rows());
-                            for i in 0..prev_rows {
-                                if mask.value(i) {
-                                    filtered_distances.push(batch_distances[i]);
-                                }
-                            }
-                            batch_distances = filtered_distances;
-                        }
-                        Err(e) => {
-                            tracing::debug!("Post-filter evaluate_expr failed: {}", e);
+                    let mut filtered_distances = Vec::with_capacity(final_batch.num_rows());
+                    for i in 0..prev_rows {
+                        if mask.is_valid(i) && mask.value(i) {
+                            filtered_distances.push(batch_distances[i]);
                         }
                     }
+                    batch_distances = filtered_distances;
                 }
 
                 if final_batch.num_rows() == 0 {
                     return Ok(vec![]);
                 }
 
-                // Project columns if needed
+                // Project / evolve columns if needed
                 if let Some(schema) = &target_schema {
-                    let mut new_columns = Vec::new();
-                    for field in schema.fields() {
-                        if let Ok(col) = final_batch.column_by_name(field.name()).ok_or(()) {
-                            if col.data_type() != field.data_type() {
-                                let casted = arrow::compute::cast(col, field.data_type())?;
-                                new_columns.push(casted);
+                    if schema.fields().is_empty() {
+                        final_batch = arrow::record_batch::RecordBatch::try_new_with_options(
+                            schema.clone(),
+                            vec![],
+                            &arrow::record_batch::RecordBatchOptions::new()
+                                .with_row_count(Some(final_batch.num_rows())),
+                        )?;
+                    } else {
+                        let mut new_columns = Vec::new();
+                        for field in schema.fields() {
+                            if let Ok(col) = final_batch.column_by_name(field.name()).ok_or(()) {
+                                if col.data_type() != field.data_type() {
+                                    let casted = arrow::compute::cast(col, field.data_type())?;
+                                    new_columns.push(casted);
+                                } else {
+                                    new_columns.push(col.clone());
+                                }
                             } else {
-                                new_columns.push(col.clone());
+                                if !field.is_nullable() && final_batch.num_rows() > 0 {
+                                    anyhow::bail!(
+                                        "read: required column '{}' is missing from the source segment",
+                                        field.name()
+                                    );
+                                }
+                                let null_arr = arrow::array::new_null_array(
+                                    field.data_type(),
+                                    final_batch.num_rows(),
+                                );
+                                new_columns.push(null_arr);
                             }
-                        } else {
-                            let null_arr = arrow::array::new_null_array(
-                                field.data_type(),
-                                final_batch.num_rows(),
-                            );
-                            new_columns.push(null_arr);
                         }
+                        final_batch =
+                            arrow::record_batch::RecordBatch::try_new(schema.clone(), new_columns)?;
                     }
-                    final_batch =
-                        arrow::record_batch::RecordBatch::try_new(schema.clone(), new_columns)?;
                 }
 
                 // Add distance column
@@ -2270,27 +2579,22 @@ impl HybridReader {
 
                 let mut columns = final_batch.columns().to_vec();
                 columns.push(distance_array);
-                final_batch = RecordBatch::try_new(final_schema, columns)?;
+                final_batch = RecordBatch::try_new_with_options(
+                    final_schema,
+                    columns,
+                    &arrow::record_batch::RecordBatchOptions::new()
+                        .with_row_count(Some(batch_distances.len())),
+                )?;
 
                 return Ok(vec![(final_batch, batch_distances)]);
             }
         }
 
         // 3. --- STANDARD ROW SELECTION FETCH (For large files > 500MB) ---
-        let object_meta = ObjectMeta {
-            location: pq_path.clone(),
-            last_modified: Utc::now(),
-            size: size as u64,
-            e_tag: None,
-            version: None,
-        };
-        let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+        let reader = ParquetObjectReader::new(data_store.clone(), pq_path.clone());
         let arrow_meta = (*meta).clone();
         let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
 
-        // Prune to the row groups that actually hold a requested row, then build
-        // the selection over those groups' concatenated rows (a `RowSelection`
-        // is relative to the groups the reader was told to read).
         let groups = Self::row_groups_covering(builder.metadata(), &bitmap);
         let num_groups = builder.metadata().num_row_groups();
         if !groups.is_empty() && groups.len() < num_groups {
@@ -2317,13 +2621,12 @@ impl HybridReader {
             builder = builder.with_row_selection(selection);
         }
 
-        // Apply column projection if specified (skip reading unused columns like embeddings)
+        // Apply column projection including target, filter, and equality delete columns
         let target_schema_ref = target_schema.clone();
         if let Some(schema) = &target_schema_ref {
             let parquet_schema = builder.metadata().file_metadata().schema_descr();
             let file_arrow_schema = builder.schema();
 
-            // --- BUG FIX: Ensure columns required by filter are included in projection ---
             let mut required_cols: Vec<String> =
                 schema.fields().iter().map(|f| f.name().clone()).collect();
             if let Some(expr) = filter {
@@ -2331,6 +2634,11 @@ impl HybridReader {
                     if !required_cols.contains(&col) {
                         required_cols.push(col);
                     }
+                }
+            }
+            for del in &eq_deletes {
+                if !required_cols.contains(&del.column_name) {
+                    required_cols.push(del.column_name.clone());
                 }
             }
 
@@ -2354,10 +2662,8 @@ impl HybridReader {
         while let Some(batch_result) = stream.next().await {
             let batch = batch_result?;
             let num_rows = batch.num_rows();
-
-            // Handle case where RowSelection returns more rows than bitmap
-            // (due to gap coalescing). Only process rows we have distances for.
-            let rows_to_process = std::cmp::min(num_rows, row_ids.len() - current_offset);
+            let avail = row_ids.len().saturating_sub(current_offset);
+            let rows_to_process = std::cmp::min(num_rows, avail);
 
             if rows_to_process == 0 {
                 break;
@@ -2379,70 +2685,108 @@ impl HybridReader {
 
             current_offset += rows_to_process;
 
-            // --- BUG FIX: Apply post-filtering if a filter was provided (BEFORE schema evolution / projection) ---
-            // This ensures correctness even if the index search was overly permissive (e.g. missing inverted indexes for some terms)
-            if let Some(expr) = filter {
-                let planner = crate::core::planner::QueryPlanner::new();
-                match planner.evaluate_expr(&final_batch, expr) {
-                    Ok(mask) => {
-                        // Filter the batch
-                        let prev_rows = final_batch.num_rows();
-                        final_batch = arrow::compute::filter_record_batch(&final_batch, &mask)?;
-
-                        // Filter the distances to match the new batch
-                        let mut filtered_distances = Vec::with_capacity(final_batch.num_rows());
-                        for i in 0..prev_rows {
-                            if mask.value(i) {
-                                filtered_distances.push(batch_distances[i]);
-                            }
-                        }
-                        batch_distances = filtered_distances;
-                    }
-                    Err(e) => {
-                        tracing::debug!("Post-filter evaluate_expr failed: {}", e);
+            // Apply equality deletes FIRST (on physical columns)
+            if !eq_deletes.is_empty() {
+                let eq_keep = Self::apply_eq_deletes_keep_mask(&final_batch, &eq_deletes)?;
+                let prev_rows = final_batch.num_rows();
+                final_batch = arrow::compute::filter_record_batch(&final_batch, &eq_keep)?;
+                let mut filtered_distances = Vec::with_capacity(final_batch.num_rows());
+                for i in 0..prev_rows {
+                    if eq_keep.is_valid(i) && eq_keep.value(i) {
+                        filtered_distances.push(batch_distances[i]);
                     }
                 }
+                batch_distances = filtered_distances;
+                if final_batch.num_rows() == 0 {
+                    continue;
+                }
+            }
+
+            // Apply post-filtering if a filter was provided (BEFORE schema evolution / projection)
+            if let Some(expr) = filter {
+                let planner = crate::core::planner::QueryPlanner::new();
+                let required_cols = expr.required_columns();
+                let eval_batch = if required_cols
+                    .iter()
+                    .any(|c| final_batch.column_by_name(c).is_none())
+                {
+                    self.pad_missing_schema_columns(final_batch.clone(), &required_cols)
+                        .await?
+                } else {
+                    final_batch.clone()
+                };
+                let coerced = expr.coerce_literals(&eval_batch.schema());
+                let mask = planner.evaluate_expr(&eval_batch, &coerced)?;
+                let prev_rows = final_batch.num_rows();
+                final_batch = arrow::compute::filter_record_batch(&final_batch, &mask)?;
+
+                let mut filtered_distances = Vec::with_capacity(final_batch.num_rows());
+                for i in 0..prev_rows {
+                    if mask.is_valid(i) && mask.value(i) {
+                        filtered_distances.push(batch_distances[i]);
+                    }
+                }
+                batch_distances = filtered_distances;
             }
 
             if final_batch.num_rows() == 0 {
                 continue;
             }
 
-            // Schema Evolution Mapping (AFTER post-filtering so filter columns are still present during evaluation)
+            // Schema Evolution Mapping (AFTER post-filtering so filter columns are still present)
             if let Some(target) = &target_schema_ref {
-                let mut new_columns = Vec::new();
-                for field in target.fields() {
-                    if let Ok(col) = final_batch.column_by_name(field.name()).ok_or(()) {
-                        if col.data_type() != field.data_type() {
-                            let casted = arrow::compute::cast(col, field.data_type())?;
-                            new_columns.push(casted);
+                if target.fields().is_empty() {
+                    final_batch = arrow::record_batch::RecordBatch::try_new_with_options(
+                        target.clone(),
+                        vec![],
+                        &arrow::record_batch::RecordBatchOptions::new()
+                            .with_row_count(Some(final_batch.num_rows())),
+                    )?;
+                } else {
+                    let mut new_columns = Vec::new();
+                    for field in target.fields() {
+                        if let Ok(col) = final_batch.column_by_name(field.name()).ok_or(()) {
+                            if col.data_type() != field.data_type() {
+                                let casted = arrow::compute::cast(col, field.data_type())?;
+                                new_columns.push(casted);
+                            } else {
+                                new_columns.push(col.clone());
+                            }
                         } else {
-                            new_columns.push(col.clone());
+                            if !field.is_nullable() && final_batch.num_rows() > 0 {
+                                anyhow::bail!(
+                                    "read: required column '{}' is missing from the source segment",
+                                    field.name()
+                                );
+                            }
+                            let null_arr = arrow::array::new_null_array(
+                                field.data_type(),
+                                final_batch.num_rows(),
+                            );
+                            new_columns.push(null_arr);
                         }
-                    } else {
-                        let null_arr =
-                            arrow::array::new_null_array(field.data_type(), final_batch.num_rows());
-                        new_columns.push(null_arr);
                     }
+                    final_batch =
+                        arrow::record_batch::RecordBatch::try_new(target.clone(), new_columns)?;
                 }
-                final_batch =
-                    arrow::record_batch::RecordBatch::try_new(target.clone(), new_columns)?;
             }
 
-            // Add distance column to batch
+            // Add distance column to batch (nullable = false for consistent schema across segments)
             let distance_array =
                 std::sync::Arc::new(arrow::array::Float32Array::from(batch_distances.clone()));
             let mut fields = final_batch.schema().fields().to_vec();
             fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
                 "distance",
                 arrow::datatypes::DataType::Float32,
-                true,
+                false,
             )));
             let mut columns = final_batch.columns().to_vec();
             columns.push(distance_array);
-            final_batch = arrow::record_batch::RecordBatch::try_new(
+            final_batch = arrow::record_batch::RecordBatch::try_new_with_options(
                 std::sync::Arc::new(arrow::datatypes::Schema::new(fields)),
                 columns,
+                &arrow::record_batch::RecordBatchOptions::new()
+                    .with_row_count(Some(batch_distances.len())),
             )?;
 
             results.push((final_batch, batch_distances));
@@ -2451,8 +2795,170 @@ impl HybridReader {
         Ok(results)
     }
 
+    async fn vector_search_on_filtered_ids(
+        &self,
+        column: &str,
+        query: &crate::core::index::VectorValue,
+        k: usize,
+        bitmap: &RoaringBitmap,
+        metric: VectorMetric,
+        residual_filter: Option<&FilterExpr>,
+    ) -> Result<Vec<(usize, f32)>> {
+        if k == 0 || bitmap.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let q_vec = match query {
+            crate::core::index::VectorValue::Float32(v) => v,
+            _ => anyhow::bail!("Filtered vector search only supports Float32 vectors currently"),
+        };
+
+        let pq_path = self.resolve_object_path("parquet");
+        let (meta, size) = self.load_cached_parquet_meta(&pq_path).await?;
+        let num_rows = meta.metadata().file_metadata().num_rows() as usize;
+        if num_rows == 0 {
+            return Ok(vec![]);
+        }
+
+        let deleted = self.load_merged_deletes().await?;
+        let eq_deletes = self.load_equality_deletes().await?;
+        let mut merged = bitmap.clone();
+        merged &= RoaringBitmap::from_iter(0..(num_rows as u32));
+        if !deleted.is_empty() {
+            merged -= &deleted;
+        }
+        if merged.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let reader = self
+            .parquet_reader(self.data_store(), &pq_path, size as u64)
+            .await;
+        let arrow_meta = (*meta).clone();
+        let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
+
+        let groups = Self::row_groups_covering(builder.metadata(), &merged);
+        let num_groups = builder.metadata().num_row_groups();
+        if !groups.is_empty() && groups.len() < num_groups {
+            let mut shifted = RoaringBitmap::new();
+            let mut base: u32 = 0;
+            for (rg, group_start) in &groups {
+                let rows = builder.metadata().row_group(*rg).num_rows() as u32;
+                for id in merged.iter() {
+                    let id = id as usize;
+                    if id >= *group_start && id < *group_start + rows as usize {
+                        shifted.insert(base + (id as u32 - *group_start as u32));
+                    }
+                }
+                base += rows;
+            }
+            builder = builder.with_row_groups(groups.iter().map(|(rg, _)| *rg).collect());
+            let selection = self.bitmap_to_row_selection(&shifted, base as usize);
+            builder = builder.with_row_selection(selection);
+        } else {
+            let selection = self.bitmap_to_row_selection(&merged, num_rows);
+            builder = builder.with_row_selection(selection);
+        }
+
+        let mut required_cols: Vec<String> = vec![column.to_string()];
+        let filter_cols = residual_filter
+            .map(|f| f.required_columns())
+            .unwrap_or_default();
+        for c in &filter_cols {
+            if !required_cols.contains(c) {
+                required_cols.push(c.clone());
+            }
+        }
+        for del in &eq_deletes {
+            if !required_cols.contains(&del.column_name) {
+                required_cols.push(del.column_name.clone());
+            }
+        }
+
+        let mask = {
+            let parquet_schema = builder.metadata().file_metadata().schema_descr();
+            let file_arrow_schema = builder.schema();
+            let column_indices: Vec<usize> = required_cols
+                .iter()
+                .filter_map(|name| file_arrow_schema.index_of(name).ok())
+                .collect();
+            ProjectionMask::roots(parquet_schema, column_indices)
+        };
+        builder = builder.with_projection(mask);
+
+        let mut stream = builder.build()?;
+        let mut all_scored: Vec<(usize, f32)> = Vec::new();
+        let mut bitmap_iter = merged.iter();
+        let planner = crate::core::planner::QueryPlanner::new();
+
+        while let Some(batch_result) = stream.next().await {
+            let batch = batch_result?;
+            let batch_rows = batch.num_rows();
+            if batch_rows == 0 {
+                continue;
+            }
+
+            let mut batch_row_ids = Vec::with_capacity(batch_rows);
+            for _ in 0..batch_rows {
+                let rid = bitmap_iter.next().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Bitmap iterator exhausted before reader batches (schema mismatch?)"
+                    )
+                })?;
+                batch_row_ids.push(rid);
+            }
+
+            let eq_keep = if eq_deletes.is_empty() {
+                None
+            } else {
+                Some(Self::apply_eq_deletes_keep_mask(&batch, &eq_deletes)?)
+            };
+
+            let filter_mask = if let Some(expr) = residual_filter {
+                let eval_batch = if filter_cols
+                    .iter()
+                    .any(|c| batch.column_by_name(c).is_none())
+                {
+                    self.pad_missing_schema_columns(batch.clone(), &filter_cols)
+                        .await?
+                } else {
+                    batch.clone()
+                };
+                let coerced = expr.coerce_literals(&eval_batch.schema());
+                Some(planner.evaluate_expr(&eval_batch, &coerced)?)
+            } else {
+                None
+            };
+
+            if let Some(col) = batch.column_by_name(column) {
+                for (i, &row_id) in batch_row_ids.iter().enumerate() {
+                    if let Some(ref eq_k) = eq_keep {
+                        if !eq_k.is_valid(i) || !eq_k.value(i) {
+                            continue;
+                        }
+                    }
+                    if let Some(ref m) = filter_mask {
+                        if !m.is_valid(i) || !m.value(i) {
+                            continue;
+                        }
+                    }
+                    let Some(v) = Self::extract_vector_at(col.as_ref(), i, q_vec.len()) else {
+                        continue;
+                    };
+                    let dist = Self::compute_vector_distance_f32(&v, q_vec, metric);
+                    all_scored.push((row_id as usize, dist));
+                }
+            }
+        }
+
+        all_scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        all_scored.truncate(k);
+        Ok(all_scored)
+    }
+
     /// Two-step filtered vector search: apply scalar filters first (hard),
     /// then compute vector distances on the surviving rows and return top-k.
+    #[allow(clippy::too_many_arguments)]
     async fn vector_search_on_filtered(
         &self,
         column: &str,
@@ -2463,141 +2969,16 @@ impl HybridReader {
         target_schema: Option<arrow::datatypes::SchemaRef>,
         filter: Option<&FilterExpr>,
     ) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
-        use futures::StreamExt;
+        let all_scored = self
+            .vector_search_on_filtered_ids(column, query, k, bitmap, metric, filter)
+            .await?;
 
-        let q_vec = match query {
-            crate::core::index::VectorValue::Float32(v) => v.clone(),
-            _ => anyhow::bail!("Filtered vector search only supports Float32 vectors currently"),
-        };
-
-        // Step 1: Fetch only the rows that match the scalar filter bitmap
-        let pq_path = self.resolve_object_path("parquet");
-        let pq_path_str = pq_path.to_string();
-
-        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE
-            .get_with_metrics(
-                &format!("{}/{}", self.root_uri, pq_path_str),
-                "parquet_meta",
-            )
-            .await
-        {
-            let object_meta = ObjectMeta {
-                location: pq_path.clone(),
-                last_modified: Utc::now(),
-                size: size as u64,
-                e_tag: None,
-                version: None,
-            };
-            let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-            let arrow_meta = (*meta).clone();
-            ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta)
-        } else {
-            let object_meta = self
-                .store
-                .head(&pq_path)
-                .await
-                .context("Failed to get segment metadata")?;
-            let size = object_meta.size;
-            let mut reader =
-                ParquetObjectReader::new(self.store.clone(), object_meta.location.clone());
-            let options = ArrowReaderOptions::new().with_page_index(true);
-            let arrow_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
-            let meta = Arc::new(arrow_meta);
-            crate::core::cache::PARQUET_META_CACHE
-                .insert(
-                    format!("{}/{}", self.root_uri, pq_path_str),
-                    (meta.clone(), size as usize),
-                )
-                .await;
-            let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-            ParquetRecordBatchStreamBuilder::new_with_metadata(reader, (*meta).clone())
-        };
-
-        // Apply row selection to read only filtered rows
-        let num_rows = builder.metadata().file_metadata().num_rows() as usize;
-
-        // Handle deletes as well
-        let deleted = self.load_merged_deletes().await?;
-        let merged = if !deleted.is_empty() {
-            let full_range = RoaringBitmap::from_iter(0..num_rows as u32);
-            let valid = full_range - deleted;
-            &valid & bitmap
-        } else {
-            bitmap.clone()
-        };
-
-        let selection = self.bitmap_to_row_selection(&merged, num_rows);
-        builder = builder.with_row_selection(selection);
-
-        let mut stream = builder.build()?;
-        let mut all_scored: Vec<(usize, f32)> = Vec::new();
-
-        // We use an iterator over the merged bitmap to get the CORRECT global row IDs for each row returned by the reader.
-        let mut bitmap_iter = merged.iter();
-
-        while let Some(batch_result) = stream.next().await {
-            let batch = batch_result?;
-
-            if let Some(col) = batch.column_by_name(column) {
-                for i in 0..batch.num_rows() {
-                    let row_id = bitmap_iter.next().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Bitmap iterator exhausted before reader batches (schema mismatch?)"
-                        )
-                    })?;
-
-                    let vec_row = if let Some(fs) = col
-                        .as_any()
-                        .downcast_ref::<arrow::array::FixedSizeListArray>()
-                    {
-                        fs.value(i)
-                    } else if let Some(l) = col.as_any().downcast_ref::<arrow::array::ListArray>() {
-                        l.value(i)
-                    } else {
-                        return Err(anyhow::anyhow!("Invalid vector column type (expected FixedSizeListArray or ListArray) for column '{}'", column));
-                    };
-
-                    let floats = vec_row
-                        .as_any()
-                        .downcast_ref::<arrow::array::Float32Array>()
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "Expected Float32Array in vector value for column '{}'",
-                                column
-                            )
-                        })?;
-
-                    let dist = match metric {
-                        VectorMetric::L2 => {
-                            crate::core::index::distance::l2_distance(&q_vec, floats.values())
-                        }
-                        VectorMetric::Cosine => {
-                            crate::core::index::distance::cosine_similarity(&q_vec, floats.values())
-                        }
-                        VectorMetric::InnerProduct => {
-                            crate::core::index::distance::dot_product(&q_vec, floats.values())
-                        }
-                        VectorMetric::L1 => {
-                            crate::core::index::distance::l1_distance(&q_vec, floats.values())
-                        }
-                        _ => f32::MAX,
-                    };
-                    all_scored.push((row_id as usize, dist));
-                }
-            }
-        }
-
-        // Step 2: Sort by distance and take top-k
-        all_scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        all_scored.truncate(k);
-
-        // Step 3: Fetch the top-k rows as RecordBatches with distances
         if all_scored.is_empty() {
             return Ok(vec![]);
         }
 
-        // Convert to (usize, f32) matches and use existing fetch_rows_with_distances
-        self.fetch_rows_with_distances(all_scored, target_schema, filter)
+        // Eq deletes and any residual filter were already applied before top-k truncation.
+        self.fetch_rows_with_distances(all_scored, target_schema, None)
             .await
     }
 
@@ -2613,53 +2994,30 @@ impl HybridReader {
         }
 
         let pq_path = self.resolve_object_path("parquet");
-        let pq_path_str = pq_path.to_string();
-        let cache_key = format!("{}/{}", self.root_uri, pq_path_str);
+        let (meta, _) = self.load_cached_parquet_meta(&pq_path).await?;
+        let total_rows = meta.metadata().file_metadata().num_rows() as usize;
+        if total_rows == 0 {
+            return Ok(None);
+        }
+        let mut clamped_bitmap = bitmap.clone();
+        clamped_bitmap &= RoaringBitmap::from_iter(0..(total_rows as u32));
+        if clamped_bitmap.is_empty() {
+            return Ok(None);
+        }
 
-        use crate::core::cache::CacheExt;
-
-        let (meta, size) = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE
-            .get_with_metrics(&cache_key, "parquet_meta")
-            .await
-        {
-            (meta, size)
-        } else {
-            let object_meta = self
-                .store
-                .head(&pq_path)
-                .await
-                .context("Failed to get segment metadata")?;
-            let size = object_meta.size as usize;
-            let mut reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-            let options = ArrowReaderOptions::new().with_page_index(true);
-            let arrow_meta = ArrowReaderMetadata::load_async(&mut reader, options).await?;
-            let meta = Arc::new(arrow_meta);
-            crate::core::cache::PARQUET_META_CACHE
-                .insert(cache_key.clone(), (meta.clone(), size))
-                .await;
-            (meta, size)
-        };
-
-        let object_meta = ObjectMeta {
-            location: pq_path.clone(),
-            last_modified: Utc::now(),
-            size: size as u64,
-            e_tag: None,
-            version: None,
-        };
-        let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+        let reader = ParquetObjectReader::new(self.data_store().clone(), pq_path);
         let arrow_meta = (*meta).clone();
         let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
 
         // Prune to the row groups covering the requested rows
-        let groups = Self::row_groups_covering(builder.metadata(), bitmap);
+        let groups = Self::row_groups_covering(builder.metadata(), &clamped_bitmap);
         let num_groups = builder.metadata().num_row_groups();
         if !groups.is_empty() && groups.len() < num_groups {
             let mut shifted = RoaringBitmap::new();
             let mut base: u32 = 0;
             for (rg, group_start) in &groups {
                 let rows = builder.metadata().row_group(*rg).num_rows() as u32;
-                for id in bitmap.iter() {
+                for id in clamped_bitmap.iter() {
                     let id = id as usize;
                     if id >= *group_start && id < *group_start + rows as usize {
                         shifted.insert(base + (id as u32 - *group_start as u32));
@@ -2671,10 +3029,7 @@ impl HybridReader {
             let selection = self.bitmap_to_row_selection(&shifted, base as usize);
             builder = builder.with_row_selection(selection);
         } else {
-            let selection = self.bitmap_to_row_selection(
-                bitmap,
-                builder.metadata().file_metadata().num_rows() as usize,
-            );
+            let selection = self.bitmap_to_row_selection(&clamped_bitmap, total_rows);
             builder = builder.with_row_selection(selection);
         }
 
@@ -2690,7 +3045,6 @@ impl HybridReader {
 
         let mut stream = builder.build()?;
         let mut arrays = Vec::new();
-        use futures::StreamExt;
         while let Some(batch_result) = stream.next().await {
             let batch = batch_result?;
             if let Some(c) = batch.column_by_name(column) {
@@ -2730,7 +3084,7 @@ impl HybridReader {
         };
 
         // Reconstruct row IDs in order (sorted bitmap row IDs minus deletes)
-        let deleted = self.load_merged_deletes().await.unwrap_or_default();
+        let deleted = self.load_merged_deletes().await?;
         let mut bitmap = RoaringBitmap::new();
         for (row_id, _) in &candidates {
             bitmap.insert(*row_id as u32);
@@ -2757,116 +3111,48 @@ impl HybridReader {
             .downcast_ref::<arrow::array::FixedSizeListArray>()
         {
             let dim = list.value_length() as usize;
-            if let Some(floats) = list
-                .values()
-                .as_any()
-                .downcast_ref::<arrow::array::Float32Array>()
-            {
-                let raw_floats = floats.values();
-                for (i, &row_id) in sorted_row_ids.iter().enumerate() {
-                    let start = i * dim;
-                    let end = start + dim;
-                    if end <= raw_floats.len() {
-                        let v_slice = &raw_floats[start..end];
-                        let exact_dist = match metric {
-                            VectorMetric::L2 => {
-                                crate::core::index::distance::l2_distance(v_slice, q_vec)
-                            }
-                            VectorMetric::Cosine => {
-                                crate::core::index::distance::cosine_distance(v_slice, q_vec)
-                            }
-                            VectorMetric::InnerProduct => {
-                                -crate::core::index::distance::dot_product(v_slice, q_vec)
-                            }
-                            VectorMetric::L1 => {
-                                crate::core::index::distance::l1_distance(v_slice, q_vec)
-                            }
-                            _ => candidates
-                                .iter()
-                                .find(|(id, _)| *id == row_id as usize)
-                                .map(|(_, d)| *d)
-                                .unwrap_or(0.0),
-                        };
-                        rescored.push((row_id as usize, exact_dist));
+            if dim == q_vec.len() && list.len() == sorted_row_ids.len() {
+                if let Some(floats) = list
+                    .values()
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float32Array>()
+                {
+                    let raw_floats = floats.values();
+                    for (i, &row_id) in sorted_row_ids.iter().enumerate() {
+                        if list.is_null(i) {
+                            continue;
+                        }
+                        let start = i * dim;
+                        let end = start + dim;
+                        if end <= raw_floats.len() {
+                            let v_slice = &raw_floats[start..end];
+                            let exact_dist =
+                                Self::compute_vector_distance_f32(v_slice, q_vec, metric);
+                            rescored.push((row_id as usize, exact_dist));
+                        }
                     }
+                    rescored
+                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    return Ok(rescored);
                 }
-                rescored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                return Ok(rescored);
             }
         }
 
-        // Fallback path for ListArray or Float64Array
-        let vectors: Vec<Vec<f32>> = match col.data_type() {
-            arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                let list = col
-                    .as_any()
-                    .downcast_ref::<arrow::array::FixedSizeListArray>()
-                    .context("Invalid cast to FixedSizeListArray")?;
-                (0..list.len())
-                    .map(|i| {
-                        let item = list.value(i);
-                        if let Some(floats) =
-                            item.as_any().downcast_ref::<arrow::array::Float32Array>()
-                        {
-                            floats.values().to_vec()
-                        } else if let Some(doubles) =
-                            item.as_any().downcast_ref::<arrow::array::Float64Array>()
-                        {
-                            doubles.values().iter().map(|&d| d as f32).collect()
-                        } else {
-                            vec![0.0; item.len()]
-                        }
-                    })
-                    .collect()
-            }
-            arrow::datatypes::DataType::List(_) => {
-                let list = col
-                    .as_any()
-                    .downcast_ref::<arrow::array::ListArray>()
-                    .context("Invalid cast to ListArray")?;
-                (0..list.len())
-                    .map(|i| {
-                        let item = list.value(i);
-                        if let Some(floats) =
-                            item.as_any().downcast_ref::<arrow::array::Float32Array>()
-                        {
-                            floats.values().to_vec()
-                        } else if let Some(doubles) =
-                            item.as_any().downcast_ref::<arrow::array::Float64Array>()
-                        {
-                            doubles.values().iter().map(|&d| d as f32).collect()
-                        } else {
-                            vec![0.0; item.len()]
-                        }
-                    })
-                    .collect()
-            }
-            _ => return Ok(candidates),
-        };
-
-        if vectors.len() != sorted_row_ids.len() {
+        if col.len() != sorted_row_ids.len() {
             tracing::warn!(
                 "rescore_candidates vector count mismatch: got {} vectors, expected {} row IDs",
-                vectors.len(),
+                col.len(),
                 sorted_row_ids.len()
             );
             return Ok(candidates);
         }
 
-        for (i, v) in vectors.iter().enumerate() {
-            let row_id = sorted_row_ids[i] as usize;
-            let exact_dist = match metric {
-                VectorMetric::L2 => crate::core::index::distance::l2_distance(v, q_vec),
-                VectorMetric::Cosine => crate::core::index::distance::cosine_distance(v, q_vec),
-                VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(v, q_vec),
-                VectorMetric::L1 => crate::core::index::distance::l1_distance(v, q_vec),
-                _ => candidates
-                    .iter()
-                    .find(|(id, _)| *id == row_id)
-                    .map(|(_, d)| *d)
-                    .unwrap_or(0.0),
+        for (i, &row_id_u32) in sorted_row_ids.iter().enumerate() {
+            let Some(v) = Self::extract_vector_at(col.as_ref(), i, q_vec.len()) else {
+                continue;
             };
-            rescored.push((row_id, exact_dist));
+            let exact_dist = Self::compute_vector_distance_f32(&v, q_vec, metric);
+            rescored.push((row_id_u32 as usize, exact_dist));
         }
 
         rescored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -2885,20 +3171,20 @@ impl HybridReader {
         target_clusters: Option<&[usize]>,
         probes: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
-        let idx_path_str = idx_info.file_path.clone();
+        let idx_path_str = self.resolve_index_path(&idx_info.file_path);
 
         // A Puffin container is loaded as one index per (column, algorithm);
         // keying by blob offset would give each cluster blob its own entry and
         // re-materialize the entire bundle on every miss.
         let cache_key = if idx_info.blob_offset.is_some() {
             HnswIvfIndex::puffin_vector_cache_key(
-                &self.root_uri,
+                self.cache_root(),
                 &idx_path_str,
                 &idx_info.column_name,
                 &idx_info.algorithm,
             )
         } else {
-            format!("{}/{}", self.root_uri, idx_path_str)
+            format!("{}/{}", self.cache_root(), idx_path_str)
         };
 
         // Load HNSW-IVF index. When the manifest entry carries a Puffin blob

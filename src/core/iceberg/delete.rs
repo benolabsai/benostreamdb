@@ -85,6 +85,14 @@ impl PositionDeleteReader {
         Ok(full_map)
     }
 
+    fn path_matches(a: &str, b: &str) -> bool {
+        let a = a.trim_start_matches('/');
+        let b = b.trim_start_matches('/');
+        a == b
+            || a.strip_suffix(b).is_some_and(|p| p.ends_with('/'))
+            || b.strip_suffix(a).is_some_and(|p| p.ends_with('/'))
+    }
+
     /// CPU-bound: filter a parsed delete-file map to `target_data_file_path`
     /// and build a `RoaringBitmap` of the deleted positions.
     ///
@@ -101,10 +109,7 @@ impl PositionDeleteReader {
 
         for (fp, positions) in full_map.iter() {
             let fp_clean = fp.strip_prefix("file://").unwrap_or(fp);
-            if fp_clean == target_clean
-                || target_clean.ends_with(fp_clean)
-                || fp_clean.ends_with(target_clean)
-            {
+            if Self::path_matches(fp_clean, target_clean) {
                 for &pos in positions {
                     if pos >= 0 && pos <= u32::MAX as i64 {
                         bm.insert(pos as u32);
@@ -129,10 +134,7 @@ impl PositionDeleteReader {
 
         for (fp, positions) in full_map.iter() {
             let fp_clean = fp.strip_prefix("file://").unwrap_or(fp);
-            if fp_clean == target_clean
-                || target_clean.ends_with(fp_clean)
-                || fp_clean.ends_with(target_clean)
-            {
+            if Self::path_matches(fp_clean, target_clean) {
                 for pos in positions {
                     deleted_positions.insert(*pos);
                 }
@@ -502,8 +504,12 @@ impl IcebergDeleteWriter {
     /// Build the full URI recorded in the manifest for a delete file written at
     /// `object_path` (relative to the table root / store prefix).
     fn metadata_uri(&self, object_path: &str) -> String {
-        let full = format!("{}/{}", self.base_path, object_path);
-        if full.starts_with("file://") || full.starts_with("s3://") {
+        let full = format!(
+            "{}/{}",
+            self.base_path.trim_end_matches('/'),
+            object_path.trim_start_matches('/')
+        );
+        if full.contains("://") {
             full
         } else {
             format!("file://{}", full)

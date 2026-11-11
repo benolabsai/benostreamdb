@@ -108,6 +108,470 @@ fn with_parquet_field_ids(schema: &arrow::datatypes::Schema) -> arrow::datatypes
     )
 }
 
+pub(crate) fn segment_id_from_path(path: &str) -> &str {
+    let name = path.split('/').next_back().unwrap_or(path);
+    let name = name.strip_suffix(".puffin").unwrap_or(name);
+    name.strip_suffix(".parquet").unwrap_or(name)
+}
+
+pub(crate) fn ensure_prefix(prefix: &str, path: &str) -> String {
+    let clean = path.trim_start_matches('/');
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty()
+        || clean == prefix
+        || clean
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+    {
+        clean.to_string()
+    } else {
+        format!("{}/{}", prefix, clean)
+    }
+}
+
+pub(crate) fn relativize_against(root_uri: &str, file_path: &str) -> String {
+    if !file_path.starts_with('/') && !file_path.contains("://") {
+        return file_path.to_string();
+    }
+    fn strip_scheme(s: &str) -> &str {
+        s.strip_prefix("file://").unwrap_or(s)
+    }
+    let root = strip_scheme(root_uri).trim_end_matches('/');
+    let p = strip_scheme(file_path);
+    if !root.is_empty() {
+        if let Some(rest) = p.strip_prefix(root) {
+            if rest.is_empty() || rest.starts_with('/') {
+                return rest.trim_start_matches('/').to_string();
+            }
+        }
+    }
+    if file_path.contains("://") {
+        if let Ok(url) = url::Url::parse(file_path) {
+            return url.path().trim_start_matches('/').to_string();
+        }
+    }
+    file_path
+        .split('/')
+        .next_back()
+        .unwrap_or(file_path)
+        .to_string()
+}
+
+pub(crate) fn resolve_entry_index_path(entry_file_path: &str, index_file_path: &str) -> String {
+    if index_file_path.contains("://") || index_file_path.starts_with('/') {
+        return index_file_path.to_string();
+    }
+    let dir_path = match entry_file_path.rfind('/') {
+        Some(pos) => &entry_file_path[..pos],
+        None => "",
+    };
+    ensure_prefix(dir_path, index_file_path)
+}
+
+/// Returns `true` when `path` looks like an actual table data Parquet file
+/// (including Hive-partitioned `col=val/seg_*.parquet`), excluding manifests,
+/// WAL segments, delete files, and secondary index artifacts.
+pub(crate) fn is_data_parquet_path(path: &str) -> bool {
+    if !path.ends_with(".parquet") {
+        return false;
+    }
+    let normalized = path.trim_start_matches('/');
+    if normalized
+        .split('/')
+        .any(|comp| matches!(comp, "_manifest" | "_wal" | "deletes" | "metadata"))
+    {
+        return false;
+    }
+    let file_name = normalized.rsplit('/').next().unwrap_or(normalized);
+    !file_name.starts_with("del-pos-")
+        && !file_name.starts_with("del-eq-")
+        && !file_name.ends_with("_deletes.parquet")
+        && !file_name.ends_with(".inv.parquet")
+        && !file_name.ends_with(".idx.parquet")
+        && !file_name.ends_with(".centroids.parquet")
+        && !file_name.ends_with(".mapping.parquet")
+        && !file_name.contains(".hnsw.")
+        && !file_name.contains(".cluster_")
+}
+
+pub(crate) fn normalize_index_family(category: &str) -> &str {
+    match category {
+        "lexical" | "inverted" | "bm25" => "lexical",
+        other => other,
+    }
+}
+
+pub(crate) enum ScalarPostingMap {
+    Int8(std::collections::BTreeMap<i8, Vec<u32>>),
+    Int16(std::collections::BTreeMap<i16, Vec<u32>>),
+    Int32(std::collections::BTreeMap<i32, Vec<u32>>),
+    Int64(std::collections::BTreeMap<i64, Vec<u32>>),
+    UInt8(std::collections::BTreeMap<u8, Vec<u32>>),
+    UInt16(std::collections::BTreeMap<u16, Vec<u32>>),
+    UInt32(std::collections::BTreeMap<u32, Vec<u32>>),
+    UInt64(std::collections::BTreeMap<u64, Vec<u32>>),
+    Float32(HashMap<u32, Vec<u32>>),
+    Float64(HashMap<u64, Vec<u32>>),
+    Date32(std::collections::BTreeMap<i32, Vec<u32>>),
+    TimestampDay(std::collections::BTreeMap<i32, Vec<u32>>),
+    Boolean(std::collections::BTreeMap<bool, Vec<u32>>),
+    Time32 {
+        unit: arrow::datatypes::TimeUnit,
+        postings: std::collections::BTreeMap<i32, Vec<u32>>,
+    },
+    Time64 {
+        unit: arrow::datatypes::TimeUnit,
+        postings: std::collections::BTreeMap<i64, Vec<u32>>,
+    },
+    Binary(std::collections::BTreeMap<Vec<u8>, Vec<u32>>),
+    Decimal128 {
+        precision: u8,
+        scale: i8,
+        postings: std::collections::BTreeMap<i128, Vec<u32>>,
+    },
+}
+
+fn encode_delta_row_ids(
+    mut row_ids: Vec<u32>,
+    list_builder: &mut arrow::array::ListBuilder<arrow::array::UInt32Builder>,
+) {
+    row_ids.sort_unstable();
+    row_ids.dedup();
+    let mut last_id = 0u32;
+    for row_id in row_ids {
+        list_builder.values().append_value(row_id - last_id);
+        last_id = row_id;
+    }
+    list_builder.append(true);
+}
+
+fn scalar_inv_schema(key_type: arrow::datatypes::DataType) -> arrow::datatypes::SchemaRef {
+    Arc::new(arrow::datatypes::Schema::new(vec![
+        arrow::datatypes::Field::new("key", key_type, false),
+        arrow::datatypes::Field::new(
+            "row_ids",
+            arrow::datatypes::DataType::List(Arc::new(arrow::datatypes::Field::new(
+                "item",
+                arrow::datatypes::DataType::UInt32,
+                true,
+            ))),
+            false,
+        ),
+    ]))
+}
+
+impl ScalarPostingMap {
+    fn into_parquet_bytes(self) -> Result<(Vec<u8>, bool)> {
+        let mut list_builder = arrow::array::ListBuilder::new(arrow::array::UInt32Builder::new());
+        let mut is_timestamp_day = false;
+
+        let (key_array, key_type): (arrow::array::ArrayRef, arrow::datatypes::DataType) = match self
+        {
+            Self::Int8(map) => {
+                let mut b = arrow::array::Int8Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Int8)
+            }
+            Self::Int16(map) => {
+                let mut b = arrow::array::Int16Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Int16)
+            }
+            Self::Int32(map) => {
+                let mut b = arrow::array::Int32Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Int32)
+            }
+            Self::Int64(map) => {
+                let mut b = arrow::array::Int64Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Int64)
+            }
+            Self::UInt8(map) => {
+                let mut b = arrow::array::UInt8Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::UInt8)
+            }
+            Self::UInt16(map) => {
+                let mut b = arrow::array::UInt16Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::UInt16)
+            }
+            Self::UInt32(map) => {
+                let mut b = arrow::array::UInt32Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::UInt32)
+            }
+            Self::UInt64(map) => {
+                let mut b = arrow::array::UInt64Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::UInt64)
+            }
+            Self::Float32(map) => {
+                let mut entries: Vec<(u32, Vec<u32>)> = map.into_iter().collect();
+                entries
+                    .sort_unstable_by(|a, b| f32::from_bits(a.0).total_cmp(&f32::from_bits(b.0)));
+                let mut b = arrow::array::Float32Builder::with_capacity(entries.len());
+                for (bits, rows) in entries {
+                    b.append_value(f32::from_bits(bits));
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Float32)
+            }
+            Self::Float64(map) => {
+                let mut entries: Vec<(u64, Vec<u32>)> = map.into_iter().collect();
+                entries
+                    .sort_unstable_by(|a, b| f64::from_bits(a.0).total_cmp(&f64::from_bits(b.0)));
+                let mut b = arrow::array::Float64Builder::with_capacity(entries.len());
+                for (bits, rows) in entries {
+                    b.append_value(f64::from_bits(bits));
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Float64)
+            }
+            Self::Date32(map) => {
+                let mut b = arrow::array::Date32Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Date32)
+            }
+            Self::TimestampDay(map) => {
+                is_timestamp_day = true;
+                let mut b = arrow::array::Date32Builder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Date32)
+            }
+            Self::Boolean(map) => {
+                let mut b = arrow::array::BooleanBuilder::with_capacity(map.len());
+                for (k, rows) in map {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Boolean)
+            }
+            Self::Time32 { unit, postings } => match unit {
+                arrow::datatypes::TimeUnit::Second => {
+                    let mut b = arrow::array::Time32SecondBuilder::with_capacity(postings.len());
+                    for (k, rows) in postings {
+                        b.append_value(k);
+                        encode_delta_row_ids(rows, &mut list_builder);
+                    }
+                    (
+                        Arc::new(b.finish()),
+                        arrow::datatypes::DataType::Time32(unit),
+                    )
+                }
+                arrow::datatypes::TimeUnit::Millisecond => {
+                    let mut b =
+                        arrow::array::Time32MillisecondBuilder::with_capacity(postings.len());
+                    for (k, rows) in postings {
+                        b.append_value(k);
+                        encode_delta_row_ids(rows, &mut list_builder);
+                    }
+                    (
+                        Arc::new(b.finish()),
+                        arrow::datatypes::DataType::Time32(unit),
+                    )
+                }
+                other => anyhow::bail!("Unsupported Time32 unit: {:?}", other),
+            },
+            Self::Time64 { unit, postings } => match unit {
+                arrow::datatypes::TimeUnit::Microsecond => {
+                    let mut b =
+                        arrow::array::Time64MicrosecondBuilder::with_capacity(postings.len());
+                    for (k, rows) in postings {
+                        b.append_value(k);
+                        encode_delta_row_ids(rows, &mut list_builder);
+                    }
+                    (
+                        Arc::new(b.finish()),
+                        arrow::datatypes::DataType::Time64(unit),
+                    )
+                }
+                arrow::datatypes::TimeUnit::Nanosecond => {
+                    let mut b =
+                        arrow::array::Time64NanosecondBuilder::with_capacity(postings.len());
+                    for (k, rows) in postings {
+                        b.append_value(k);
+                        encode_delta_row_ids(rows, &mut list_builder);
+                    }
+                    (
+                        Arc::new(b.finish()),
+                        arrow::datatypes::DataType::Time64(unit),
+                    )
+                }
+                other => anyhow::bail!("Unsupported Time64 unit: {:?}", other),
+            },
+            Self::Binary(map) => {
+                let mut b = arrow::array::BinaryBuilder::new();
+                for (k, rows) in map {
+                    b.append_value(&k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (Arc::new(b.finish()), arrow::datatypes::DataType::Binary)
+            }
+            Self::Decimal128 {
+                precision,
+                scale,
+                postings,
+            } => {
+                let mut b = arrow::array::Decimal128Builder::with_capacity(postings.len())
+                    .with_precision_and_scale(precision, scale)?;
+                for (k, rows) in postings {
+                    b.append_value(k);
+                    encode_delta_row_ids(rows, &mut list_builder);
+                }
+                (
+                    Arc::new(b.finish()),
+                    arrow::datatypes::DataType::Decimal128(precision, scale),
+                )
+            }
+        };
+
+        let inv_schema = scalar_inv_schema(key_type);
+        let list_array = Arc::new(list_builder.finish());
+        let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
+
+        let mut kv_meta = vec![parquet::file::metadata::KeyValue {
+            key: "analyzer".to_string(),
+            value: Some("identity".to_string()),
+        }];
+        if is_timestamp_day {
+            kv_meta.push(parquet::file::metadata::KeyValue {
+                key: "source_type".to_string(),
+                value: Some("timestamp".to_string()),
+            });
+        }
+
+        let mut buffer = Vec::new();
+        let props = parquet::file::properties::WriterProperties::builder()
+            .set_key_value_metadata(Some(kv_meta))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, inv_schema, Some(props))?;
+        writer.write(&inv_batch)?;
+        writer.close()?;
+
+        Ok((buffer, is_timestamp_day))
+    }
+}
+
+async fn read_puffin_footer_blobs(
+    store: &dyn ObjectStore,
+    store_path: &object_store::path::Path,
+    local_path: Option<&str>,
+) -> Result<Option<Vec<crate::core::puffin::PuffinBlobMetadata>>> {
+    if let Some(lp) = local_path {
+        if std::path::Path::new(lp).exists() {
+            let file = File::open(lp)?;
+            let reader = crate::core::puffin::PuffinReader::new(file)?;
+            return Ok(Some(reader.footer().blobs.clone()));
+        }
+    }
+    let meta = match store.head(store_path).await {
+        Ok(m) => m,
+        Err(e) if e.to_string().contains("not found") || e.to_string().contains("404") => {
+            return Ok(None);
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let size = meta.size;
+    if size < 12 {
+        return Ok(None);
+    }
+    let tail = store.get_range(store_path, (size - 12)..size).await?;
+    if tail.len() != 12 || tail[8..12] != crate::core::puffin::PUFFIN_MAGIC {
+        anyhow::bail!("Invalid Puffin magic at end of file {}", store_path);
+    }
+    let footer_size = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]) as u64;
+    let flags = u32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]);
+    if footer_size + 12 > size {
+        anyhow::bail!("Corrupt Puffin footer size in {}", store_path);
+    }
+    let footer_start = size - 12 - footer_size;
+    let footer_bytes = store
+        .get_range(store_path, footer_start..(size - 12))
+        .await?;
+    let footer_payload = if flags & 0x01 != 0 {
+        zstd::decode_all(&footer_bytes[..])
+            .context("Failed to decompress Puffin footer with Zstd")?
+    } else {
+        footer_bytes.to_vec()
+    };
+    let footer: crate::core::puffin::PuffinFooter =
+        serde_json::from_slice(&footer_payload).context("Failed to parse Puffin footer JSON")?;
+    Ok(Some(footer.blobs))
+}
+
+async fn read_puffin_blob_bytes(
+    store: &dyn ObjectStore,
+    store_path: &object_store::path::Path,
+    local_path: Option<&str>,
+    blob: &crate::core::puffin::PuffinBlobMetadata,
+) -> Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut data = if let Some(lp) = local_path {
+        let mut f = File::open(lp)?;
+        f.seek(SeekFrom::Start(blob.offset as u64))?;
+        let mut buf = vec![0u8; blob.length as usize];
+        f.read_exact(&mut buf)?;
+        buf
+    } else {
+        store
+            .get_range(
+                store_path,
+                (blob.offset as u64)..((blob.offset + blob.length) as u64),
+            )
+            .await?
+            .to_vec()
+    };
+    if let Some(ref codec) = blob.compression_codec {
+        if codec == "zstd" {
+            data = zstd::decode_all(&data[..])
+                .context("Failed to decompress preserved Puffin blob with Zstd")?;
+        } else {
+            anyhow::bail!(
+                "Unsupported compression codec '{}' on preserved Puffin blob",
+                codec
+            );
+        }
+    }
+    Ok(data)
+}
+
+pub(crate) type JsonPathPostingData = (
+    std::collections::BTreeMap<(String, String), Vec<u32>>,
+    Vec<String>,
+);
+
 pub struct HybridSegmentWriter {
     pub(crate) config: SegmentConfig,
     // Store paths of created files for upload tracking
@@ -132,6 +596,10 @@ pub struct HybridSegmentWriter {
     // positions per doc instead of counting duplicate row_ids).
     pub(crate) inverted_data:
         parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<(u32, u32)>>>>,
+    pub(crate) scalar_inverted_data: parking_lot::Mutex<HashMap<String, ScalarPostingMap>>,
+    pub(crate) json_path_data: parking_lot::Mutex<HashMap<String, JsonPathPostingData>>,
+    pub(crate) preserve_existing_index_files:
+        parking_lot::Mutex<Vec<crate::core::manifest::IndexFile>>,
     pub index_metadata: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) vector_data: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) graph_data: parking_lot::Mutex<HashMap<String, String>>,
@@ -143,6 +611,7 @@ pub struct HybridSegmentWriter {
     /// `Table::rebuild_indexes_with_global_centroids` so every segment in one
     /// rebuild pass shares the same cluster ids.
     pub(crate) global_centroids: parking_lot::Mutex<HashMap<String, Vec<Vec<f32>>>>,
+    pub(crate) remote_staging_dir: std::sync::OnceLock<std::path::PathBuf>,
 }
 
 impl HybridSegmentWriter {
@@ -156,13 +625,39 @@ impl HybridSegmentWriter {
             primary_key: Vec::new(),
             index_configs: HashMap::new(),
             inverted_data: parking_lot::Mutex::new(HashMap::new()),
+            scalar_inverted_data: parking_lot::Mutex::new(HashMap::new()),
+            json_path_data: parking_lot::Mutex::new(HashMap::new()),
+            preserve_existing_index_files: parking_lot::Mutex::new(Vec::new()),
             index_metadata: parking_lot::Mutex::new(HashMap::new()),
             vector_data: parking_lot::Mutex::new(HashMap::new()),
             graph_data: parking_lot::Mutex::new(HashMap::new()),
             file_checksum: parking_lot::Mutex::new(None),
             puffin_index_entries: parking_lot::Mutex::new(Vec::new()),
             global_centroids: parking_lot::Mutex::new(HashMap::new()),
+            remote_staging_dir: std::sync::OnceLock::new(),
         }
+    }
+
+    pub fn with_preserve_existing_index_files(
+        self,
+        existing: Vec<crate::core::manifest::IndexFile>,
+    ) -> Self {
+        *self.preserve_existing_index_files.lock() = existing;
+        self
+    }
+
+    fn get_or_init_remote_staging_dir(&self) -> Result<&std::path::PathBuf> {
+        if let Some(dir) = self.remote_staging_dir.get() {
+            return Ok(dir);
+        }
+        let temp_dir = std::env::temp_dir()
+            .join("benostream_staging")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&temp_dir)?;
+        let _ = self.remote_staging_dir.set(temp_dir);
+        self.remote_staging_dir
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("Failed to initialize remote staging directory"))
     }
 
     /// Assign this writer's vector builds against a table-level centroid set.
@@ -449,6 +944,13 @@ impl HybridSegmentWriter {
 
         let files = self.get_generated_files();
         let mut final_paths = Vec::new();
+        let rel_dir_from_parquet = self.config.parquet_path.as_deref().and_then(|p| {
+            if !p.contains("://") && !p.starts_with('/') {
+                Some(p.rfind('/').map(|pos| &p[..pos]).unwrap_or(""))
+            } else {
+                None
+            }
+        });
 
         for local_path in files {
             if !local_path.contains("benostream_staging") {
@@ -461,23 +963,34 @@ impl HybridSegmentWriter {
                 .split('/')
                 .next_back()
                 .context("Missing filename")?;
-            let remote_path = if self.config.base_path.contains("://") {
-                let mut base = self.config.base_path.clone();
-                if !base.ends_with('/') {
-                    base.push('/');
-                }
-                format!("{}{}", base, filename)
-            } else {
-                format!("{}/{}", self.config.base_path, filename)
-            };
 
-            // Parse remote_path to object_store::path::Path
-            // e.g. s3://bucket/data/seg.parquet -> data/seg.parquet
-            let store_path = if remote_path.contains("://") {
-                let url = url::Url::parse(&remote_path)?;
-                object_store::path::Path::from(url.path().trim_start_matches('/'))
+            let (store_path, output_path) = if let Some(rel_dir) = rel_dir_from_parquet {
+                let rel_path = if rel_dir.is_empty() {
+                    filename.to_string()
+                } else {
+                    format!("{}/{}", rel_dir, filename)
+                };
+                (object_store::path::Path::from(rel_path.as_str()), rel_path)
             } else {
-                object_store::path::Path::from(remote_path.clone())
+                let remote_path = if self.config.base_path.contains("://") {
+                    let mut base = self.config.base_path.clone();
+                    if !base.ends_with('/') {
+                        base.push('/');
+                    }
+                    format!("{}{}", base, filename)
+                } else {
+                    format!("{}/{}", self.config.base_path, filename)
+                };
+
+                // Parse remote_path to object_store::path::Path
+                // e.g. s3://bucket/data/seg.parquet -> data/seg.parquet
+                let sp = if remote_path.contains("://") {
+                    let url = url::Url::parse(&remote_path)?;
+                    object_store::path::Path::from(url.path().trim_start_matches('/'))
+                } else {
+                    object_store::path::Path::from(remote_path.clone())
+                };
+                (sp, remote_path)
             };
 
             let data = std::fs::read(&local_path)?;
@@ -486,7 +999,7 @@ impl HybridSegmentWriter {
             // Cleanup local staging file
             let _ = std::fs::remove_file(&local_path);
 
-            final_paths.push(remote_path);
+            final_paths.push(output_path);
         }
 
         // Update generated_files with final paths
@@ -529,26 +1042,40 @@ impl HybridSegmentWriter {
         let puffin_filename = format!("{}.puffin", self.config.segment_id);
         let puffin_path_str = format!("{}{}", parent_prefix, puffin_filename);
 
-        // Staging file on disk for streaming Puffin serialization (avoids gigabytes of RAM allocation).
+        let is_store_relative = self.config.parquet_path.as_ref().is_some_and(|p| {
+            !p.contains("://")
+                && !p.starts_with('/')
+                && !puffin_path_str.contains("://")
+                && !puffin_path_str.starts_with('/')
+        });
+        let is_local_file =
+            !puffin_path_str.contains("://") || puffin_path_str.starts_with("file://");
         let local_puffin_target = puffin_path_str
             .strip_prefix("file://")
             .unwrap_or(&puffin_path_str);
-        let staging_puffin_path =
-            if let Some(parent) = std::path::Path::new(local_puffin_target).parent() {
-                if parent.exists() {
-                    format!("{}.tmp.puffin", local_puffin_target)
-                } else {
-                    std::env::temp_dir()
-                        .join(format!("{}.tmp.puffin", self.config.segment_id))
-                        .to_string_lossy()
-                        .to_string()
-                }
-            } else {
-                std::env::temp_dir()
-                    .join(format!("{}.tmp.puffin", self.config.segment_id))
-                    .to_string_lossy()
-                    .to_string()
-            };
+        let use_local_atomic = !is_store_relative
+            && is_local_file
+            && std::path::Path::new(local_puffin_target)
+                .parent()
+                .is_some_and(|p| !p.as_os_str().is_empty() && p.exists());
+
+        // Staging file on disk for streaming Puffin serialization (avoids gigabytes of RAM allocation).
+        let staging_puffin_path = if use_local_atomic {
+            format!(
+                "{}_{}.tmp.puffin",
+                local_puffin_target,
+                uuid::Uuid::new_v4()
+            )
+        } else {
+            std::env::temp_dir()
+                .join(format!(
+                    "{}_{}.tmp.puffin",
+                    self.config.segment_id,
+                    uuid::Uuid::new_v4()
+                ))
+                .to_string_lossy()
+                .to_string()
+        };
 
         let staging_file = std::fs::File::create(&staging_puffin_path)?;
         let mut puffin_writer = crate::core::puffin::PuffinIndexWriter::new(
@@ -969,63 +1496,177 @@ impl HybridSegmentWriter {
             let _ = std::fs::remove_file(&tmp_path);
         }
 
-        // 4. Pack loose scalar inverted-index files (Int32/Int64/Float/Date/
-        // Bool) into the Puffin bundle via streaming reader. These arms of
-        // `build_inverted_index` serialize directly to a staging file rather
-        // than the in-memory `inverted_data` map, so they are collected here
-        // and removed from the upload list.
-        let loose_inv: Vec<String> = {
-            let files = self.generated_files.lock();
-            files
-                .iter()
-                .filter(|f| f.ends_with(".inv.parquet"))
-                .cloned()
-                .collect()
+        // 4. Pack accumulated scalar inverted-index buffers directly into Puffin
+        // without intermediate staging files or single-batch clobbering.
+        let scalar_inverted_data = {
+            let mut lock = self.scalar_inverted_data.lock();
+            std::mem::take(&mut *lock)
         };
-        for path in loose_inv {
-            let filename = path.split('/').next_back().unwrap_or(&path);
-            let col_name = filename.split('.').nth(1).unwrap_or("unknown").to_string();
-            puffin_writer.add_index_blob_from_file(
+        for (col_name, scalar_map) in scalar_inverted_data {
+            let (buffer, is_timestamp_day) = scalar_map.into_parquet_bytes()?;
+            let mut props = HashMap::new();
+            props.insert("analyzer".to_string(), "identity".to_string());
+            if is_timestamp_day {
+                props.insert("source_type".to_string(), "timestamp".to_string());
+            }
+            puffin_writer.add_index_blob(
                 "lexical",
                 "inverted",
                 &col_name,
                 crate::core::puffin::PUFFIN_BLOB_LEXICAL_BM25,
-                &path,
+                &buffer,
                 vec![],
-                HashMap::new(),
+                props,
             )?;
-            let _ = std::fs::remove_file(&path);
-            let mut files = self.generated_files.lock();
-            files.retain(|f| f != &path);
+            tracing::info!(
+                "  Scalar Inverted Index packed into Puffin bundle for column '{}'",
+                col_name
+            );
         }
 
-        // 4b. Pack JSON-path overlay files (`<segment>.<col>.jsonpath.parquet`)
-        // into the Puffin bundle via streaming reader so they get a manifest
-        // `IndexFile` entry with category `json_path`. Without this the file is
-        // uploaded but never registered, and the reader cannot find it.
-        let loose_jsonpath: Vec<String> = {
-            let files = self.generated_files.lock();
-            files
-                .iter()
-                .filter(|f| f.ends_with(".jsonpath.parquet"))
-                .cloned()
-                .collect()
+        // 4b. Pack accumulated JSON-path overlays into Puffin with accurate
+        // segment-wide row_ids and metadata.
+        let json_path_data = {
+            let mut lock = self.json_path_data.lock();
+            std::mem::take(&mut *lock)
         };
-        for path in loose_jsonpath {
-            let filename = path.split('/').next_back().unwrap_or(&path);
-            let col_name = filename.split('.').nth(1).unwrap_or("unknown").to_string();
-            puffin_writer.add_index_blob_from_file(
+        for (col_name, (postings, covered)) in json_path_data {
+            let buffer =
+                crate::core::index::json_path::build_json_path_parquet_bytes(postings, covered)?;
+            puffin_writer.add_index_blob(
                 "json_path",
                 "json_path",
                 &col_name,
                 crate::core::puffin::PUFFIN_BLOB_JSON_PATH,
-                &path,
+                &buffer,
                 vec![],
                 HashMap::new(),
             )?;
-            let _ = std::fs::remove_file(&path);
-            let mut files = self.generated_files.lock();
-            files.retain(|f| f != &path);
+            tracing::info!(
+                "  JSON-path index packed into Puffin bundle for column '{}'",
+                col_name
+            );
+        }
+
+        // 5. Preserve untouched blobs from an existing Puffin bundle when
+        // backfilling or selectively reindexing a subset of columns/families.
+        let existing_index_files = {
+            let mut lock = self.preserve_existing_index_files.lock();
+            std::mem::take(&mut *lock)
+        };
+        if !existing_index_files.is_empty() {
+            let rel_pq = self.config.parquet_path.as_deref().unwrap_or("");
+            let rebuilt_families: std::collections::HashSet<(String, String)> = puffin_writer
+                .entries()
+                .iter()
+                .map(|e| {
+                    (
+                        e.column_name.clone(),
+                        normalize_index_family(&e.index_category).to_string(),
+                    )
+                })
+                .collect();
+
+            let to_preserve: Vec<crate::core::manifest::IndexFile> = existing_index_files
+                .into_iter()
+                .filter(|old_idx| {
+                    let resolved = resolve_entry_index_path(rel_pq, &old_idx.file_path);
+                    let same_puffin = resolved == puffin_path_str
+                        || (resolved.ends_with(".puffin")
+                            && segment_id_from_path(&resolved) == self.config.segment_id);
+                    same_puffin
+                        && !rebuilt_families.contains(&(
+                            old_idx.column_name.clone(),
+                            normalize_index_family(&old_idx.index_category).to_string(),
+                        ))
+                })
+                .collect();
+
+            if !to_preserve.is_empty() {
+                let old_store_path = if puffin_path_str.contains("://") {
+                    let url = url::Url::parse(&puffin_path_str)?;
+                    object_store::path::Path::from(url.path().trim_start_matches('/'))
+                } else {
+                    object_store::path::Path::from(puffin_path_str.as_str())
+                };
+                let local_target_opt = if use_local_atomic {
+                    Some(local_puffin_target)
+                } else {
+                    None
+                };
+                if let Some(footer_blobs) =
+                    read_puffin_footer_blobs(store.as_ref(), &old_store_path, local_target_opt)
+                        .await?
+                {
+                    let mut seen_ranges = std::collections::HashSet::new();
+                    for old_idx in to_preserve {
+                        let col_marker = format!(".{}.", old_idx.column_name);
+                        let matched_blob = old_idx
+                            .blob_offset
+                            .zip(old_idx.blob_length)
+                            .and_then(|(off, len)| {
+                                footer_blobs
+                                    .iter()
+                                    .find(|b| b.offset == off && b.length == len)
+                            })
+                            .or_else(|| {
+                                footer_blobs
+                                    .iter()
+                                    .find(|b| {
+                                        old_idx.blob_type.as_deref() == Some(b.r#type.as_str())
+                                            && b.properties
+                                                .get("filename")
+                                                .is_some_and(|f| f.contains(&col_marker))
+                                    })
+                                    .or_else(|| {
+                                        footer_blobs.iter().find(|b| {
+                                            old_idx.blob_type.as_deref() == Some(b.r#type.as_str())
+                                        })
+                                    })
+                            });
+                        let Some(blob_meta) = matched_blob else {
+                            continue;
+                        };
+                        if !seen_ranges.insert((blob_meta.offset, blob_meta.length)) {
+                            continue;
+                        }
+                        let blob_type = old_idx.blob_type.as_deref().unwrap_or(&blob_meta.r#type);
+                        if blob_meta.compression_codec.is_none() && local_target_opt.is_none() {
+                            puffin_writer
+                                .add_index_blob_from_store_range(
+                                    store.as_ref(),
+                                    &old_store_path,
+                                    blob_meta.offset as u64,
+                                    blob_meta.length as u64,
+                                    &old_idx.index_category,
+                                    &old_idx.algorithm,
+                                    &old_idx.column_name,
+                                    blob_type,
+                                    blob_meta.fields.clone(),
+                                    blob_meta.properties.clone(),
+                                )
+                                .await?;
+                        } else {
+                            let bytes = read_puffin_blob_bytes(
+                                store.as_ref(),
+                                &old_store_path,
+                                local_target_opt,
+                                blob_meta,
+                            )
+                            .await?;
+                            puffin_writer.add_index_blob(
+                                &old_idx.index_category,
+                                &old_idx.algorithm,
+                                &old_idx.column_name,
+                                blob_type,
+                                &bytes,
+                                blob_meta.fields.clone(),
+                                blob_meta.properties.clone(),
+                            )?;
+                        }
+                    }
+                }
+            }
         }
 
         let (mut buf_writer, puffin_entries) = puffin_writer.finish()?;
@@ -1033,20 +1674,9 @@ impl HybridSegmentWriter {
         buf_writer.flush()?;
         drop(buf_writer);
 
-        let is_local_file =
-            !puffin_path_str.contains("://") || puffin_path_str.starts_with("file://");
-        let local_dest = puffin_path_str
-            .strip_prefix("file://")
-            .unwrap_or(&puffin_path_str);
-
-        if is_local_file
-            && std::path::Path::new(local_dest)
-                .parent()
-                .map(|p| p.exists())
-                .unwrap_or(false)
-        {
-            // Local lakehouse: zero-copy atomic rename on disk!
-            std::fs::rename(&staging_puffin_path, local_dest)?;
+        if use_local_atomic {
+            // Local lakehouse (with non-relative path): zero-copy atomic rename on disk!
+            std::fs::rename(&staging_puffin_path, local_puffin_target)?;
         } else {
             let store_path = if puffin_path_str.contains("://") {
                 let url = url::Url::parse(&puffin_path_str)?;
@@ -1187,14 +1817,11 @@ impl HybridSegmentWriter {
                 graph_tasks
                     .into_par_iter()
                     .try_for_each(|(col_name, src_col, dst_col)| {
-                        let is_remote = self.config.base_path.contains("://")
-                            && !self.config.base_path.starts_with("file://");
+                        let is_remote = self.config.base_path.is_empty()
+                            || (self.config.base_path.contains("://")
+                                && !self.config.base_path.starts_with("file://"));
                         let local_staging_dir = if is_remote {
-                            let temp_dir = std::env::temp_dir()
-                                .join("benostream_staging")
-                                .join(uuid::Uuid::new_v4().to_string());
-                            std::fs::create_dir_all(&temp_dir)?;
-                            temp_dir
+                            self.get_or_init_remote_staging_dir()?.clone()
                         } else {
                             let path = self
                                 .config
@@ -1207,8 +1834,6 @@ impl HybridSegmentWriter {
                             }
                             p
                         };
-
-                        std::fs::create_dir_all(&local_staging_dir)?;
 
                         self.build_graph_index(
                             &col_name,
@@ -1296,15 +1921,12 @@ impl HybridSegmentWriter {
             return Ok(());
         }
 
-        // Create a local staging directory if base_path is a URI
-        let is_remote =
-            self.config.base_path.contains("://") && !self.config.base_path.starts_with("file://");
+        // Create a local staging directory if base_path is empty or a remote URI
+        let is_remote = self.config.base_path.is_empty()
+            || (self.config.base_path.contains("://")
+                && !self.config.base_path.starts_with("file://"));
         let local_staging_dir = if is_remote {
-            let temp_dir = std::env::temp_dir()
-                .join("benostream_staging")
-                .join(uuid::Uuid::new_v4().to_string());
-            std::fs::create_dir_all(&temp_dir)?;
-            temp_dir
+            self.get_or_init_remote_staging_dir()?.clone()
         } else {
             let path = self
                 .config
@@ -1515,6 +2137,120 @@ mod tests {
             types.contains(&crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_GRAPH),
             "Puffin bundle should contain the vector HNSW graph (has {types:?})"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn segment_path_helpers_work_across_schemes() {
+        assert_eq!(
+            segment_id_from_path("file:///tmp/tbl/cat=a/seg_1.parquet"),
+            "seg_1"
+        );
+        assert_eq!(segment_id_from_path("cat=a/seg_1.parquet"), "seg_1");
+        assert_eq!(segment_id_from_path("seg_1"), "seg_1");
+
+        assert_eq!(ensure_prefix("", "seg_1.puffin"), "seg_1.puffin");
+        assert_eq!(ensure_prefix("cat=a", "seg_1.puffin"), "cat=a/seg_1.puffin");
+        assert_eq!(
+            ensure_prefix("cat=a/", "cat=a/seg_1.puffin"),
+            "cat=a/seg_1.puffin"
+        );
+
+        assert_eq!(
+            relativize_against("file:///tmp/tbl", "file:///tmp/tbl/cat=a/seg_1.parquet"),
+            "cat=a/seg_1.parquet"
+        );
+        assert_eq!(
+            relativize_against("/tmp/tbl/", "/tmp/tbl/cat=a/seg_1.parquet"),
+            "cat=a/seg_1.parquet"
+        );
+        assert_eq!(
+            relativize_against("s3://bucket/tbl/", "s3://bucket/tbl/cat=a/seg_1.parquet"),
+            "cat=a/seg_1.parquet"
+        );
+        assert_eq!(
+            relativize_against("memory://tbl", "cat=a/seg_1.parquet"),
+            "cat=a/seg_1.parquet"
+        );
+        assert_eq!(
+            relativize_against("/tmp/tbl_other", "/tmp/tbl/seg_1.parquet"),
+            "seg_1.parquet"
+        );
+
+        assert_eq!(
+            resolve_entry_index_path("cat=a/seg_1.parquet", "seg_1.puffin"),
+            "cat=a/seg_1.puffin"
+        );
+        assert_eq!(
+            resolve_entry_index_path("cat=a/seg_1.parquet", "cat=a/seg_1.puffin"),
+            "cat=a/seg_1.puffin"
+        );
+        assert_eq!(
+            resolve_entry_index_path("seg_1.parquet", "seg_1.puffin"),
+            "seg_1.puffin"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_to_store_preserves_partition_prefix_on_s3_and_local() -> Result<()> {
+        let mem_store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+
+        // Remote/prefixed S3-like table URI with store-relative parquet_path under Hive partition
+        let cfg = SegmentConfig::new("s3://bucket/tbl/cat=a", "seg_part_remote")
+            .with_parquet_path("cat=a/seg_part_remote.parquet".to_string())
+            .with_index_all(true);
+        let writer = HybridSegmentWriter::new(cfg).with_store(mem_store.clone());
+        writer.write_batch(&batch)?;
+        writer.build_indexes(&batch, 0)?;
+        writer.finish_indexing().await?;
+        let uploaded = writer.upload_to_store().await?;
+        assert!(
+            uploaded
+                .iter()
+                .any(|p| p == "cat=a/seg_part_remote.parquet"),
+            "expected partitioned parquet upload, got {uploaded:?}"
+        );
+        assert!(
+            mem_store
+                .head(&object_store::path::Path::from(
+                    "cat=a/seg_part_remote.parquet"
+                ))
+                .await
+                .is_ok(),
+            "partitioned parquet missing in store"
+        );
+        assert!(
+            mem_store
+                .head(&object_store::path::Path::from(
+                    "cat=a/seg_part_remote.puffin"
+                ))
+                .await
+                .is_ok(),
+            "partitioned puffin bundle missing in store"
+        );
+
+        // Local directory with store-relative parquet_path under Hive partition
+        let dir = tempfile::tempdir()?;
+        let table_root = dir.path();
+        let part_dir = table_root.join("cat=b");
+        std::fs::create_dir_all(&part_dir)?;
+        let local_store: Arc<dyn object_store::ObjectStore> = Arc::new(
+            object_store::local::LocalFileSystem::new_with_prefix(table_root)?,
+        );
+        let local_cfg =
+            SegmentConfig::new(part_dir.to_str().context("valid utf8")?, "seg_part_local")
+                .with_parquet_path("cat=b/seg_part_local.parquet".to_string())
+                .with_index_all(true);
+        let local_writer = HybridSegmentWriter::new(local_cfg).with_store(local_store.clone());
+        local_writer.write_batch(&batch)?;
+        local_writer.build_indexes(&batch, 0)?;
+        local_writer.finish_indexing().await?;
+        assert!(table_root.join("cat=b/seg_part_local.parquet").exists());
+        assert!(table_root.join("cat=b/seg_part_local.puffin").exists());
 
         Ok(())
     }

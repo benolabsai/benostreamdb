@@ -113,6 +113,10 @@ pub struct WarmupStats {
 }
 
 impl Table {
+    fn cache_root(&self) -> &str {
+        self.uri.trim_end_matches('/')
+    }
+
     /// Warm the read-path index caches for this table.
     ///
     /// Enumerates every index file in the current manifest and loads it through
@@ -129,23 +133,20 @@ impl Table {
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, entries, _version) = manager.load_latest_full().await?;
 
-        // Collect (segment_dir, index_file) pairs. The index file path may be
-        // relative to the segment's data-file directory or already absolute
-        // (relative to the table root); resolve both the same way the reader does.
+        // Collect (rel_entry_path, index_file) pairs. The index file path may be
+        // relative to the segment's data-file directory or already relative
+        // to the table root; resolve both the same way the reader does.
         let mut work: Vec<(String, IndexFile)> = Vec::new();
         for entry in &entries {
-            let seg_dir = entry
-                .file_path
-                .rsplit_once('/')
-                .map(|(dir, _)| dir.to_string())
-                .unwrap_or_default();
+            let rel_entry = crate::core::segment::relativize_against(&self.uri, &entry.file_path);
             for idx in &entry.index_files {
-                work.push((seg_dir.clone(), idx.clone()));
+                work.push((rel_entry.clone(), idx.clone()));
             }
         }
         stats.indexes_seen = work.len();
 
         let disk_cache = DiskCache::new(self.store.clone());
+        let cache_root = self.cache_root();
 
         // A Puffin container carries one vector index split across many blobs
         // (centroids + a graph and a mapping per IVF cluster), and loading any
@@ -163,7 +164,7 @@ impl Table {
             ),
         > = std::collections::HashMap::new();
 
-        for (seg_dir, idx) in work {
+        for (rel_entry, idx) in work {
             let kind = classify(&idx);
             let wanted = match kind {
                 IndexKind::Vector => opts.include_vector,
@@ -177,11 +178,8 @@ impl Table {
             }
 
             // Resolve the full path (relative to the table root).
-            let full_path = if idx.file_path.contains('/') || seg_dir.is_empty() {
-                idx.file_path.clone()
-            } else {
-                format!("{}/{}", seg_dir, idx.file_path)
-            };
+            let full_path =
+                crate::core::segment::resolve_entry_index_path(&rel_entry, &idx.file_path);
 
             if kind == IndexKind::Vector && idx.blob_offset.is_some() {
                 let family = (
@@ -219,7 +217,7 @@ impl Table {
                     }
                 }
             } else if opts.spill_to_disk {
-                match self.warm_on_disk(&disk_cache, &full_path, kind).await {
+                match self.warm_on_disk(&disk_cache, &full_path, &idx, kind).await {
                     Ok(()) => {
                         stats.bytes_on_disk = stats.bytes_on_disk.saturating_add(size);
                         true
@@ -245,22 +243,17 @@ impl Table {
                 if kind == IndexKind::Vector {
                     let cache_key = if idx.blob_offset.is_some() {
                         crate::core::index::hnsw_ivf::HnswIvfIndex::puffin_vector_cache_key(
-                            &self.uri,
+                            cache_root,
                             &full_path,
                             &idx.column_name,
                             &idx.algorithm,
                         )
                     } else {
-                        cache_key_for(&self.uri, &full_path, &idx)
+                        cache_key_for(cache_root, &full_path, &idx)
                     };
                     if let Some(cached) = crate::core::cache::HNSW_IVF_CACHE.get(&cache_key).await {
-                        let name = full_path
-                            .rsplit_once('/')
-                            .map(|(_, name)| name)
-                            .unwrap_or(&full_path);
-                        let name = name.strip_suffix(".puffin").unwrap_or(name);
-                        let name = name.strip_suffix(".parquet").unwrap_or(name);
-                        let seg_id = name.to_string();
+                        let seg_id =
+                            crate::core::segment::segment_id_from_path(&rel_entry).to_string();
 
                         let entry = router_records
                             .entry(idx.column_name.clone())
@@ -444,30 +437,18 @@ impl Table {
         // manifest before serving it.
         let indexed_segments: std::collections::HashSet<String> = entries
             .iter()
-            .flat_map(|entry| {
-                let seg_dir = entry
-                    .file_path
-                    .rsplit_once('/')
-                    .map(|(dir, _)| dir.to_string())
-                    .unwrap_or_default();
-                entry.index_files.iter().filter_map(move |idx| {
-                    if idx.column_name == column && idx.index_category == "vector" {
-                        let full_path = if idx.file_path.contains('/') || seg_dir.is_empty() {
-                            idx.file_path.clone()
-                        } else {
-                            format!("{}/{}", seg_dir, idx.file_path)
-                        };
-                        let name = full_path
-                            .rsplit_once('/')
-                            .map(|(_, name)| name)
-                            .unwrap_or(&full_path);
-                        let name = name.strip_suffix(".puffin").unwrap_or(name);
-                        let name = name.strip_suffix(".parquet").unwrap_or(name);
-                        Some(name.to_string())
-                    } else {
-                        None
-                    }
-                })
+            .filter_map(|entry| {
+                let has_vec = entry
+                    .index_files
+                    .iter()
+                    .any(|idx| idx.column_name == column && idx.index_category == "vector");
+                if has_vec {
+                    let rel_entry =
+                        crate::core::segment::relativize_against(&self.uri, &entry.file_path);
+                    Some(crate::core::segment::segment_id_from_path(&rel_entry).to_string())
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -503,29 +484,16 @@ impl Table {
         let mut dim = 0;
         let mut metric = crate::core::index::VectorMetric::L2;
         let mut loaded_segments = std::collections::HashSet::new();
+        let cache_root = self.cache_root();
 
         for entry in &entries {
-            let seg_dir = entry
-                .file_path
-                .rsplit_once('/')
-                .map(|(dir, _)| dir.to_string())
-                .unwrap_or_default();
+            let rel_entry = crate::core::segment::relativize_against(&self.uri, &entry.file_path);
+            let seg_id = crate::core::segment::segment_id_from_path(&rel_entry).to_string();
 
             for idx in &entry.index_files {
                 if idx.column_name == column && idx.index_category == "vector" {
-                    let full_path = if idx.file_path.contains('/') || seg_dir.is_empty() {
-                        idx.file_path.clone()
-                    } else {
-                        format!("{}/{}", seg_dir, idx.file_path)
-                    };
-
-                    let name = full_path
-                        .rsplit_once('/')
-                        .map(|(_, name)| name)
-                        .unwrap_or(&full_path);
-                    let name = name.strip_suffix(".puffin").unwrap_or(name);
-                    let name = name.strip_suffix(".parquet").unwrap_or(name);
-                    let seg_id = name.to_string();
+                    let full_path =
+                        crate::core::segment::resolve_entry_index_path(&rel_entry, &idx.file_path);
 
                     if !loaded_segments.insert((seg_id.clone(), idx.column_name.clone())) {
                         continue;
@@ -568,7 +536,7 @@ impl Table {
                         }
                     } else {
                         // Legacy non-Puffin index: fall back to the full loader.
-                        let cache_key = format!("{}/{}", self.uri, full_path);
+                        let cache_key = format!("{}/{}", cache_root, full_path);
                         if let Ok(index) =
                             crate::core::index::hnsw_ivf::HnswIvfIndex::load_async_with_cache_key(
                                 self.store.clone(),
@@ -741,17 +709,18 @@ impl Table {
         idx: &IndexFile,
         kind: IndexKind,
     ) -> Result<()> {
+        let cache_root = self.cache_root();
         // Puffin-packed vector index: one cache entry per container index, not
         // per blob (see `puffin_vector_cache_key`).
         let cache_key = if idx.blob_offset.is_some() {
             crate::core::index::hnsw_ivf::HnswIvfIndex::puffin_vector_cache_key(
-                &self.uri,
+                cache_root,
                 full_path,
                 &idx.column_name,
                 &idx.algorithm,
             )
         } else {
-            cache_key_for(&self.uri, full_path, idx)
+            cache_key_for(cache_root, full_path, idx)
         };
         match kind {
             IndexKind::Vector => {
@@ -777,10 +746,70 @@ impl Table {
                 Ok(())
             }
             IndexKind::Inverted => {
+                use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+                let source_type_key = format!("{cache_key}:source_type");
+                let extract_meta = |metadata: &parquet::file::metadata::ParquetMetaData| {
+                    let mut analyzer_val: Option<String> = None;
+                    let mut source_type_val: Option<String> = None;
+                    if let Some(kv_list) = metadata.file_metadata().key_value_metadata() {
+                        for kv in kv_list {
+                            if kv.key == "analyzer" {
+                                analyzer_val = kv.value.clone();
+                            } else if kv.key == "source_type" {
+                                source_type_val = kv.value.clone();
+                            }
+                        }
+                    }
+                    let analyzer = analyzer_val.unwrap_or_else(|| {
+                        if idx.algorithm == "bm25" {
+                            "analyzer:english".to_string()
+                        } else {
+                            "identity".to_string()
+                        }
+                    });
+                    let source_type = source_type_val.unwrap_or_default();
+                    (analyzer, source_type)
+                };
+
                 if INVERTED_INDEX_CACHE.get(&cache_key).await.is_some() {
+                    if crate::core::cache::ANALYZER_META_CACHE
+                        .get(&cache_key)
+                        .await
+                        .is_none()
+                        || crate::core::cache::ANALYZER_META_CACHE
+                            .get(&source_type_key)
+                            .await
+                            .is_none()
+                    {
+                        let bytes = self.read_inverted_bytes_raw(full_path, idx).await?;
+                        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+                        let (analyzer, source_type) = extract_meta(builder.metadata());
+                        crate::core::cache::ANALYZER_META_CACHE
+                            .insert(cache_key.clone(), analyzer)
+                            .await;
+                        crate::core::cache::ANALYZER_META_CACHE
+                            .insert(source_type_key, source_type)
+                            .await;
+                    }
                     return Ok(());
                 }
-                let batches = self.read_inverted_batches(full_path, idx).await?;
+
+                let bytes = self.read_inverted_bytes_raw(full_path, idx).await?;
+                let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
+                let (analyzer, source_type) = extract_meta(builder.metadata());
+                crate::core::cache::ANALYZER_META_CACHE
+                    .insert(cache_key.clone(), analyzer)
+                    .await;
+                crate::core::cache::ANALYZER_META_CACHE
+                    .insert(source_type_key, source_type)
+                    .await;
+
+                let reader = builder.build()?;
+                let mut batches = Vec::new();
+                for b in reader {
+                    batches.push(b?);
+                }
                 INVERTED_INDEX_CACHE
                     .insert(cache_key, Arc::new(batches))
                     .await;
@@ -790,25 +819,50 @@ impl Table {
                 // CSR families are mmap-served; warming the disk cache is the
                 // in-memory-equivalent (page cache) warm for them.
                 let disk = DiskCache::new(self.store.clone());
-                self.warm_on_disk(&disk, full_path, kind).await
+                self.warm_on_disk(&disk, full_path, idx, kind).await
             }
             IndexKind::Other => Ok(()),
         }
     }
 
     /// Warm an index into the disk (mmap) cache for out-of-core serving.
-    async fn warm_on_disk(&self, disk: &DiskCache, full_path: &str, kind: IndexKind) -> Result<()> {
+    async fn warm_on_disk(
+        &self,
+        disk: &DiskCache,
+        full_path: &str,
+        idx: &IndexFile,
+        kind: IndexKind,
+    ) -> Result<()> {
+        let cache_root = self.cache_root();
         match kind {
             IndexKind::Vector => {
                 // Load with mmap so the HNSW graph is served from the disk cache.
-                let cache_key = format!("{}/{}", self.uri, full_path);
-                let _ = crate::core::index::hnsw_ivf::HnswIvfIndex::load_async_with_cache_key(
-                    self.store.clone(),
-                    full_path,
-                    &cache_key,
-                    true,
-                )
-                .await?;
+                if idx.blob_offset.is_some() {
+                    let cache_key =
+                        crate::core::index::hnsw_ivf::HnswIvfIndex::puffin_vector_cache_key(
+                            cache_root,
+                            full_path,
+                            &idx.column_name,
+                            &idx.algorithm,
+                        );
+                    let _ = crate::core::index::hnsw_ivf::HnswIvfIndex::load_from_puffin(
+                        self.store.clone(),
+                        full_path,
+                        &cache_key,
+                        true,
+                        &idx.column_name,
+                    )
+                    .await?;
+                } else {
+                    let cache_key = format!("{}/{}", cache_root, full_path);
+                    let _ = crate::core::index::hnsw_ivf::HnswIvfIndex::load_async_with_cache_key(
+                        self.store.clone(),
+                        full_path,
+                        &cache_key,
+                        true,
+                    )
+                    .await?;
+                }
                 Ok(())
             }
             IndexKind::Inverted => {
@@ -817,14 +871,27 @@ impl Table {
                 Ok(())
             }
             IndexKind::Graph => {
-                // CSR is a 3-file family; warm each sibling.
-                for suffix in [
-                    ".graph_v2.csr.offsets",
-                    ".graph_v2.csr.edges",
-                    ".graph_v2.csr.dict",
-                ] {
-                    let p = format!("{}{}", full_path, suffix);
-                    let _ = disk.get_mmap(&p).await;
+                if idx.blob_offset.is_some() || full_path.ends_with(".puffin") {
+                    let _ = disk.get_mmap(full_path).await?;
+                } else {
+                    let base = full_path
+                        .strip_suffix(".graph_v2.csr.offsets")
+                        .or_else(|| full_path.strip_suffix(".graph_v2.csr.edges"))
+                        .or_else(|| full_path.strip_suffix(".graph_v2.csr.dict"))
+                        .or_else(|| full_path.strip_suffix(".csr.offsets"))
+                        .or_else(|| full_path.strip_suffix(".csr.edges"))
+                        .or_else(|| full_path.strip_suffix(".csr.dict"))
+                        .unwrap_or(full_path);
+                    let csr_prefix =
+                        if full_path.contains(".csr.") && !full_path.contains(".graph_v2.csr.") {
+                            ".csr"
+                        } else {
+                            ".graph_v2.csr"
+                        };
+                    for suffix in [".offsets", ".edges", ".dict"] {
+                        let p = format!("{}{}{}", base, csr_prefix, suffix);
+                        let _ = disk.get_mmap(&p).await;
+                    }
                 }
                 Ok(())
             }
@@ -832,36 +899,28 @@ impl Table {
         }
     }
 
-    /// Read and decode an inverted-index parquet file into RecordBatches.
-    async fn read_inverted_batches(
+    /// Read raw inverted-index Parquet bytes (handling Puffin blob ranges and standalone files).
+    async fn read_inverted_bytes_raw(
         &self,
         full_path: &str,
         idx: &IndexFile,
-    ) -> Result<Vec<arrow::record_batch::RecordBatch>> {
-        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-
-        let bytes = if let (Some(offset), Some(length)) = (idx.blob_offset, idx.blob_length) {
-            self.store
+    ) -> Result<bytes::Bytes> {
+        if let (Some(offset), Some(length)) = (idx.blob_offset, idx.blob_length) {
+            Ok(self
+                .store
                 .get_range(
                     &object_store::path::Path::from(full_path),
                     (offset as u64)..(offset as u64 + length as u64),
                 )
-                .await?
+                .await?)
         } else {
-            self.store
+            Ok(self
+                .store
                 .get(&object_store::path::Path::from(full_path))
                 .await?
                 .bytes()
-                .await?
-        };
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)?;
-        let reader = builder.build()?;
-        let mut batches = Vec::new();
-        for b in reader {
-            batches.push(b?);
+                .await?)
         }
-        Ok(batches)
     }
 }
 

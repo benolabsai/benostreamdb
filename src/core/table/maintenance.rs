@@ -63,13 +63,16 @@ impl Table {
         self.flush_unlocked_async().await?;
 
         let opts = options.unwrap_or_default();
-        // Carry the table's index configuration so compacted segments are
-        // re-indexed (otherwise queries fall back to full scans).
-        let compactor = Compactor::new(&self.uri, opts)?.with_index_configs(
-            self.indexing.index_all,
-            self.indexing.index_columns.read().clone(),
-            self.indexing.index_configs.read().clone(),
-        );
+        // Carry the table's data_store and index configuration so compacted
+        // segments read from external stores (if any) and are re-indexed
+        // (otherwise queries fall back to full scans).
+        let compactor = Compactor::new(&self.uri, opts)?
+            .with_data_store(self.data_store.clone())
+            .with_index_configs(
+                self.indexing.index_all,
+                self.indexing.index_columns.read().clone(),
+                self.indexing.index_configs.read().clone(),
+            );
         let committed = compactor.rewrite_data_files().await?;
         if let Some(new_manifest) = committed {
             // Compaction replaces files without changing table data, which the
@@ -204,11 +207,18 @@ impl Table {
         use futures::StreamExt;
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let (_manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+        let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
 
         if all_entries.is_empty() {
             return Ok(());
         }
+
+        let latest_iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
 
         let planner = QueryPlanner::new();
         let arrow_schema = self.arrow_schema();
@@ -228,6 +238,7 @@ impl Table {
         );
 
         let mut all_updated_entries = Vec::new();
+        let mut any_new_deletes = false;
 
         for entry in all_entries {
             if !candidate_paths.contains(&entry.file_path) {
@@ -237,70 +248,130 @@ impl Table {
             }
 
             tracing::debug!("delete_async: processing segment {}", entry.file_path);
-            let file_path_str = entry.file_path.clone();
-
-            // Fix path resolution: find correct physical subdirectory
-            let path = std::path::Path::new(&file_path_str);
-            let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+            let rel_parquet = crate::core::segment::relativize_against(&self.uri, &entry.file_path);
+            let rel_parent = match rel_parquet.rfind('/') {
+                Some(pos) => rel_parquet[..pos].trim_matches('/').to_string(),
+                None => String::new(),
+            };
             let full_base_path = if rel_parent.is_empty() {
                 self.uri.clone()
             } else {
-                format!("{}/{}", self.uri, rel_parent)
+                format!("{}/{}", self.uri.trim_end_matches('/'), rel_parent)
             };
 
-            let segment_id = file_path_str
-                .split('/')
-                .next_back()
-                .unwrap_or(&file_path_str)
-                .strip_suffix(".parquet")
-                .unwrap_or(&file_path_str);
+            let segment_id = crate::core::segment::segment_id_from_path(&rel_parquet);
 
-            let config = SegmentConfig::new(&full_base_path, segment_id)
+            let mut config = SegmentConfig::new(&full_base_path, segment_id)
+                .with_parquet_path(rel_parquet)
                 .with_index_files(entry.index_files.clone())
+                .with_delete_files(entry.delete_files.clone())
                 .with_record_count(entry.record_count as u64)
                 .with_file_checksum(entry.file_checksum.clone());
-            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+            if let Some(ds) = self.data_store.clone() {
+                config = config.with_data_store(ds);
+            }
+            let mut reader = HybridReader::new(config, self.store.clone(), &self.uri);
+            if let Some(ref schema) = latest_iceberg_schema {
+                reader = reader.with_iceberg_schema(schema.clone());
+            }
+
+            let prior_deletes = reader.load_merged_deletes().await?;
+            let eq_deletes = reader.load_equality_deletes().await?;
 
             let mut new_deletes = Vec::new();
 
-            // OPTIMIZATION: Check for Sidecar Scalar Index (Inverted Index)
-            let and_filters = expr.extract_and_conditions();
+            // OPTIMIZATION: Check for Sidecar Scalar Index (Inverted Index).
+            // Only bypass full scan when every AND sub-predicate is exact and
+            // there are no equality deletes.
             let mut bitmap_opt: Option<roaring::RoaringBitmap> = None;
-
-            if !and_filters.is_empty() {
-                for filter in and_filters {
-                    if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(&filter).await {
-                        if let Some(current) = bitmap_opt {
-                            bitmap_opt = Some(current & bm);
-                        } else {
-                            bitmap_opt = Some(bm);
+            if expr.is_fully_covered_by_and_filters() && eq_deletes.is_empty() {
+                let and_filters = reader.rewrite_composite_filters(expr.extract_and_conditions());
+                if !and_filters.is_empty() {
+                    let mut all_exact = true;
+                    for sub_filter in &and_filters {
+                        match reader
+                            .get_scalar_filter_bitmap_with_exactness(sub_filter)
+                            .await
+                        {
+                            Ok(Some((bm, true))) => {
+                                bitmap_opt = Some(match bitmap_opt {
+                                    Some(current) => current & bm,
+                                    None => bm,
+                                });
+                            }
+                            Ok(_) | Err(_) => {
+                                all_exact = false;
+                                break;
+                            }
                         }
-                    } else {
-                        // If any part of the AND is MISSING an index, fallback to scan
+                    }
+                    if !all_exact {
                         bitmap_opt = None;
-                        break;
                     }
                 }
             }
 
-            if let Some(bitmap) = bitmap_opt {
-                // Index HIT! We found the deleted rows instantly.
-                for row_id in bitmap.iter() {
-                    new_deletes.push(row_id as i64);
+            if let Some(mut bitmap) = bitmap_opt {
+                // Index HIT! Exclude rows already marked deleted in prior snapshots.
+                if !prior_deletes.is_empty() {
+                    bitmap -= &prior_deletes;
+                }
+                if entry.record_count >= 0 {
+                    let limit = entry.record_count as u32;
+                    for row_id in bitmap.iter() {
+                        if row_id < limit {
+                            new_deletes.push(row_id as i64);
+                        }
+                    }
+                } else {
+                    for row_id in bitmap.iter() {
+                        new_deletes.push(row_id as i64);
+                    }
                 }
             } else {
-                // Index MISS: Full file scan (fallback)
-                let mut stream = reader
-                    .stream_all(None as Option<Arc<arrow::datatypes::Schema>>)
-                    .await?;
-                let mut current_row_offset = 0;
+                // Index MISS or non-exact filter: raw physical scan so offsets
+                // map 1:1 to Parquet row positions.
+                let mut stream = reader.stream_raw_row_groups(None, None).await?;
+                let mut current_row_offset = 0usize;
+                let required_cols = expr.required_columns();
                 while let Some(batch_res) = stream.next().await {
                     let batch = batch_res?;
                     let num_rows = batch.num_rows();
-                    let mask = planner.evaluate_expr(&batch, &expr)?;
+                    if num_rows == 0 {
+                        continue;
+                    }
+                    let eq_keep = if eq_deletes.is_empty() {
+                        None
+                    } else {
+                        Some(HybridReader::apply_eq_deletes_keep_mask(
+                            &batch,
+                            &eq_deletes,
+                        )?)
+                    };
+                    let eval_batch = if required_cols
+                        .iter()
+                        .any(|c| batch.column_by_name(c).is_none())
+                    {
+                        reader
+                            .pad_missing_schema_columns(batch, &required_cols)
+                            .await?
+                    } else {
+                        batch
+                    };
+                    let coerced_expr = expr.coerce_literals(&eval_batch.schema());
+                    let mask = planner.evaluate_expr(&eval_batch, &coerced_expr)?;
                     for i in 0..num_rows {
-                        if mask.value(i) {
-                            new_deletes.push((current_row_offset + i) as i64);
+                        let row_id = current_row_offset + i;
+                        if prior_deletes.contains(row_id as u32) {
+                            continue;
+                        }
+                        if let Some(ref eq_k) = eq_keep {
+                            if !eq_k.is_valid(i) || !eq_k.value(i) {
+                                continue;
+                            }
+                        }
+                        if mask.is_valid(i) && mask.value(i) {
+                            new_deletes.push(row_id as i64);
                         }
                     }
                     current_row_offset += num_rows;
@@ -308,6 +379,7 @@ impl Table {
             }
 
             if !new_deletes.is_empty() {
+                any_new_deletes = true;
                 // Generate NEW Position Delete File
                 let mut file_paths = arrow::array::StringBuilder::new();
                 let mut positions = arrow::array::Int64Builder::new();
@@ -327,15 +399,7 @@ impl Table {
                 );
 
                 let partition_data = if !entry.partition_values.is_empty() {
-                    let path = std::path::Path::new(&entry.file_path);
-                    let rel_path = path
-                        .parent()
-                        .and_then(|p| p.to_str())
-                        .unwrap_or("")
-                        .trim_start_matches('/')
-                        .to_string();
-
-                    Some((rel_path, entry.partition_values.clone()))
+                    Some((rel_parent, entry.partition_values.clone()))
                 } else {
                     None
                 };
@@ -352,7 +416,7 @@ impl Table {
             }
         }
 
-        if !all_updated_entries.is_empty() {
+        if any_new_deletes {
             for (entry, _) in &candidates {
                 crate::core::cache::invalidate_file_caches(&self.uri, &entry.file_path).await;
             }
@@ -1224,8 +1288,12 @@ impl Table {
             "rebuild_cluster_index: building table-level cluster artifact"
         );
 
+        let vector_store = self
+            .data_store
+            .clone()
+            .unwrap_or_else(|| self.store.clone());
         let index = crate::core::index::ClusterIndex::build_from_table_with_target(
-            self.store.clone(),
+            vector_store,
             &entries,
             &column,
             &algo,
@@ -1334,11 +1402,15 @@ impl Table {
             anyhow::bail!("rebuild_indexes_with_global_centroids: no vector columns found");
         }
 
+        let vector_store = self
+            .data_store
+            .clone()
+            .unwrap_or_else(|| self.store.clone());
         let mut staged: std::collections::HashMap<String, Vec<Vec<f32>>> =
             std::collections::HashMap::new();
         for column in &target_columns {
             let sample = crate::core::index::cluster_index::sample_table_vectors(
-                self.store.clone(),
+                vector_store.clone(),
                 &entries,
                 column,
                 crate::core::index::cluster_index::DEFAULT_SAMPLE_BUDGET,

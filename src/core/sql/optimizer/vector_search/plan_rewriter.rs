@@ -84,7 +84,7 @@ pub fn build_optimized_plan(
         tracing::debug!("VectorSearchOptimizer: Row group skipping enabled - will skip groups outside predicate range");
     }
 
-    // Construct optimized scan
+    // Construct optimized scan (use unprojected `base_schema` so projection indices stay valid)
     let scan_exec = VectorScanExec::new(
         pattern.benostream_exec.table.clone(),
         pattern.benostream_exec.partitions.clone(),
@@ -92,7 +92,7 @@ pub fn build_optimized_plan(
         pattern.benostream_exec.filter_str.clone(),
         vector_params,
         Some(k_with_offset),
-        pattern.benostream_exec.schema.clone(),
+        pattern.benostream_exec.base_schema.clone(),
     )?;
 
     let merge_exec = VectorMergeExec::new(

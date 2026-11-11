@@ -77,6 +77,7 @@ fn binpack(
 #[derive(Clone)]
 pub struct Compactor {
     store: Arc<dyn ObjectStore>,
+    data_store: Option<Arc<dyn ObjectStore>>,
     manifest: ManifestManager,
     options: CompactionOptions,
     base_path: String,
@@ -90,6 +91,14 @@ pub struct Compactor {
 }
 
 impl Compactor {
+    /// Attach the table's external data store (for external / zero-copy tables)
+    /// so compaction reads data files from `data_store` and writes compacted
+    /// segments/indexes to the table `store`.
+    pub fn with_data_store(mut self, data_store: Option<Arc<dyn ObjectStore>>) -> Self {
+        self.data_store = data_store;
+        self
+    }
+
     /// Attach the table's index configuration so rewritten segments rebuild
     /// their vector/inverted indexes (compaction must not drop indexes).
     pub fn with_index_configs(
@@ -105,22 +114,18 @@ impl Compactor {
     }
 
     pub fn new(uri: &str, options: CompactionOptions) -> Result<Self> {
+        let _url = url::Url::parse(uri).context("Invalid URI")?;
         let store = create_object_store(uri)?;
 
-        // Handle base_path differentiation
-        let url = url::Url::parse(uri).context("Invalid URI")?;
-        let base_path = if uri.starts_with("file://") {
-            "".to_string() // LocalStore is already rooted at the path
-        } else {
-            // For S3/Azure/GCS, the URI is s3://bucket/prefix
-            // We want 'prefix' as the base_path
-            url.path().trim_start_matches('/').to_string()
-        };
-
+        // `create_object_store` already wraps remote prefixes and local roots
+        // with `PrefixStore` / `LocalFileSystem::new_with_prefix`, so all object
+        // keys on `store` are table-relative (`base_path = ""`).
+        let base_path = String::new();
         let manifest = ManifestManager::new(store.clone(), &base_path, uri);
 
         Ok(Self {
             store,
+            data_store: None,
             manifest,
             root_uri: uri.to_string(),
             options,
@@ -143,6 +148,12 @@ impl Compactor {
         // 1. Discovery: ONLY consider segments active in the latest manifest
         let (manifest, all_entries, _) = self.manifest.load_latest_full().await?;
         let partition_spec = manifest.partition_spec.clone();
+        let latest_iceberg_schema = manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == manifest.current_schema_id)
+            .or_else(|| manifest.schemas.last())
+            .cloned();
         if all_entries.is_empty() {
             tracing::info!("Manifest is empty. Nothing to compact.");
             return Ok(None);
@@ -228,7 +239,8 @@ impl Compactor {
                 .map(|bin| {
                     let compactor = self.clone(); // Needs Clone derive on Compactor
                     let pspec = partition_spec.clone();
-                    async move { compactor.compact_bin(bin, &pspec).await }
+                    let schema = latest_iceberg_schema.clone();
+                    async move { compactor.compact_bin(bin, &pspec, schema.as_ref()).await }
                 })
                 .buffer_unordered(max_concurrent)
                 .collect()
@@ -254,7 +266,7 @@ impl Compactor {
             }
         }
 
-        if !all_new_entries.is_empty() {
+        if !all_new_entries.is_empty() || !all_old_paths.is_empty() {
             tracing::info!(
                 "Committing Batch: +{} entries, -{} paths",
                 all_new_entries.len(),
@@ -299,6 +311,7 @@ impl Compactor {
         &self,
         bin: Vec<crate::core::manifest::ManifestEntry>,
         partition_spec: &crate::core::manifest::PartitionSpec,
+        iceberg_schema: Option<&crate::core::manifest::Schema>,
     ) -> Result<(Vec<crate::core::manifest::ManifestEntry>, Vec<String>)> {
         if bin.is_empty() {
             return Err(anyhow::anyhow!("Empty bin"));
@@ -319,41 +332,58 @@ impl Compactor {
             .to_string();
 
         // B. Stream and Accumulate All Batches
+        let target_arrow_schema: Option<arrow::datatypes::SchemaRef> =
+            iceberg_schema.map(|s| Arc::new(s.to_arrow()));
         let mut all_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
 
         for entry in &bin {
-            let path = std::path::Path::new(&entry.file_path);
-            let segment_id = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| anyhow::anyhow!("Invalid segment file path: {:?}", path))?;
-            let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+            let rel_parquet =
+                crate::core::segment::relativize_against(&self.root_uri, &entry.file_path);
+            let segment_id = crate::core::segment::segment_id_from_path(&rel_parquet);
+            let rel_parent = match rel_parquet.rfind('/') {
+                Some(pos) => &rel_parquet[..pos],
+                None => "",
+            };
 
-            // Carry the segment's delete files into the reader so compaction
-            // physically removes deleted rows. Without this, compaction reads
-            // the raw data files, and the deleted rows are **resurrected** into
-            // the compacted output.
-            let config = SegmentConfig::new(rel_parent, segment_id)
+            // Carry the segment's delete files and external data_store / Iceberg
+            // schema into the reader so compaction physically removes deleted
+            // rows (including equality deletes) and evolves schemas cleanly.
+            let mut config = SegmentConfig::new(rel_parent, segment_id)
+                .with_parquet_path(rel_parquet.clone())
                 .with_delete_files(entry.delete_files.clone());
-            let reader = HybridReader::new(config, self.store.clone(), &self.root_uri);
+            if let Some(ds) = &self.data_store {
+                config = config.with_data_store(ds.clone());
+            }
+            let mut reader = HybridReader::new(config, self.store.clone(), &self.root_uri);
+            if let Some(schema) = iceberg_schema {
+                reader = reader.with_iceberg_schema(schema.clone());
+            }
 
-            // Compaction reads all columns to preserve full data
-            let mut stream = reader
-                .stream_all(None as Option<arrow::datatypes::SchemaRef>)
-                .await?;
+            // Compaction reads all live columns to preserve full data
+            let mut stream = reader.stream_all(target_arrow_schema.clone()).await?;
 
             while let Some(batch_res) = stream.next().await {
                 let batch = batch_res?;
-                all_batches.push(batch);
+                if batch.num_rows() > 0 {
+                    all_batches.push(batch);
+                }
             }
         }
 
-        // Concatenate all batches into one and write
-        if all_batches.is_empty() {
-            return Err(anyhow::anyhow!("No data to compact"));
+        // If every row in every segment of this bin was deleted, remove the
+        // dead segments without writing empty replacement files.
+        let total_rows: usize = all_batches.iter().map(|b| b.num_rows()).sum();
+        if all_batches.is_empty() || total_rows == 0 {
+            let _ = fs::remove_dir_all(&temp_dir_path).await;
+            let old_paths: Vec<String> = bin.iter().map(|e| e.file_path.clone()).collect();
+            tracing::info!(
+                "Compacted bin of {} files had 0 surviving rows; retiring inputs",
+                old_paths.len()
+            );
+            return Ok((Vec::new(), old_paths));
         }
 
-        let schema = all_batches[0].schema();
+        let schema = target_arrow_schema.unwrap_or_else(|| all_batches[0].schema());
         let merged_batch = arrow::compute::concat_batches(&schema, &all_batches)?;
 
         let chunks = partition_spec.partition_batch(&merged_batch)?;
@@ -440,11 +470,21 @@ impl Compactor {
                     }
                 }
             }
+            let remote_parquet_path = if remote_prefix.is_empty() {
+                format!("{}.parquet", new_segment_id)
+            } else {
+                format!(
+                    "{}/{}.parquet",
+                    remote_prefix.trim_matches('/'),
+                    new_segment_id
+                )
+            };
             let writer_config = SegmentConfig::new(&temp_dir_str, &new_segment_id)
                 .with_index_all(self.index_all)
                 .with_columns_to_index(cols_to_index.clone())
+                .with_partition_values(part_vals.clone())
                 // index finishing re-reads the segment parquet by this name
-                .with_parquet_path(format!("{}.parquet", new_segment_id));
+                .with_parquet_path(remote_parquet_path);
             let mut writer = HybridSegmentWriter::new(writer_config)
                 .with_index_configs(self.index_configs.clone());
             writer.set_store(self.store.clone());
@@ -502,6 +542,13 @@ impl Compactor {
                         anyhow::anyhow!("Invalid generated file path: {}", local_path)
                     })?;
 
+                // `finish_indexing` already streams `.puffin` directly to `self.store`
+                // using `parquet_path`'s partition prefix; only upload files that
+                // actually live in this job's `temp_dir`.
+                if file_name.ends_with(".puffin") || !local_path.starts_with(&temp_dir_str) {
+                    continue;
+                }
+
                 let is_data_parquet = file_name == data_parquet_name;
                 // finish_indexing uploads some artifacts itself (e.g. the BM25
                 // inverted sidecars) and removes their local staging copies, so
@@ -549,11 +596,10 @@ impl Compactor {
             // blob_type), so the reader could not find them and recall collapsed.
             let mut index_files = Vec::new();
             for mut idx in writer.to_manifest_entry().index_files {
-                idx.file_path = if remote_prefix.is_empty() {
-                    idx.file_path
-                } else {
-                    format!("{}/{}", remote_prefix, idx.file_path)
-                };
+                idx.file_path = crate::core::segment::ensure_prefix(
+                    remote_prefix.trim_matches('/'),
+                    &idx.file_path,
+                );
                 index_files.push(idx);
             }
 

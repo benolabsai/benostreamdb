@@ -147,9 +147,10 @@ impl Table {
             .context("staged write task panicked")??;
 
             if !hive_path.is_empty() {
-                entry.file_path = format!("{}/{}", hive_path, entry.file_path);
+                entry.file_path = crate::core::segment::ensure_prefix(&hive_path, &entry.file_path);
                 for index_file in &mut entry.index_files {
-                    index_file.file_path = format!("{}/{}", hive_path, index_file.file_path);
+                    index_file.file_path =
+                        crate::core::segment::ensure_prefix(&hive_path, &index_file.file_path);
                 }
             }
 
@@ -472,7 +473,8 @@ impl Table {
         let mut index_files = writer.to_manifest_entry().index_files;
         if !hive_path.is_empty() {
             for index_file in &mut index_files {
-                index_file.file_path = format!("{}/{}", hive_path, index_file.file_path);
+                index_file.file_path =
+                    crate::core::segment::ensure_prefix(hive_path, &index_file.file_path);
             }
         }
         Ok(index_files)

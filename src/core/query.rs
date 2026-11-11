@@ -300,6 +300,8 @@ pub struct VectorSearchRequest {
     pub refine_factor: Option<usize>,
     /// IVF lists to probe per segment.
     pub probes: Option<usize>,
+    /// Table-level Iceberg schema for evolved column resolution & equality deletes.
+    pub iceberg_schema: Option<crate::core::manifest::Schema>,
 }
 
 impl VectorSearchRequest {
@@ -323,7 +325,13 @@ impl VectorSearchRequest {
             targeted_clusters: None,
             refine_factor: None,
             probes: None,
+            iceberg_schema: None,
         }
+    }
+
+    pub fn with_iceberg_schema(mut self, schema: Option<crate::core::manifest::Schema>) -> Self {
+        self.iceberg_schema = schema;
+        self
     }
 
     pub fn with_probes(mut self, probes: Option<usize>) -> Self {
@@ -520,33 +528,33 @@ fn build_segment_reader(
     base_uri: &str,
     store: Arc<dyn ObjectStore>,
     data_store: Option<Arc<dyn ObjectStore>>,
+    iceberg_schema: Option<&crate::core::manifest::Schema>,
 ) -> (String, HybridReader) {
-    let file_path_str = entry.file_path.clone();
-    let name = file_path_str
-        .split('/')
-        .next_back()
-        .unwrap_or(&file_path_str);
-    let name = name.strip_suffix(".puffin").unwrap_or(name);
-    let name = name.strip_suffix(".parquet").unwrap_or(name);
-    let segment_id = name.to_string();
+    let rel_parquet = crate::core::segment::relativize_against(base_uri, &entry.file_path);
+    let segment_id = crate::core::segment::segment_id_from_path(&rel_parquet).to_string();
 
-    let path = std::path::Path::new(&file_path_str);
-    let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+    let rel_parent = rel_parquet
+        .rfind('/')
+        .map(|pos| &rel_parquet[..pos])
+        .unwrap_or("");
     let full_base_uri = if rel_parent.is_empty() {
         base_uri.to_string()
     } else {
-        format!("{}/{}", base_uri, rel_parent)
+        format!("{}/{}", base_uri.trim_end_matches('/'), rel_parent)
     };
 
     let config = SegmentConfig::new(&full_base_uri, &segment_id)
-        .with_parquet_path(entry.file_path.clone())
-        .with_data_store(data_store.unwrap_or(store.clone()))
+        .with_parquet_path(rel_parquet)
+        .with_data_store(data_store.unwrap_or_else(|| store.clone()))
         .with_delete_files(entry.delete_files.clone())
         .with_index_files(entry.index_files.clone())
         .with_record_count(entry.record_count as u64)
         .with_file_checksum(entry.file_checksum.clone());
 
-    let reader = HybridReader::new(config, store, base_uri);
+    let mut reader = HybridReader::new(config, store, base_uri);
+    if let Some(schema) = iceberg_schema {
+        reader = reader.with_iceberg_schema(schema.clone());
+    }
     (segment_id, reader)
 }
 
@@ -619,17 +627,24 @@ pub async fn execute_vector_search_with_config(
         let search_k = request.k.saturating_mul(effective_refine);
         let targeted_clusters_clone = request.targeted_clusters.clone();
 
+        let iceberg_schema_ref = request.iceberg_schema.clone();
         let search_futures: Vec<_> = entries
             .iter()
             .enumerate()
             .map(|(entry_idx, entry)| {
-                let (segment_id, reader) =
-                    build_segment_reader(entry, base_uri, store.clone(), data_store.clone());
+                let (segment_id, reader) = build_segment_reader(
+                    entry,
+                    base_uri,
+                    store.clone(),
+                    data_store.clone(),
+                    iceberg_schema_ref.as_ref(),
+                );
                 let column = request.column.clone();
                 let query = request.query.clone();
                 let metric = request.metric;
                 let ef_search_val = request.ef_search;
                 let use_mmap = request.use_mmap;
+                let filter_opt = request.filter.clone();
                 let semaphore = semaphore.clone();
                 let file_path_str = entry.file_path.clone();
                 let target_clusters = targeted_clusters_clone.as_ref().and_then(|m| {
@@ -654,6 +669,7 @@ pub async fn execute_vector_search_with_config(
                             use_mmap,
                             target_clusters.as_deref(),
                             request.probes,
+                            filter_opt.as_ref(),
                         )
                         .await?;
 
@@ -701,6 +717,7 @@ pub async fn execute_vector_search_with_config(
                         base_uri,
                         store.clone(),
                         data_store.clone(),
+                        iceberg_schema_ref.as_ref(),
                     );
                     let col = request.column.clone();
                     let q = request.query.clone();
@@ -744,6 +761,7 @@ pub async fn execute_vector_search_with_config(
                         base_uri,
                         store.clone(),
                         data_store.clone(),
+                        iceberg_schema_ref.as_ref(),
                     );
                     let cols_opt = request.columns.clone();
                     let filter_opt = request.filter.clone();
@@ -809,6 +827,7 @@ pub async fn execute_vector_search_with_config(
 
             let data_store_clone = data_store.clone();
             let targeted_clusters_clone = request.targeted_clusters.clone();
+            let iceberg_schema_clone = request.iceberg_schema.clone();
 
             async move {
                 // Acquire semaphore permit (blocks if max_parallel reached)
@@ -817,8 +836,13 @@ pub async fn execute_vector_search_with_config(
                     .await
                     .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
 
-                let (segment_id, reader) =
-                    build_segment_reader(&entry, &base_uri, store.clone(), data_store_clone);
+                let (segment_id, reader) = build_segment_reader(
+                    &entry,
+                    &base_uri,
+                    store.clone(),
+                    data_store_clone,
+                    iceberg_schema_clone.as_ref(),
+                );
 
                 tracing::info!(
                     "Query execution: Entry {} has index files: {:?}",
@@ -961,35 +985,21 @@ pub async fn execute_vector_search_raw_with_config(
             let metric = request.metric;
             let data_store_clone = data_store.clone();
             let targeted_clusters_clone = request.targeted_clusters.clone();
+            let filter_opt = request.filter.clone();
+            let iceberg_schema_clone = request.iceberg_schema.clone();
             async move {
                 let _permit = semaphore
                     .acquire()
                     .await
                     .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
                 let file_path_str = entry.file_path.clone();
-                let name = file_path_str
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(&file_path_str);
-                let name = name.strip_suffix(".puffin").unwrap_or(name);
-                let name = name.strip_suffix(".parquet").unwrap_or(name);
-                let segment_id = name.to_string();
-                let path = std::path::Path::new(&file_path_str);
-                let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-                let full_base_uri = if rel_parent.is_empty() {
-                    base_uri.clone()
-                } else {
-                    format!("{}/{}", base_uri, rel_parent)
-                };
-                let config = crate::SegmentConfig::new(&full_base_uri, &segment_id)
-                    .with_parquet_path(entry.file_path.clone())
-                    .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))
-                    .with_delete_files(entry.delete_files.clone())
-                    .with_index_files(entry.index_files.clone())
-                    .with_record_count(entry.record_count as u64)
-                    .with_file_checksum(entry.file_checksum.clone());
-                let reader =
-                    crate::core::reader::HybridReader::new(config, store.clone(), &base_uri);
+                let (segment_id, reader) = build_segment_reader(
+                    &entry,
+                    &base_uri,
+                    store.clone(),
+                    data_store_clone,
+                    iceberg_schema_clone.as_ref(),
+                );
                 let target_clusters = targeted_clusters_clone.as_ref().and_then(|m| {
                     m.get(&segment_id)
                         .or_else(|| m.get(&file_path_str))
@@ -1006,6 +1016,7 @@ pub async fn execute_vector_search_raw_with_config(
                         request.use_mmap,
                         target_clusters,
                         request.probes,
+                        filter_opt.as_ref(),
                     )
                     .await?;
                 let tagged: Vec<crate::core::search::ScoredResult> = results

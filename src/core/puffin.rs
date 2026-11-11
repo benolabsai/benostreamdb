@@ -309,6 +309,89 @@ impl<W: Write + Seek> PuffinIndexWriter<W> {
         })?)
     }
 
+    /// Stream an existing uncompressed blob range from `store` into this Puffin
+    /// container in bounded chunks without buffering large blobs in RAM.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_index_blob_from_store_range(
+        &mut self,
+        store: &dyn ObjectStore,
+        src_path: &object_store::path::Path,
+        src_offset: u64,
+        src_length: u64,
+        category: &str,
+        algorithm: &str,
+        column_name: &str,
+        blob_type: &str,
+        fields: Vec<i32>,
+        properties: HashMap<String, String>,
+    ) -> Result<&IndexFile> {
+        const CHUNK_SIZE: u64 = 8 * 1024 * 1024;
+        let dest_offset = self.writer.current_offset();
+        let mut hasher = Sha256::new();
+        let mut remaining = src_length;
+        let mut cursor = src_offset;
+
+        while remaining > 0 {
+            let to_read = remaining.min(CHUNK_SIZE);
+            let chunk = store
+                .get_range(src_path, cursor..(cursor + to_read))
+                .await?;
+            if chunk.is_empty() {
+                anyhow::bail!(
+                    "Unexpected EOF reading preserved Puffin blob {} range {}..{}",
+                    src_path,
+                    src_offset,
+                    src_offset + src_length
+                );
+            }
+            self.writer.writer.write_all(&chunk)?;
+            hasher.update(&chunk);
+            let read_len = chunk.len() as u64;
+            cursor += read_len;
+            remaining = remaining.saturating_sub(read_len);
+        }
+
+        let index_checksum = format!("{:x}", hasher.finalize());
+        let length_i64 = i64::try_from(src_length).context("Puffin blob length exceeds i64")?;
+        self.writer.blobs.push(PuffinBlobMetadata {
+            r#type: blob_type.to_string(),
+            fields,
+            snapshot_id: self.source_snapshot_id,
+            sequence_number: 1,
+            offset: dest_offset,
+            length: length_i64,
+            compression_codec: None,
+            properties,
+        });
+        self.writer.current_offset += length_i64;
+
+        let entry = IndexFile {
+            format_version: 2,
+            index_id: Uuid::new_v4().to_string(),
+            index_category: category.to_string(),
+            algorithm: algorithm.to_string(),
+            column_name: column_name.to_string(),
+            source_snapshot_id: self.source_snapshot_id,
+            source_data_checksum: self.source_data_checksum.clone(),
+            source_record_count: self.source_record_count,
+            index_checksum: Some(index_checksum),
+            file_path: self.container_file_path.clone(),
+            blob_type: Some(blob_type.to_string()),
+            blob_offset: Some(dest_offset),
+            blob_length: Some(length_i64),
+            compression: "none".to_string(),
+        };
+
+        self.entries.push(entry);
+        Ok(self.entries.last().ok_or_else(|| {
+            crate::core::error::BenoStreamError::internal("entry was just pushed")
+        })?)
+    }
+
+    pub fn entries(&self) -> &[IndexFile] {
+        &self.entries
+    }
+
     /// Finish writing the Puffin container and return the underlying writer
     /// along with the generated `IndexFile` entries.
     pub fn finish(self) -> Result<(W, Vec<IndexFile>)> {

@@ -1,6 +1,5 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
-use super::value::json_to_avro_value;
 use anyhow::{Context, Result};
 
 /// Iceberg V2 manifest-list Avro schema.
@@ -92,6 +91,7 @@ fn append_delete_record<W: std::io::Write>(
     writer: &mut apache_avro::Writer<W>,
     avro_schema: &apache_avro::Schema,
     partition_spec: &crate::core::manifest::PartitionSpec,
+    schema: &crate::core::manifest::Schema,
     del_file: &crate::core::manifest::DeleteFile,
     status: i32,
     snapshot_id: Option<i64>,
@@ -191,21 +191,8 @@ fn append_delete_record<W: std::io::Write>(
         apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
     );
 
-    let mut partition_record_values = Vec::new();
-    for field in &partition_spec.fields {
-        let val = del_file
-            .partition_values
-            .get(&field.name)
-            .unwrap_or(&serde_json::Value::Null);
-        let avro_val = json_to_avro_value(val);
-        let union_val = match avro_val {
-            apache_avro::types::Value::Null => {
-                apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null))
-            }
-            _ => apache_avro::types::Value::Union(1, Box::new(avro_val)),
-        };
-        partition_record_values.push((field.name.clone(), union_val));
-    }
+    let partition_record_values =
+        build_partition_avro_record(&del_file.partition_values, partition_spec, schema);
     data_file.put(
         "partition",
         apache_avro::types::Value::Record(partition_record_values),
@@ -423,22 +410,8 @@ impl IcebergWriter {
             );
 
             // Partition Data
-            let mut partition_record_values = Vec::new();
-            for field in &partition_spec.fields {
-                let val = entry
-                    .partition_values
-                    .get(&field.name)
-                    .unwrap_or(&serde_json::Value::Null);
-                let avro_val = json_to_avro_value(val);
-                let union_val = match avro_val {
-                    apache_avro::types::Value::Null => apache_avro::types::Value::Union(
-                        0,
-                        Box::new(apache_avro::types::Value::Null),
-                    ),
-                    _ => apache_avro::types::Value::Union(1, Box::new(avro_val)),
-                };
-                partition_record_values.push((field.name.clone(), union_val));
-            }
+            let partition_record_values =
+                build_partition_avro_record(&entry.partition_values, partition_spec, table_schema);
             data_file.put(
                 "partition",
                 apache_avro::types::Value::Record(partition_record_values),
@@ -602,22 +575,11 @@ impl IcebergWriter {
 
                 // Use Delete File's partition values (or inherit from parent if empty?)
                 // DeleteFile has partition_values.
-                let mut partition_record_values = Vec::new();
-                for field in &partition_spec.fields {
-                    let val = del_file
-                        .partition_values
-                        .get(&field.name)
-                        .unwrap_or(&serde_json::Value::Null);
-                    let avro_val = json_to_avro_value(val);
-                    let union_val = match avro_val {
-                        apache_avro::types::Value::Null => apache_avro::types::Value::Union(
-                            0,
-                            Box::new(apache_avro::types::Value::Null),
-                        ),
-                        _ => apache_avro::types::Value::Union(1, Box::new(avro_val)),
-                    };
-                    partition_record_values.push((field.name.clone(), union_val));
-                }
+                let partition_record_values = build_partition_avro_record(
+                    &del_file.partition_values,
+                    partition_spec,
+                    table_schema,
+                );
                 data_file.put(
                     "partition",
                     apache_avro::types::Value::Record(partition_record_values),
@@ -785,22 +747,8 @@ impl IcebergWriter {
             data_file.put("lower_bounds", lower_bounds);
             data_file.put("upper_bounds", upper_bounds);
 
-            let mut partition_record_values = Vec::new();
-            for field in &partition_spec.fields {
-                let val = entry
-                    .partition_values
-                    .get(&field.name)
-                    .unwrap_or(&serde_json::Value::Null);
-                let avro_val = json_to_avro_value(val);
-                let union_val = match avro_val {
-                    apache_avro::types::Value::Null => apache_avro::types::Value::Union(
-                        0,
-                        Box::new(apache_avro::types::Value::Null),
-                    ),
-                    _ => apache_avro::types::Value::Union(1, Box::new(avro_val)),
-                };
-                partition_record_values.push((field.name.clone(), union_val));
-            }
+            let partition_record_values =
+                build_partition_avro_record(&entry.partition_values, partition_spec, schema);
             data_file.put(
                 "partition",
                 apache_avro::types::Value::Record(partition_record_values),
@@ -932,6 +880,7 @@ impl IcebergWriter {
                 &mut writer,
                 &avro_schema,
                 partition_spec,
+                schema,
                 delete_file,
                 if is_existing { 0 } else { 1 },
                 if is_existing { None } else { Some(snapshot_id) },
@@ -1061,42 +1010,169 @@ fn bounds_avro_values(
     (wrap(nulls), wrap(lowers), wrap(uppers))
 }
 
-/// Avro type for a partition field, derived from its transform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartitionAvroKind {
+    Boolean,
+    Int,
+    Date,
+    Long,
+    TimeMicros,
+    TimestampMicros,
+    TimestampNanos,
+    Float,
+    Double,
+    Bytes,
+    String,
+}
+
+impl PartitionAvroKind {
+    fn avro_type_str(self) -> &'static str {
+        match self {
+            Self::Boolean => r#"["null", "boolean"]"#,
+            Self::Int => r#"["null", "int"]"#,
+            Self::Date => r#"["null", {"type": "int", "logicalType": "date"}]"#,
+            Self::Long => r#"["null", "long"]"#,
+            Self::TimeMicros => r#"["null", {"type": "long", "logicalType": "time-micros"}]"#,
+            Self::TimestampMicros => {
+                r#"["null", {"type": "long", "logicalType": "timestamp-micros"}]"#
+            }
+            Self::TimestampNanos => r#"["null", "long"]"#,
+            Self::Float => r#"["null", "float"]"#,
+            Self::Double => r#"["null", "double"]"#,
+            Self::Bytes => r#"["null", "bytes"]"#,
+            Self::String => r#"["null", "string"]"#,
+        }
+    }
+
+    fn json_to_avro_union(self, val: &serde_json::Value) -> apache_avro::types::Value {
+        use apache_avro::types::Value as AvroValue;
+        if val.is_null() {
+            return AvroValue::Union(0, Box::new(AvroValue::Null));
+        }
+        let parse_i64 = || {
+            val.as_i64()
+                .or_else(|| val.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        };
+        let parse_f64 = || {
+            val.as_f64()
+                .or_else(|| val.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+        };
+        let inner = match self {
+            Self::Boolean => val
+                .as_bool()
+                .or_else(|| val.as_str().and_then(|s| s.trim().parse::<bool>().ok()))
+                .map(AvroValue::Boolean),
+            Self::Int => parse_i64().map(|v| AvroValue::Int(v as i32)),
+            Self::Date => parse_i64().map(|v| AvroValue::Date(v as i32)),
+            Self::Long => parse_i64().map(AvroValue::Long),
+            Self::TimeMicros => parse_i64().map(AvroValue::TimeMicros),
+            Self::TimestampMicros => parse_i64().map(AvroValue::TimestampMicros),
+            Self::TimestampNanos => parse_i64().map(AvroValue::Long),
+            Self::Float => parse_f64().map(|v| AvroValue::Float(v as f32)),
+            Self::Double => parse_f64().map(AvroValue::Double),
+            Self::Bytes => val
+                .as_array()
+                .map(|arr| {
+                    let bytes: Vec<u8> = arr
+                        .iter()
+                        .filter_map(|x| x.as_u64().map(|b| b as u8))
+                        .collect();
+                    AvroValue::Bytes(bytes)
+                })
+                .or_else(|| {
+                    val.as_str()
+                        .map(|s| AvroValue::Bytes(s.as_bytes().to_vec()))
+                }),
+            Self::String => Some(AvroValue::String(match val.as_str() {
+                Some(s) => s.to_string(),
+                None => val.to_string(),
+            })),
+        };
+        match inner {
+            Some(v) => AvroValue::Union(1, Box::new(v)),
+            None => AvroValue::Union(0, Box::new(AvroValue::Null)),
+        }
+    }
+}
+
+fn partition_field_avro_kind(
+    field: &crate::core::manifest::PartitionField,
+    schema: &crate::core::manifest::Schema,
+) -> PartitionAvroKind {
+    let t = field.transform.trim().to_ascii_lowercase();
+
+    if t == "day" {
+        return PartitionAvroKind::Date;
+    }
+    if t == "year" || t == "month" || t == "hour" {
+        return PartitionAvroKind::Int;
+    }
+    if t.starts_with("bucket(") || t.starts_with("bucket[") {
+        return PartitionAvroKind::Int;
+    }
+
+    // identity / void / truncate(...) preserve the source column's primitive type.
+    let source_id = field.source_ids.first().copied().or(field.source_id);
+    let resolved = source_id
+        .and_then(|id| schema.fields.iter().find(|f| f.id == id))
+        .or_else(|| schema.fields.iter().find(|sf| sf.name == field.name));
+
+    let type_norm = resolved
+        .map(|f| f.type_str.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+
+    match type_norm.as_str() {
+        "int32" | "int" | "int16" | "short" | "int8" | "byte" | "uint8" | "uint16" | "uint32" => {
+            PartitionAvroKind::Int
+        }
+        "int64" | "long" | "uint64" | "ulong" | "date64" => PartitionAvroKind::Long,
+        "float32" | "float" => PartitionAvroKind::Float,
+        "float64" | "double" => PartitionAvroKind::Double,
+        "boolean" | "bool" => PartitionAvroKind::Boolean,
+        "date" | "date32" => PartitionAvroKind::Date,
+        "time" => PartitionAvroKind::TimeMicros,
+        s if s.starts_with("time32") => PartitionAvroKind::Int,
+        s if s.starts_with("time64") => PartitionAvroKind::TimeMicros,
+        "timestamp"
+        | "timestamptz"
+        | "timestamp(microsecond, none)"
+        | "timestamp(microsecond, utc)" => PartitionAvroKind::TimestampMicros,
+        s if s.starts_with("timestamp(microsecond,") => PartitionAvroKind::TimestampMicros,
+        "timestamp_ns" | "timestamptz_ns" => PartitionAvroKind::TimestampNanos,
+        s if s.starts_with("timestamp(") => PartitionAvroKind::Long,
+        "binary" | "largebinary" => PartitionAvroKind::Bytes,
+        _ => PartitionAvroKind::String,
+    }
+}
+
+/// Avro type for a partition field, derived from its transform and source column.
 ///
-/// Iceberg's rule: `bucket` and the time transforms (`year`/`month`/`day`/
-/// `hour`) always produce an `int`; `identity`, `void` and `truncate` preserve
-/// the source column's type. Getting this wrong makes the manifest writer
-/// reject the partition value (e.g. an `int` bucket value against a `string`
-/// field), which is exactly what blocked cross-partition compaction.
+/// Iceberg's rule: `bucket`, `year`, `month`, and `hour` produce an `int`,
+/// `day` produces a `date` (`int` with `logicalType: "date"`), and `identity`,
+/// `void`, and `truncate` preserve the source column's type.
 fn partition_field_avro_type(
     field: &crate::core::manifest::PartitionField,
     schema: &crate::core::manifest::Schema,
 ) -> &'static str {
-    let t = field.transform.trim().to_ascii_lowercase();
+    partition_field_avro_kind(field, schema).avro_type_str()
+}
 
-    if t == "year" || t == "month" || t == "day" || t == "hour" {
-        return r#"["null", "int"]"#;
-    }
-    if t.starts_with("bucket(") || t.starts_with("bucket[") {
-        return r#"["null", "int"]"#;
-    }
-
-    // identity / void / truncate(...) preserve the source type.
-    let source_id = field.source_ids.first().copied().or(field.source_id);
-    let resolved = schema
+fn build_partition_avro_record(
+    partition_values: &std::collections::HashMap<String, serde_json::Value>,
+    partition_spec: &crate::core::manifest::PartitionSpec,
+    schema: &crate::core::manifest::Schema,
+) -> Vec<(String, apache_avro::types::Value)> {
+    partition_spec
         .fields
         .iter()
-        .find(|sf| sf.name == field.name)
-        .or_else(|| source_id.and_then(|id| schema.fields.iter().find(|f| f.id == id)));
-
-    match resolved.map(|f| f.type_str.as_str()) {
-        Some("Int32") | Some("int") => r#"["null", "int"]"#,
-        Some("Int64") | Some("long") => r#"["null", "long"]"#,
-        Some("Float32") | Some("float") => r#"["null", "float"]"#,
-        Some("Float64") | Some("double") => r#"["null", "double"]"#,
-        Some("Boolean") | Some("bool") | Some("boolean") => r#"["null", "boolean"]"#,
-        _ => r#"["null", "string"]"#,
-    }
+        .map(|field| {
+            let val = partition_values
+                .get(&field.name)
+                .unwrap_or(&serde_json::Value::Null);
+            let kind = partition_field_avro_kind(field, schema);
+            (field.name.clone(), kind.json_to_avro_union(val))
+        })
+        .collect()
 }
 
 /// GPU Accelerated Puffin Index Writer for Iceberg

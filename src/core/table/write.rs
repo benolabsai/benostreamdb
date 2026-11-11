@@ -1198,7 +1198,8 @@ impl Table {
                         let hive_path = spec_c.partition_to_path(&partition_values_c);
                         if !hive_path.is_empty() {
                             for idx in &mut updated_index_files {
-                                idx.file_path = format!("{}/{}", hive_path, idx.file_path);
+                                idx.file_path =
+                                    crate::core::segment::ensure_prefix(&hive_path, &idx.file_path);
                             }
                         }
                         merged_entry.index_files = updated_index_files;
@@ -1250,8 +1251,11 @@ impl Table {
         const MAX_V3_RETRIES: usize = 64;
         let spec = self.partition_spec.clone();
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let is_local_uri = !self.uri.contains("://") || self.uri.starts_with("file://");
         let base_path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
-        std::fs::create_dir_all(base_path)?;
+        if is_local_uri {
+            std::fs::create_dir_all(base_path)?;
+        }
 
         for v3_attempt in 0..MAX_V3_RETRIES {
             let (head_manifest, head_ver) = manifest_manager.load_latest_direct().await?;
@@ -1474,7 +1478,9 @@ impl Table {
                         } else {
                             format!("{}/{}", base_path, hive_path)
                         };
-                        let _ = std::fs::create_dir_all(&full_base_path);
+                        if is_local_uri {
+                            let _ = std::fs::create_dir_all(&full_base_path);
+                        }
 
                         let config_write = SegmentConfig::new(&full_base_path, &segment_id)
                             .with_index_all(false)
@@ -1520,9 +1526,11 @@ impl Table {
 
                 let hive_path = spec.partition_to_path(&partition_values);
                 if !hive_path.is_empty() {
-                    entry.file_path = format!("{}/{}", hive_path, entry.file_path);
+                    entry.file_path =
+                        crate::core::segment::ensure_prefix(&hive_path, &entry.file_path);
                     for idx in &mut entry.index_files {
-                        idx.file_path = format!("{}/{}", hive_path, idx.file_path);
+                        idx.file_path =
+                            crate::core::segment::ensure_prefix(&hive_path, &idx.file_path);
                     }
                 }
 

@@ -257,6 +257,51 @@ fn coerce_expr_literals(expr: Expr, schema: &SchemaRef) -> Expr {
             expr: Box::new(coerce_expr_literals(*c.expr, schema)),
             data_type: c.data_type,
         }),
+        Expr::TryCast(c) => Expr::TryCast(datafusion::logical_expr::TryCast {
+            expr: Box::new(coerce_expr_literals(*c.expr, schema)),
+            data_type: c.data_type,
+        }),
+        Expr::Between(bw) => {
+            let expr = coerce_expr_literals(*bw.expr, schema);
+            let low = coerce_expr_literals(*bw.low, schema);
+            let high = coerce_expr_literals(*bw.high, schema);
+            let (expr, low) = coerce_comparison(expr, low, schema);
+            let (expr, high) = coerce_comparison(expr, high, schema);
+            Expr::Between(datafusion::logical_expr::Between {
+                expr: Box::new(expr),
+                negated: bw.negated,
+                low: Box::new(low),
+                high: Box::new(high),
+            })
+        }
+        Expr::InList(il) => {
+            let mut target_expr = coerce_expr_literals(*il.expr, schema);
+            if let Expr::Column(ref c) = target_expr {
+                if let Ok(field) = schema.field_with_name(&c.name) {
+                    if is_numeric_type(field.data_type()) {
+                        if let Some(Expr::Literal(lit_val, _)) = il.list.first() {
+                            if is_numeric_type(&lit_val.data_type())
+                                && lit_val.data_type() != *field.data_type()
+                            {
+                                target_expr = Expr::Cast(Cast {
+                                    expr: Box::new(target_expr),
+                                    data_type: lit_val.data_type(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            Expr::InList(datafusion::logical_expr::expr::InList {
+                expr: Box::new(target_expr),
+                list: il
+                    .list
+                    .into_iter()
+                    .map(|e| coerce_expr_literals(e, schema))
+                    .collect(),
+                negated: il.negated,
+            })
+        }
         other => other,
     }
 }
@@ -408,8 +453,18 @@ impl FilterExpr {
                         datafusion::logical_expr::Expr::Not(e) => extract(e, cols),
                         datafusion::logical_expr::Expr::IsNotNull(e) => extract(e, cols),
                         datafusion::logical_expr::Expr::IsNull(e) => extract(e, cols),
+                        datafusion::logical_expr::Expr::Cast(c) => extract(&c.expr, cols),
+                        datafusion::logical_expr::Expr::TryCast(c) => extract(&c.expr, cols),
+                        datafusion::logical_expr::Expr::Between(b) => {
+                            extract(&b.expr, cols);
+                            extract(&b.low, cols);
+                            extract(&b.high, cols);
+                        }
                         datafusion::logical_expr::Expr::InList(l) => {
                             extract(&l.expr, cols);
+                            for e in &l.list {
+                                extract(e, cols);
+                            }
                         }
                         // Add more as needed
                         _ => {}
@@ -464,6 +519,40 @@ impl FilterExpr {
     pub fn json_path_predicates(&self) -> Vec<JsonPathPredicate> {
         match self {
             FilterExpr::DataFusion(expr) => extract_json_path_predicates(expr),
+        }
+    }
+
+    /// Returns `true` iff the entire expression tree is a flat conjunction (`AND`)
+    /// of non-negated simple column-literal predicates representable cleanly as `QueryFilter`s
+    /// (i.e. no `OR`, `NOT`, `!=`, `NOT IN`, `NOT BETWEEN`, `LIKE`, UDFs, `IS NULL`, etc.).
+    pub fn is_fully_covered_by_and_filters(&self) -> bool {
+        fn covered(expr: &Expr) -> bool {
+            match expr {
+                Expr::BinaryExpr(b) => match b.op {
+                    datafusion::logical_expr::Operator::And => {
+                        covered(&b.left) && covered(&b.right)
+                    }
+                    datafusion::logical_expr::Operator::Eq
+                    | datafusion::logical_expr::Operator::Gt
+                    | datafusion::logical_expr::Operator::GtEq
+                    | datafusion::logical_expr::Operator::Lt
+                    | datafusion::logical_expr::Operator::LtEq => {
+                        convert_binary_expr_to_query_filter(b).is_some()
+                    }
+                    _ => false,
+                },
+                Expr::InList(il) => !il.negated && convert_in_list_to_query_filter(il).is_some(),
+                Expr::Between(bw) => {
+                    !bw.negated
+                        && expr_column_name(&bw.expr).is_some()
+                        && expr_literal_json(&bw.low).is_some()
+                        && expr_literal_json(&bw.high).is_some()
+                }
+                _ => false,
+            }
+        }
+        match self {
+            FilterExpr::DataFusion(expr) => covered(expr),
         }
     }
 }
@@ -1102,21 +1191,15 @@ fn convert_binary_expr_to_query_filter(
 fn convert_in_list_to_query_filter(
     in_list: &datafusion::logical_expr::expr::InList,
 ) -> Option<QueryFilter> {
-    let col = match &*in_list.expr {
-        Expr::Column(c) => c.name.clone(),
-        _ => return None,
-    };
+    let col = expr_column_name(&in_list.expr)?;
 
     let mut values = Vec::new();
     for v_expr in &in_list.list {
-        if let Expr::Literal(scalar, _) = v_expr {
-            if let Some(v) = scalar_to_json_value(scalar) {
-                values.push(v);
-            }
-        }
+        let v = expr_literal_json(v_expr)?;
+        values.push(v);
     }
 
-    if values.is_empty() {
+    if values.is_empty() || values.len() != in_list.list.len() {
         return None;
     }
 
@@ -1156,6 +1239,20 @@ fn json_value_to_scalar(
             Ok(ScalarValue::Utf8(v.as_str().map(|s| s.to_string())))
         }
         DataType::Boolean => Ok(ScalarValue::Boolean(v.as_bool())),
+        DataType::Date32 => {
+            let days = v.as_i64().map(|i| i as i32).or_else(|| {
+                v.as_str().and_then(|s| {
+                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                        .ok()
+                        .and_then(|d| {
+                            chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                .map(|epoch| (d - epoch).num_days() as i32)
+                        })
+                })
+            });
+            Ok(ScalarValue::Date32(days))
+        }
+        DataType::Date64 => Ok(ScalarValue::Date64(v.as_i64())),
         _ => Err(anyhow::anyhow!("Unsupported type for filter: {:?}", dt)),
     }
 }
@@ -1169,10 +1266,30 @@ pub(crate) fn scalar_to_json_value(scalar: &datafusion::scalar::ScalarValue) -> 
         ScalarValue::Int8(Some(i)) => Some(serde_json::json!(i)),
         ScalarValue::UInt64(Some(i)) => Some(serde_json::json!(i)),
         ScalarValue::UInt32(Some(i)) => Some(serde_json::json!(i)),
+        ScalarValue::UInt16(Some(i)) => Some(serde_json::json!(i)),
+        ScalarValue::UInt8(Some(i)) => Some(serde_json::json!(i)),
         ScalarValue::Float64(Some(f)) => Some(serde_json::json!(f)),
         ScalarValue::Float32(Some(f)) => Some(serde_json::json!(f)),
-        ScalarValue::Utf8(Some(s)) => Some(serde_json::json!(s)),
+        ScalarValue::Utf8(Some(s))
+        | ScalarValue::LargeUtf8(Some(s))
+        | ScalarValue::Utf8View(Some(s)) => Some(serde_json::json!(s)),
         ScalarValue::Boolean(Some(b)) => Some(serde_json::json!(b)),
+        ScalarValue::Date32(Some(days)) => Some(serde_json::json!(days)),
+        ScalarValue::Date64(Some(ms)) => Some(serde_json::json!(ms)),
+        ScalarValue::Time32Second(Some(s)) => Some(serde_json::json!(s)),
+        ScalarValue::Time32Millisecond(Some(ms)) => Some(serde_json::json!(ms)),
+        ScalarValue::Time64Microsecond(Some(us)) => Some(serde_json::json!(us)),
+        ScalarValue::Time64Nanosecond(Some(ns)) => Some(serde_json::json!(ns)),
+        ScalarValue::TimestampSecond(Some(s), _) => {
+            Some(serde_json::json!(s.saturating_mul(1_000_000)))
+        }
+        ScalarValue::TimestampMillisecond(Some(ms), _) => {
+            Some(serde_json::json!(ms.saturating_mul(1_000)))
+        }
+        ScalarValue::TimestampMicrosecond(Some(us), _) => Some(serde_json::json!(us)),
+        ScalarValue::TimestampNanosecond(Some(ns), _) => {
+            Some(serde_json::json!(ns.div_euclid(1_000)))
+        }
         _ => None,
     }
 }
@@ -1474,13 +1591,7 @@ impl QueryPlanner {
         // outside `routed_segments` still fall back to flat scan.
         if let Some(ref candidates) = params.candidate_segments {
             let file_path = &entry.file_path;
-            let name = file_path
-                .rsplit_once('/')
-                .map(|(_, name)| name)
-                .unwrap_or(file_path);
-            let name = name.strip_suffix(".puffin").unwrap_or(name);
-            let name = name.strip_suffix(".parquet").unwrap_or(name);
-            let seg_id = name;
+            let seg_id = crate::core::segment::segment_id_from_path(file_path);
 
             let was_routed = params
                 .routed_segments
@@ -1692,7 +1803,11 @@ impl QueryPlanner {
             }
 
             if let Some(values) = &filter.values {
-                if !values.contains(entry_val) {
+                let in_list = values.iter().any(|v| {
+                    v == entry_val
+                        || self.compare_values(entry_val, v) == Some(std::cmp::Ordering::Equal)
+                });
+                if !in_list {
                     bump("bsdb.pruned.partition_in_list");
                     tracing::debug!(
                         "  -> Pruned by partition values IN list: {:?} not in {:?}",
@@ -1936,6 +2051,7 @@ impl QueryPlanner {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     /* DEPRECATED: These tests use the old QueryFilter API which has been replaced by FilterExpr
     #[test]
@@ -2173,5 +2289,74 @@ mod tests {
             planner.might_match_vector(&mk_entry("seg_unindexed"), &params),
             "unindexed segment outside router must fall back to flat scan"
         );
+    }
+
+    #[tokio::test]
+    async fn test_is_fully_covered_by_and_filters() {
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
+            arrow::datatypes::Field::new("cat", arrow::datatypes::DataType::Utf8, true),
+        ]));
+
+        let covered =
+            FilterExpr::parse_sql("id BETWEEN 10 AND 20 AND cat IN ('a', 'b')", schema.clone())
+                .await
+                .expect("parse covered");
+        assert!(covered.is_fully_covered_by_and_filters());
+
+        let with_or = FilterExpr::parse_sql("id = 1 AND (cat = 'a' OR cat = 'b')", schema.clone())
+            .await
+            .expect("parse OR");
+        assert!(!with_or.is_fully_covered_by_and_filters());
+
+        let with_neq = FilterExpr::parse_sql("id = 1 AND cat != 'a'", schema.clone())
+            .await
+            .expect("parse != ");
+        assert!(!with_neq.is_fully_covered_by_and_filters());
+
+        let with_not_in = FilterExpr::parse_sql("id NOT IN (1, 2)", schema.clone())
+            .await
+            .expect("parse NOT IN");
+        assert!(!with_not_in.is_fully_covered_by_and_filters());
+
+        let with_func = FilterExpr::parse_sql("id = 1 AND upper(cat) = 'A'", schema)
+            .await
+            .expect("parse func");
+        assert!(!with_func.is_fully_covered_by_and_filters());
+    }
+
+    #[test]
+    fn test_partition_in_list_numeric_equivalence() {
+        let planner = QueryPlanner::new();
+        let mut entry = ManifestEntry {
+            file_path: "part=2/seg.parquet".to_string(),
+            file_size_bytes: 100,
+            record_count: 10,
+            ..Default::default()
+        };
+        entry
+            .partition_values
+            .insert("part".to_string(), serde_json::json!(2));
+        let qf = QueryFilter {
+            column: "part".to_string(),
+            min: None,
+            min_inclusive: true,
+            max: None,
+            max_inclusive: true,
+            values: Some(vec![serde_json::json!(2.0), serde_json::json!(3)]),
+            negated: false,
+        };
+        assert!(planner.might_match_condition(&entry, &qf));
+
+        let qf_miss = QueryFilter {
+            column: "part".to_string(),
+            min: None,
+            min_inclusive: true,
+            max: None,
+            max_inclusive: true,
+            values: Some(vec![serde_json::json!(4), serde_json::json!(5)]),
+            negated: false,
+        };
+        assert!(!planner.might_match_condition(&entry, &qf_miss));
     }
 }

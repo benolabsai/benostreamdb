@@ -45,7 +45,9 @@ pub struct BenoStreamExecRef {
     pub projection: Option<Vec<usize>>,
     /// Cloned filter string
     pub filter_str: Option<String>,
-    /// Cloned schema
+    /// Unprojected table schema (input for VectorScanExec projection)
+    pub base_schema: arrow::datatypes::SchemaRef,
+    /// Projected schema matching DataFusion's scan output
     pub schema: arrow::datatypes::SchemaRef,
 }
 
@@ -56,6 +58,7 @@ impl BenoStreamExecRef {
             partitions: hs.partitions.clone(),
             projection: hs.projection().cloned(),
             filter_str: hs.filter_str().map(|s| s.to_string()),
+            base_schema: hs.base_schema().clone(),
             schema: hs.schema().clone(),
         }
     }

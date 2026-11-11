@@ -102,9 +102,15 @@ impl crate::core::segment::HybridSegmentWriter {
             self.config.segment_id, col_name
         ));
 
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
+        let first_batch = !self.graph_data.lock().contains_key(col_name);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true);
+        if first_batch {
+            opts.truncate(true);
+        } else {
+            opts.append(true);
+        }
+        let mut file = opts
             .open(&tmp_path)
             .context("Failed to open graph temp file")?;
 

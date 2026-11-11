@@ -458,6 +458,30 @@ impl TableProvider for BenoStreamTableProvider {
             }
         }
 
+        // Partition & stats segment pruning BEFORE building scan partitions so
+        // pruned segments are neither opened nor scheduled in DataFusion.
+        // (`all_segments` was captured above so `EXPLAIN` still reports full
+        // pruning counts.)
+        if !filters.is_empty() && !segments.is_empty() {
+            let mut iter = filters.iter().cloned();
+            if let Some(first) = iter.next() {
+                let combined = iter.fold(first, |acc, next| acc.and(next));
+                let filter_expr = crate::core::planner::FilterExpr::DataFusion(combined);
+                let planner = crate::core::planner::QueryPlanner::new();
+                let before = segments.len();
+                segments = planner
+                    .prune_entries(&segments, Some(&filter_expr), None)
+                    .into_iter()
+                    .map(|(entry, _)| entry)
+                    .collect();
+                tracing::info!(
+                    "SQL Scan: partition/stats pruning kept {}/{} segment(s)",
+                    segments.len(),
+                    before
+                );
+            }
+        }
+
         // Determine parallelism: an explicit override wins, else scale to the
         // effective CPU budget (respects cgroup limits).
         let target_partitions = self
@@ -476,76 +500,273 @@ impl TableProvider for BenoStreamTableProvider {
         // fetch index columns to prioritize filters
         let _index_cols = self.table.get_index_columns(); // This returns Vec<String>
 
-        // Convert DataFusion filters to BenoStream SQL-like filter string
-        // Returns Option<(ColumnName, SQLString)>
-        fn expr_to_sql(expr: &Expr) -> Option<(String, String)> {
+        fn format_col_ident(name: &str) -> String {
+            if !name.is_empty()
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+            {
+                name.to_string()
+            } else {
+                format!("\"{}\"", name.replace('"', "\"\""))
+            }
+        }
+
+        fn unwrap_col_name(expr: &Expr) -> Option<String> {
             match expr {
-                Expr::BinaryExpr(binary) => {
-                    let (left_col, left_sql) = match &*binary.left {
-                        Expr::Column(c) => (c.name.clone(), c.name.clone()),
-                        _ => return None, // Left must be column
-                    };
+                Expr::Column(c) => Some(c.name.clone()),
+                Expr::Cast(c) => unwrap_col_name(&c.expr),
+                Expr::TryCast(c) => unwrap_col_name(&c.expr),
+                _ => None,
+            }
+        }
 
-                    let right_val = match &*binary.right {
-                        Expr::Literal(scalar_value, _) => match scalar_value {
-                            datafusion::scalar::ScalarValue::Utf8(Some(s)) => format!("'{}'", s),
-                            datafusion::scalar::ScalarValue::Int32(Some(i)) => i.to_string(),
-                            datafusion::scalar::ScalarValue::Int64(Some(i)) => i.to_string(),
-                            datafusion::scalar::ScalarValue::Float32(Some(f)) => f.to_string(),
-                            datafusion::scalar::ScalarValue::Float64(Some(f)) => f.to_string(),
-                            datafusion::scalar::ScalarValue::Boolean(Some(b)) => b.to_string(),
-                            _ => scalar_value.to_string(),
-                        },
-                        _ => return None, // Right must be literal
-                    };
+        fn sql_string_literal(s: &str) -> String {
+            format!("'{}'", s.replace('\'', "''"))
+        }
 
-                    let op = match binary.op {
-                        datafusion::logical_expr::Operator::Eq => "=",
-                        datafusion::logical_expr::Operator::Gt => ">",
-                        datafusion::logical_expr::Operator::Lt => "<",
-                        datafusion::logical_expr::Operator::GtEq => ">=",
-                        datafusion::logical_expr::Operator::LtEq => "<=",
-                        _ => return None,
-                    };
-
-                    Some((left_col, format!("{} {} {}", left_sql, op, right_val)))
-                }
-                Expr::InList(in_list) => {
-                    if in_list.negated {
-                        return None;
+        fn unwrap_lit_sql(expr: &Expr) -> Option<String> {
+            use datafusion::scalar::ScalarValue as SV;
+            match expr {
+                Expr::Cast(c) => unwrap_lit_sql(&c.expr),
+                Expr::TryCast(c) => unwrap_lit_sql(&c.expr),
+                Expr::Literal(sv, _) => match sv {
+                    SV::Utf8(Some(s)) | SV::LargeUtf8(Some(s)) | SV::Utf8View(Some(s)) => {
+                        Some(sql_string_literal(s))
                     }
-                    let col_name = match &*in_list.expr {
-                        Expr::Column(c) => c.name.clone(),
-                        _ => return None,
+                    SV::Int8(Some(i)) => Some(i.to_string()),
+                    SV::Int16(Some(i)) => Some(i.to_string()),
+                    SV::Int32(Some(i)) => Some(i.to_string()),
+                    SV::Int64(Some(i)) => Some(i.to_string()),
+                    SV::UInt8(Some(i)) => Some(i.to_string()),
+                    SV::UInt16(Some(i)) => Some(i.to_string()),
+                    SV::UInt32(Some(i)) => Some(i.to_string()),
+                    SV::UInt64(Some(i)) => Some(i.to_string()),
+                    SV::Float32(Some(f)) if f.is_finite() => Some(f.to_string()),
+                    SV::Float64(Some(f)) if f.is_finite() => Some(f.to_string()),
+                    SV::Boolean(Some(b)) => Some(b.to_string()),
+                    SV::Date32(Some(days)) => {
+                        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?;
+                        let date =
+                            epoch.checked_add_signed(chrono::Duration::days(*days as i64))?;
+                        Some(format!("DATE '{}'", date.format("%Y-%m-%d")))
+                    }
+                    SV::Date64(Some(ms)) => {
+                        let dt = chrono::DateTime::from_timestamp_millis(*ms)?;
+                        Some(format!(
+                            "TIMESTAMP '{}'",
+                            dt.format("%Y-%m-%d %H:%M:%S%.3f")
+                        ))
+                    }
+                    SV::TimestampSecond(Some(s), _) => {
+                        let dt = chrono::DateTime::from_timestamp(*s, 0)?;
+                        Some(format!("TIMESTAMP '{}'", dt.format("%Y-%m-%d %H:%M:%S")))
+                    }
+                    SV::TimestampMillisecond(Some(ms), _) => {
+                        let dt = chrono::DateTime::from_timestamp_millis(*ms)?;
+                        Some(format!(
+                            "TIMESTAMP '{}'",
+                            dt.format("%Y-%m-%d %H:%M:%S%.3f")
+                        ))
+                    }
+                    SV::TimestampMicrosecond(Some(us), _) => {
+                        let dt = chrono::DateTime::from_timestamp_micros(*us)?;
+                        Some(format!(
+                            "TIMESTAMP '{}'",
+                            dt.format("%Y-%m-%d %H:%M:%S%.6f")
+                        ))
+                    }
+                    SV::TimestampNanosecond(Some(ns), _) => {
+                        let dt = chrono::DateTime::from_timestamp_nanos(*ns);
+                        Some(format!(
+                            "TIMESTAMP '{}'",
+                            dt.format("%Y-%m-%d %H:%M:%S%.9f")
+                        ))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+
+        fn unwrap_lit_str(expr: &Expr) -> Option<String> {
+            use datafusion::scalar::ScalarValue as SV;
+            match expr {
+                Expr::Cast(c) => unwrap_lit_str(&c.expr),
+                Expr::TryCast(c) => unwrap_lit_str(&c.expr),
+                Expr::Literal(sv, _) => match sv {
+                    SV::Utf8(Some(s)) | SV::LargeUtf8(Some(s)) | SV::Utf8View(Some(s)) => {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+
+        fn extract_bm25_eq_candidates(expr: &Expr, out: &mut Vec<(String, String)>) {
+            use datafusion::logical_expr::Operator as Op;
+            match expr {
+                Expr::BinaryExpr(b) if b.op == Op::And => {
+                    extract_bm25_eq_candidates(&b.left, out);
+                    extract_bm25_eq_candidates(&b.right, out);
+                }
+                Expr::BinaryExpr(b) if b.op == Op::Eq => {
+                    if let (Some(col), Some(val)) =
+                        (unwrap_col_name(&b.left), unwrap_lit_str(&b.right))
+                    {
+                        out.push((col, val));
+                    } else if let (Some(col), Some(val)) =
+                        (unwrap_col_name(&b.right), unwrap_lit_str(&b.left))
+                    {
+                        out.push((col, val));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Convert DataFusion filters into BenoStream pushdown SQL predicates.
+        // Returns a flattened Vec of `(ColumnName, SQLString)` conjuncts.
+        fn expr_to_sql(expr: &Expr) -> Vec<(String, String)> {
+            use datafusion::logical_expr::Operator as Op;
+            match expr {
+                Expr::BinaryExpr(binary) if binary.op == Op::And => {
+                    let mut out = expr_to_sql(&binary.left);
+                    out.extend(expr_to_sql(&binary.right));
+                    out
+                }
+                Expr::BinaryExpr(binary) if binary.op == Op::Or => {
+                    let left_parts = expr_to_sql(&binary.left);
+                    let right_parts = expr_to_sql(&binary.right);
+                    if left_parts.is_empty() || right_parts.is_empty() {
+                        return Vec::new();
+                    }
+                    let left_sql = left_parts
+                        .iter()
+                        .map(|(_, s)| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" AND ");
+                    let right_sql = right_parts
+                        .iter()
+                        .map(|(_, s)| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" AND ");
+                    let col = left_parts[0].0.clone();
+                    vec![(col, format!("(({}) OR ({}))", left_sql, right_sql))]
+                }
+                Expr::BinaryExpr(binary) => {
+                    let forward_op = |op: Op| match op {
+                        Op::Eq => Some("="),
+                        Op::NotEq => Some("!="),
+                        Op::Gt => Some(">"),
+                        Op::Lt => Some("<"),
+                        Op::GtEq => Some(">="),
+                        Op::LtEq => Some("<="),
+                        _ => None,
+                    };
+                    let flipped_op = |op: Op| match op {
+                        Op::Eq => Some("="),
+                        Op::NotEq => Some("!="),
+                        Op::Gt => Some("<"),
+                        Op::Lt => Some(">"),
+                        Op::GtEq => Some("<="),
+                        Op::LtEq => Some(">="),
+                        _ => None,
                     };
 
-                    let mut values = Vec::new();
-                    for v in &in_list.list {
-                        if let Expr::Literal(scalar_value, _) = v {
-                            match scalar_value {
-                                datafusion::scalar::ScalarValue::Utf8(Some(s)) => {
-                                    values.push(format!("'{}'", s))
-                                }
-                                datafusion::scalar::ScalarValue::Int32(Some(i)) => {
-                                    values.push(i.to_string())
-                                }
-                                datafusion::scalar::ScalarValue::Int64(Some(i)) => {
-                                    values.push(i.to_string())
-                                }
-                                _ => return None, // Complex types in IN list
-                            }
-                        } else {
-                            return None;
+                    if let (Some(col), Some(lit)) =
+                        (unwrap_col_name(&binary.left), unwrap_lit_sql(&binary.right))
+                    {
+                        if let Some(op) = forward_op(binary.op) {
+                            return vec![(
+                                col.clone(),
+                                format!("{} {} {}", format_col_ident(&col), op, lit),
+                            )];
+                        }
+                    } else if let (Some(lit), Some(col)) =
+                        (unwrap_lit_sql(&binary.left), unwrap_col_name(&binary.right))
+                    {
+                        if let Some(op) = flipped_op(binary.op) {
+                            return vec![(
+                                col.clone(),
+                                format!("{} {} {}", format_col_ident(&col), op, lit),
+                            )];
                         }
                     }
-
-                    if values.is_empty() {
-                        return None;
-                    }
-                    let val_str = values.join(",");
-                    Some((col_name.clone(), format!("{} IN ({})", col_name, val_str)))
+                    Vec::new()
                 }
-                _ => None,
+                Expr::Between(between) if !between.negated => {
+                    let Some(col) = unwrap_col_name(&between.expr) else {
+                        return Vec::new();
+                    };
+                    let Some(low) = unwrap_lit_sql(&between.low) else {
+                        return Vec::new();
+                    };
+                    let Some(high) = unwrap_lit_sql(&between.high) else {
+                        return Vec::new();
+                    };
+                    let ident = format_col_ident(&col);
+                    vec![
+                        (col.clone(), format!("{ident} >= {low}")),
+                        (col, format!("{ident} <= {high}")),
+                    ]
+                }
+                Expr::IsNull(inner) => {
+                    if let Some(col) = unwrap_col_name(inner) {
+                        let ident = format_col_ident(&col);
+                        vec![(col, format!("{ident} IS NULL"))]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                Expr::IsNotNull(inner) => {
+                    if let Some(col) = unwrap_col_name(inner) {
+                        let ident = format_col_ident(&col);
+                        vec![(col, format!("{ident} IS NOT NULL"))]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                Expr::InList(in_list) if !in_list.negated => {
+                    let Some(col_name) = unwrap_col_name(&in_list.expr) else {
+                        return Vec::new();
+                    };
+                    let mut values = Vec::new();
+                    for v in &in_list.list {
+                        let Some(lit) = unwrap_lit_sql(v) else {
+                            return Vec::new();
+                        };
+                        values.push(lit);
+                    }
+                    if values.is_empty() {
+                        return Vec::new();
+                    }
+                    let ident = format_col_ident(&col_name);
+                    vec![(col_name, format!("{ident} IN ({})", values.join(", ")))]
+                }
+                Expr::ScalarFunction(sf)
+                    if matches!(
+                        sf.func.name(),
+                        "json_path_exists" | "json_exists" | "json_contains"
+                    ) && sf.args.len() >= 2 =>
+                {
+                    let Some(col_name) = unwrap_col_name(&sf.args[0]) else {
+                        return Vec::new();
+                    };
+                    let mut lit_args = Vec::with_capacity(sf.args.len() - 1);
+                    for arg in &sf.args[1..] {
+                        let Some(s) = unwrap_lit_str(arg) else {
+                            return Vec::new();
+                        };
+                        lit_args.push(sql_string_literal(&s));
+                    }
+                    let ident = format_col_ident(&col_name);
+                    vec![(
+                        col_name,
+                        format!("{}({}, {})", sf.func.name(), ident, lit_args.join(", ")),
+                    )]
+                }
+                _ => Vec::new(),
             }
         }
 
@@ -555,38 +776,35 @@ impl TableProvider for BenoStreamTableProvider {
         let mut bm25_params = None;
 
         for filter in filters {
-            if let Some((col, sql)) = expr_to_sql(filter) {
-                // Check if this is a BM25 candidate: Column has BM25 index and is an equality match
-                let has_bm25 = self
-                    .table
-                    .indexing
-                    .index_configs
-                    .read()
-                    .get(&col)
-                    .map(|cfg| cfg.tokenizer.is_some())
-                    .unwrap_or(false);
-
-                if has_bm25 && bm25_params.is_none() {
-                    if let Expr::BinaryExpr(b) = filter {
-                        if b.op == datafusion::logical_expr::Operator::Eq {
-                            // Extract the literal value
-                            if let datafusion::logical_expr::Expr::Literal(scalar, _) = &*b.right {
-                                if let datafusion::scalar::ScalarValue::Utf8(Some(query_str)) =
-                                    scalar
-                                {
-                                    tracing::info!("SQL BM25 Pushdown: Triggering keyword search for '{}' on column '{}'", query_str, col);
-                                    let params = crate::core::planner::VectorSearchParams::new(
-                                        &col,
-                                        crate::core::index::VectorValue::Keyword(query_str.clone()),
-                                        limit.unwrap_or(100),
-                                    );
-                                    bm25_params = Some(params);
-                                }
-                            }
-                        }
+            if bm25_params.is_none() {
+                let mut candidates = Vec::new();
+                extract_bm25_eq_candidates(filter, &mut candidates);
+                for (col, query_str) in candidates {
+                    let has_bm25 = self
+                        .table
+                        .indexing
+                        .index_configs
+                        .read()
+                        .get(&col)
+                        .map(|cfg| cfg.tokenizer.is_some())
+                        .unwrap_or(false);
+                    if has_bm25 {
+                        tracing::info!(
+                            "SQL BM25 Pushdown: Triggering keyword search for '{}' on column '{}'",
+                            query_str,
+                            col
+                        );
+                        bm25_params = Some(crate::core::planner::VectorSearchParams::new(
+                            &col,
+                            crate::core::index::VectorValue::Keyword(query_str),
+                            limit.unwrap_or(100),
+                        ));
+                        break;
                     }
                 }
+            }
 
+            for (_col, sql) in expr_to_sql(filter) {
                 all_filters.push(sql);
             }
         }
@@ -601,6 +819,21 @@ impl TableProvider for BenoStreamTableProvider {
             use crate::core::sql::physical_plan::vector_merge::VectorMergeExec;
             use crate::core::sql::physical_plan::vector_scan::VectorScanExec;
 
+            let base_schema = self.schema();
+            let projected_schema = if let Some(proj) = projection {
+                if proj.iter().any(|&i| i >= base_schema.fields().len()) {
+                    base_schema.clone()
+                } else {
+                    Arc::new(
+                        base_schema
+                            .project(proj)
+                            .map_err(datafusion::error::DataFusionError::from)?,
+                    )
+                }
+            } else {
+                base_schema.clone()
+            };
+
             let scan_exec = VectorScanExec::new(
                 self.table.clone(),
                 partitions,
@@ -608,11 +841,15 @@ impl TableProvider for BenoStreamTableProvider {
                 best_filter,
                 vec![vp],
                 limit,
-                self.schema(),
+                base_schema,
             )?;
 
-            let merge_exec =
-                VectorMergeExec::new(Arc::new(scan_exec), limit.unwrap_or(100), 0, self.schema())?;
+            let merge_exec = VectorMergeExec::new(
+                Arc::new(scan_exec),
+                limit.unwrap_or(100),
+                0,
+                projected_schema,
+            )?;
 
             Ok(Arc::new(merge_exec))
         } else {
@@ -676,14 +913,43 @@ impl TableProvider for BenoStreamTableProvider {
     ) -> datafusion::error::Result<Vec<TableProviderFilterPushDown>> {
         let index_configs = self.table.indexing.index_configs.read();
 
+        fn unwrap_col(expr: &Expr) -> Option<&str> {
+            match expr {
+                Expr::Column(c) => Some(c.name.as_str()),
+                Expr::Cast(c) => unwrap_col(&c.expr),
+                Expr::TryCast(c) => unwrap_col(&c.expr),
+                _ => None,
+            }
+        }
+
+        fn has_str_lit(expr: &Expr) -> bool {
+            use datafusion::scalar::ScalarValue as SV;
+            match expr {
+                Expr::Cast(c) => has_str_lit(&c.expr),
+                Expr::TryCast(c) => has_str_lit(&c.expr),
+                Expr::Literal(sv, _) => matches!(
+                    sv,
+                    SV::Utf8(Some(_)) | SV::LargeUtf8(Some(_)) | SV::Utf8View(Some(_))
+                ),
+                _ => false,
+            }
+        }
+
         Ok(filters
             .iter()
             .map(|f| {
                 if let Expr::BinaryExpr(b) = f {
                     if b.op == datafusion::logical_expr::Operator::Eq {
-                        if let Expr::Column(c) = &*b.left {
+                        let col_opt = if unwrap_col(&b.left).is_some() && has_str_lit(&b.right) {
+                            unwrap_col(&b.left)
+                        } else if unwrap_col(&b.right).is_some() && has_str_lit(&b.left) {
+                            unwrap_col(&b.right)
+                        } else {
+                            None
+                        };
+                        if let Some(col_name) = col_opt {
                             let has_bm25 = index_configs
-                                .get(&c.name)
+                                .get(col_name)
                                 .map(|cfg| cfg.tokenizer.is_some())
                                 .unwrap_or(false);
                             if has_bm25 {

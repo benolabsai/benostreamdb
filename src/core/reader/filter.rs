@@ -13,7 +13,7 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use parquet::arrow::ProjectionMask;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use roaring::RoaringBitmap;
 
 use super::*;
@@ -38,17 +38,18 @@ impl HybridReader {
 
         let mut possible = false;
         let mut checked_any_bloom_filter = false;
-        let pq_path_str = self.config.parquet_path.clone().unwrap_or_default();
+        let pq_path = self.resolve_object_path("parquet");
+        let pq_path_str = pq_path.to_string();
         if pq_path_str.is_empty() {
             return Ok(true);
         }
-        let pq_path = object_store::path::Path::from(pq_path_str.clone());
+        let data_store = self.data_store();
 
         // Get file size to handle Range correctly
         let file_size = if let Some(s) = self.config.file_size {
             s
         } else {
-            self.store.head(&pq_path).await?.size
+            data_store.head(&pq_path).await?.size
         };
 
         for i in 0..metadata.num_row_groups() {
@@ -57,7 +58,7 @@ impl HybridReader {
 
             if let Some(offset) = col_meta.bloom_filter_offset() {
                 checked_any_bloom_filter = true;
-                let cache_key = format!("{}/{}:{}", self.root_uri, pq_path_str, offset);
+                let cache_key = format!("{}/{}:{}", self.cache_root(), pq_path_str, offset);
 
                 let sbbf = if let Some(cached) = crate::core::cache::BLOOM_FILTER_CACHE
                     .get_with_metrics(&cache_key, "bloom_filter")
@@ -71,8 +72,7 @@ impl HybridReader {
                     let end = (start + 2 * 1024 * 1024).min(file_size);
 
                     // Fetch the Bloom Filter blob from storage
-                    let data_res = self
-                        .store
+                    let data_res = data_store
                         .get_range(&pq_path, start..end)
                         .await
                         .inspect(|b| {
@@ -81,7 +81,7 @@ impl HybridReader {
                     let data = match data_res {
                         Ok(d) => d,
                         Err(_) => {
-                            let b = self.store.get_range(&pq_path, start..file_size).await?;
+                            let b = data_store.get_range(&pq_path, start..file_size).await?;
                             crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
                             b
                         }
@@ -140,8 +140,21 @@ impl HybridReader {
                         }
                     }
                     parquet::basic::Type::INT32 => {
-                        if let Some(i) = value.as_i64() {
-                            let i32_val = i as i32;
+                        if let Some(i32_val) = value
+                            .as_i64()
+                            .and_then(|i| i32::try_from(i).ok())
+                            .or_else(|| {
+                                value.as_str().and_then(|s| {
+                                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                        .ok()
+                                        .and_then(|d| {
+                                            chrono::NaiveDate::from_ymd_opt(1970, 1, 1).and_then(
+                                                |epoch| i32::try_from((d - epoch).num_days()).ok(),
+                                            )
+                                        })
+                                })
+                            })
+                        {
                             sbbf.check(&i32_val)
                         } else {
                             true
@@ -153,11 +166,11 @@ impl HybridReader {
                             // s is &str. &s is &&str. &str implements AsBytes.
                             sbbf.check(&s)
                         } else if let Some(vals) = value.as_array() {
-                            let bytes: Vec<u8> = vals
+                            let bytes: Option<Vec<u8>> = vals
                                 .iter()
-                                .filter_map(|v| v.as_u64().map(|n| n as u8))
+                                .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()))
                                 .collect();
-                            if bytes.len() == vals.len() {
+                            if let Some(bytes) = bytes {
                                 sbbf.check(&bytes)
                             } else {
                                 true
@@ -209,47 +222,50 @@ impl HybridReader {
         }
 
         // 2. Inverted Index / Bitmap (Precise lookup)
-        // Convert serde_json::Value to QueryFilter for the index search
         let filter = crate::core::planner::QueryFilter {
             column: column.to_string(),
             min: Some(value.clone()),
             min_inclusive: true,
             max: Some(value.clone()),
             max_inclusive: true,
-            values: None,
+            values: Some(vec![value.clone()]),
             negated: false,
         };
 
-        let deletes = self.load_merged_deletes().await.unwrap_or_default();
-
-        if let Some(bitmap) = self.get_scalar_filter_bitmap(&filter).await? {
-            let live = &bitmap - &deletes;
-            return Ok(!live.is_empty());
+        if let Some((bitmap, is_exact)) = self
+            .get_scalar_filter_bitmap_with_exactness(&filter)
+            .await?
+        {
+            if bitmap.is_empty() {
+                return Ok(false);
+            }
+            if is_exact {
+                return Ok(true);
+            }
         }
 
-        // 3. Fallback: Full Scan (Slowest)
-        // This is only called if Bloom Filter said "Possible" and no Inverted Index exists.
-        let batches = self.stream_all(None).await?;
-        let mut stream = batches;
-        let mut row_offset: u32 = 0;
+        // 3. Fallback: Full Scan (projecting target column; stream_all already applies position & equality deletes)
+        let proj_schema = self
+            .get_arrow_schema()
+            .await
+            .ok()
+            .and_then(|s| s.field_with_name(column).ok().cloned())
+            .map(|f| Arc::new(arrow::datatypes::Schema::new(vec![f])));
+        let mut stream = self.stream_all(proj_schema).await?;
         while let Some(batch_res) = stream.next().await {
             let batch = batch_res?;
             let col = batch
                 .column_by_name(column)
                 .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in scan", column))?;
 
-            // Check rows in batch
             for i in 0..batch.num_rows() {
-                if deletes.contains(row_offset + i as u32) {
+                if col.is_null(i) {
                     continue;
                 }
-                let val = crate::core::manifest::ManifestValue::from_array(col, i);
-                // Simple comparison (might need type handling optimization)
-                if format!("{}", val) == format!("{}", value).trim_matches('"') {
+                if arrow_cell_matches_json(col, i, value) {
                     return Ok(true);
                 }
             }
-            row_offset += batch.num_rows() as u32;
         }
 
         Ok(false)
@@ -260,6 +276,17 @@ impl HybridReader {
         &self,
         filter: &crate::core::planner::QueryFilter,
     ) -> Result<Option<RoaringBitmap>> {
+        Ok(self
+            .get_scalar_filter_bitmap_with_exactness(filter)
+            .await?
+            .map(|(bm, _)| bm))
+    }
+
+    #[tracing::instrument(skip(self, filter))]
+    pub(crate) async fn get_scalar_filter_bitmap_with_exactness(
+        &self,
+        filter: &crate::core::planner::QueryFilter,
+    ) -> Result<Option<(RoaringBitmap, bool)>> {
         let filter_column = &filter.column;
 
         // Lexical (parquet) indexes: canonical `lexical`, legacy `inverted`, or
@@ -277,85 +304,114 @@ impl HybridReader {
                 && self.config.is_index_valid(f)
         });
 
-        let matching_bitmap = if let Some(idx_info) = inv_idx_info {
-            let inv_path_str = &idx_info.file_path;
-            let mut dir_path = self.config.parquet_path.clone().unwrap_or_default();
-            if let Some(pos) = dir_path.rfind('/') {
-                dir_path.truncate(pos);
-            } else {
-                dir_path = "".to_string();
-            }
+        let (matching_bitmap, mut key_check_exact) = if let Some(idx_info) = inv_idx_info {
+            let full_inv_path_str = self.resolve_index_path(&idx_info.file_path);
 
-            let full_inv_path_str = if dir_path.is_empty() || inv_path_str.contains('/') {
-                inv_path_str.clone()
-            } else {
-                format!("{}/{}", dir_path, inv_path_str)
-            };
-
-            // Use Inverted Index (Value -> RowIDs)
-            // 1. Check Object Cache (Decoded RecordBatches)
             let cache_key = if let Some(offset) = idx_info.blob_offset {
-                format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
+                format!("{}/{}:{}", self.cache_root(), full_inv_path_str, offset)
             } else {
-                format!("{}/{}", self.root_uri, full_inv_path_str)
+                format!("{}/{}", self.cache_root(), full_inv_path_str)
             };
+            let source_type_key = format!("{}:source_type", cache_key);
 
-            let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE
-                .get_with_metrics(&cache_key, "inverted_index")
-                .await
-            {
-                cached.as_ref().clone()
-            } else {
-                // Cache Miss - Load from Disk/Byte Cache
-                let inv_path = Path::from(full_inv_path_str.as_str());
-
-                let inv_bytes = match crate::core::cache::BYTE_CACHE
+            let inv_path = Path::from(full_inv_path_str.as_str());
+            let load_inv_bytes = || async {
+                match crate::core::cache::BYTE_CACHE
                     .get_with_metrics(&cache_key, "byte")
                     .await
                 {
-                    Some(cached) => cached.as_ref().clone(),
+                    Some(cached) => Ok::<Vec<u8>, anyhow::Error>(cached.as_ref().clone()),
                     None => {
                         let bytes = if let (Some(offset), Some(length)) =
                             (idx_info.blob_offset, idx_info.blob_length)
                         {
-                            // Puffin Blob: Byte Range Read
-                            {
-                                let b = self
-                                    .store
-                                    .get_range(
-                                        &inv_path,
-                                        (offset as u64)..(offset as u64 + length as u64),
-                                    )
-                                    .await?;
-                                crate::telemetry::metrics::IO_BYTES_READ_TOTAL
-                                    .inc_by(b.len() as u64);
-                                b
-                            }
-                            .to_vec()
+                            let b = self
+                                .store
+                                .get_range(
+                                    &inv_path,
+                                    (offset as u64)..(offset as u64 + length as u64),
+                                )
+                                .await?;
+                            crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                            b.to_vec()
                         } else {
-                            // Full File read
-                            match self.store.get(&inv_path).await {
-                                Ok(res) => {
-                                    let b = res.bytes().await?;
-                                    crate::telemetry::metrics::IO_BYTES_READ_TOTAL
-                                        .inc_by(b.len() as u64);
-                                    b.to_vec()
-                                }
-                                Err(e) => {
-                                    if e.to_string().contains("not found")
-                                        || e.to_string().contains("404")
-                                    {
-                                        return Ok(None);
-                                    }
-                                    return Err(e.into());
-                                }
-                            }
+                            let res = self.store.get(&inv_path).await?;
+                            let b = res.bytes().await?;
+                            crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                            b.to_vec()
                         };
 
                         crate::core::cache::BYTE_CACHE
                             .insert(cache_key.clone(), Arc::new(bytes.clone()))
                             .await;
-                        bytes
+                        Ok(bytes)
+                    }
+                }
+            };
+
+            let extract_inv_metadata =
+                |metadata: &parquet::file::metadata::ParquetMetaData| -> (String, String) {
+                    let mut analyzer_val: Option<String> = None;
+                    let mut source_type_val: Option<String> = None;
+                    if let Some(kv_list) = metadata.file_metadata().key_value_metadata() {
+                        for kv in kv_list {
+                            if kv.key == "analyzer" {
+                                analyzer_val = kv.value.clone();
+                            } else if kv.key == "source_type" {
+                                source_type_val = kv.value.clone();
+                            }
+                        }
+                    }
+                    let analyzer = analyzer_val.unwrap_or_else(|| {
+                        if idx_info.algorithm == "bm25" {
+                            "analyzer:english".to_string()
+                        } else {
+                            "identity".to_string()
+                        }
+                    });
+                    let source_type = source_type_val.unwrap_or_default();
+                    (analyzer, source_type)
+                };
+
+            let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE
+                .get_with_metrics(&cache_key, "inverted_index")
+                .await
+            {
+                // Repopulate analyzer/source_type metadata if ANALYZER_META_CACHE evicted independently.
+                if crate::core::cache::ANALYZER_META_CACHE
+                    .get(&cache_key)
+                    .await
+                    .is_none()
+                    || crate::core::cache::ANALYZER_META_CACHE
+                        .get(&source_type_key)
+                        .await
+                        .is_none()
+                {
+                    if let Ok(inv_bytes) = load_inv_bytes().await {
+                        if let Ok(builder) =
+                            parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                                Bytes::from(inv_bytes),
+                            )
+                        {
+                            let (analyzer, source_type) = extract_inv_metadata(builder.metadata());
+                            crate::core::cache::ANALYZER_META_CACHE
+                                .insert(cache_key.clone(), analyzer)
+                                .await;
+                            crate::core::cache::ANALYZER_META_CACHE
+                                .insert(source_type_key.clone(), source_type)
+                                .await;
+                        }
+                    }
+                }
+                cached.as_ref().clone()
+            } else {
+                let inv_bytes = match load_inv_bytes().await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        if e.to_string().contains("not found") || e.to_string().contains("404") {
+                            return Ok(None);
+                        }
+                        return Err(e);
                     }
                 };
 
@@ -364,52 +420,48 @@ impl HybridReader {
                         Bytes::from(inv_bytes),
                     )?;
 
-                // Record the analyzer so an exact-match filter can tell a
-                // tokenized (BM25) inverted index from an exact (identity) one.
-                if let Some(kv_list) = builder.metadata().file_metadata().key_value_metadata() {
-                    for kv in kv_list {
-                        if kv.key == "analyzer" {
-                            if let Some(value) = &kv.value {
-                                crate::core::cache::ANALYZER_META_CACHE
-                                    .insert(cache_key.clone(), value.clone())
-                                    .await;
-                            }
-                            break;
-                        }
-                    }
-                }
-                let reader = builder.build()?;
+                let (analyzer, source_type) = extract_inv_metadata(builder.metadata());
+                crate::core::cache::ANALYZER_META_CACHE
+                    .insert(cache_key.clone(), analyzer)
+                    .await;
+                crate::core::cache::ANALYZER_META_CACHE
+                    .insert(source_type_key.clone(), source_type)
+                    .await;
 
+                let reader = builder.build()?;
                 let mut decoded = Vec::new();
                 for batch_result in reader {
                     decoded.push(batch_result?);
                 }
 
                 crate::core::cache::INVERTED_INDEX_CACHE
-                    .insert(
-                        format!("{}/{}", self.root_uri, full_inv_path_str),
-                        Arc::new(decoded.clone()),
-                    )
+                    .insert(cache_key.clone(), Arc::new(decoded.clone()))
                     .await;
                 decoded
             };
 
-            // A tokenized (BM25) inverted index stores *tokens*, not raw values,
-            // so it cannot answer an exact-match or range filter — using it would
-            // silently drop every matching row (e.g. `category = 'cat_1'` against
-            // an index keyed on `["cat", "1"]` returns nothing). Only an
-            // identity-analyzed index is exact; otherwise fall back to a full scan.
+            let analyzer = crate::core::cache::ANALYZER_META_CACHE
+                .get(&cache_key)
+                .await
+                .unwrap_or_else(|| {
+                    if idx_info.algorithm == "bm25" {
+                        "analyzer:english".to_string()
+                    } else {
+                        "identity".to_string()
+                    }
+                });
             let is_exact_filter =
                 filter.values.is_some() || filter.min.is_some() || filter.max.is_some();
-            if is_exact_filter {
-                let analyzer = crate::core::cache::ANALYZER_META_CACHE
-                    .get(&cache_key)
-                    .await
-                    .unwrap_or_else(|| "identity".to_string());
-                if analyzer != "identity" {
-                    return Ok(None);
-                }
+            if is_exact_filter && analyzer != "identity" {
+                return Ok(None);
             }
+
+            let source_type = crate::core::cache::ANALYZER_META_CACHE
+                .get(&source_type_key)
+                .await
+                .unwrap_or_default();
+            let is_timestamp_day = source_type == "timestamp";
+            let mut key_check_exact = analyzer == "identity" && !is_timestamp_day;
 
             let mut bitmap = RoaringBitmap::new();
 
@@ -424,340 +476,17 @@ impl HybridReader {
                         anyhow::anyhow!("Expected ListArray in inverted index column 1")
                     })?;
 
-                // Perform range/value filtering on inverted index keys
                 for i in 0..batch.num_rows() {
-                    let key_ok = if let Some(values) = &filter.values {
-                        match key_array.data_type() {
-                            // Each arm is guarded by `key_array.data_type()`, so the
-                            // downcast is a true invariant; `else { false }` keeps the
-                            // arm total instead of unwrapping.
-                            arrow::datatypes::DataType::Utf8 => {
-                                if let Some(arr) = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::StringArray>()
-                                {
-                                    let val = arr.value(i);
-                                    let mut matched = values.iter().any(|v| {
-                                        if let Some(s) = v.as_str() {
-                                            val == s || val.eq_ignore_ascii_case(s)
-                                        } else {
-                                            false
-                                        }
-                                    });
-                                    if filter.negated {
-                                        matched = !matched;
-                                    }
-                                    matched
-                                } else {
-                                    false
-                                }
-                            }
-                            arrow::datatypes::DataType::Int32 => {
-                                if let Some(arr) = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Int32Array>()
-                                {
-                                    let val = arr.value(i);
-                                    let mut matched = values.iter().any(|v| {
-                                        if let Some(vi) = v.as_i64() {
-                                            val == vi as i32
-                                        } else {
-                                            false
-                                        }
-                                    });
-                                    if filter.negated {
-                                        matched = !matched;
-                                    }
-                                    matched
-                                } else {
-                                    false
-                                }
-                            }
-                            arrow::datatypes::DataType::Int64 => {
-                                if let Some(arr) = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Int64Array>()
-                                {
-                                    let val = arr.value(i);
-                                    let mut matched = values.iter().any(|v| {
-                                        if let Some(vi) = v.as_i64() {
-                                            val == vi
-                                        } else {
-                                            false
-                                        }
-                                    });
-                                    if filter.negated {
-                                        matched = !matched;
-                                    }
-                                    matched
-                                } else {
-                                    false
-                                }
-                            }
-                            _ => true,
-                        }
-                    } else {
-                        match (key_array.data_type(), &filter.min, &filter.max) {
-                            (arrow::datatypes::DataType::Utf8, Some(min_val), _) => {
-                                let val = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::StringArray>()
-                                    .context("Invalid cast")?
-                                    .value(i);
-                                let mut ok = true;
-                                if let Some(min_s) = min_val.as_str() {
-                                    if filter.min == filter.max {
-                                        ok = val == min_s || val.eq_ignore_ascii_case(min_s);
-                                    } else {
-                                        if filter.min_inclusive {
-                                            ok &= val >= min_s
-                                                || val.to_lowercase() >= min_s.to_lowercase();
-                                        } else {
-                                            ok &= val > min_s
-                                                || val.to_lowercase() > min_s.to_lowercase();
-                                        }
-                                        if let Some(max_val) = &filter.max {
-                                            if let Some(max_s) = max_val.as_str() {
-                                                if filter.max_inclusive {
-                                                    ok &= val <= max_s
-                                                        || val.to_lowercase()
-                                                            <= max_s.to_lowercase();
-                                                } else {
-                                                    ok &= val < max_s
-                                                        || val.to_lowercase()
-                                                            < max_s.to_lowercase();
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                ok
-                            }
-                            (arrow::datatypes::DataType::Int32, Some(min_v), _) => {
-                                let val = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Int32Array>()
-                                    .context("Invalid cast")?
-                                    .value(i);
-                                let mut ok = true;
-                                if let Some(min_i) = min_v.as_i64() {
-                                    let min_i = min_i as i32;
-                                    if filter.min_inclusive {
-                                        ok &= val >= min_i;
-                                    } else {
-                                        ok &= val > min_i;
-                                    }
-                                    if ok {
-                                        let row_ids_str = row_ids_list
-                                            .value(i)
-                                            .as_any()
-                                            .downcast_ref::<arrow::array::UInt32Array>()
-                                            .map(|a| format!("{:?}", a.values()))
-                                            .unwrap_or_default();
-                                        tracing::debug!(
-                                            "inverted_index_match: col={}, val={}, row_ids={}",
-                                            filter.column,
-                                            val,
-                                            row_ids_str
-                                        );
-                                    }
-                                }
-                                if let Some(max_v) = &filter.max {
-                                    if let Some(max_i) = max_v.as_i64() {
-                                        let max_i = max_i as i32;
-                                        if filter.max_inclusive {
-                                            ok &= val <= max_i;
-                                        } else {
-                                            ok &= val < max_i;
-                                        }
-                                    }
-                                }
-                                ok
-                            }
-                            (arrow::datatypes::DataType::Int64, Some(min_v), _) => {
-                                let val = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Int64Array>()
-                                    .context("Invalid cast")?
-                                    .value(i);
-                                let mut ok = true;
-                                if let Some(min_i) = min_v.as_i64() {
-                                    if filter.min_inclusive {
-                                        ok &= val >= min_i;
-                                    } else {
-                                        ok &= val > min_i;
-                                    }
-                                }
-                                if let Some(max_v) = &filter.max {
-                                    if let Some(max_i) = max_v.as_i64() {
-                                        if filter.max_inclusive {
-                                            ok &= val <= max_i;
-                                        } else {
-                                            ok &= val < max_i;
-                                        }
-                                    }
-                                }
-                                ok
-                            }
-                            (arrow::datatypes::DataType::Float64, Some(min_v), _) => {
-                                let val = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Float64Array>()
-                                    .context("Invalid cast")?
-                                    .value(i);
-                                let mut ok = true;
-                                if let Some(min_f) = min_v.as_f64() {
-                                    if filter.min_inclusive {
-                                        ok &= val >= min_f;
-                                    } else {
-                                        ok &= val > min_f;
-                                    }
-                                }
-                                if let Some(max_v) = &filter.max {
-                                    if let Some(max_f) = max_v.as_f64() {
-                                        if filter.max_inclusive {
-                                            ok &= val <= max_f;
-                                        } else {
-                                            ok &= val < max_f;
-                                        }
-                                    }
-                                }
-                                ok
-                            }
-                            (arrow::datatypes::DataType::Date32, Some(min_v), _) => {
-                                let val = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Date32Array>()
-                                    .context("Invalid cast")?
-                                    .value(i);
-                                // `NaiveDate::default()` is 1970-01-01 (`UNIX_EPOCH`).
-                                let epoch = chrono::NaiveDate::default();
-                                let mut ok = true;
-                                if let Some(min_s) = min_v.as_str() {
-                                    let min_date =
-                                        chrono::NaiveDate::parse_from_str(min_s, "%Y-%m-%d")
-                                            .unwrap_or(epoch);
-                                    let min_i = (min_date - epoch).num_days() as i32;
-                                    if filter.min_inclusive {
-                                        ok &= val >= min_i;
-                                    } else {
-                                        ok &= val > min_i;
-                                    }
-                                }
-                                if let Some(max_v) = &filter.max {
-                                    if let Some(max_s) = max_v.as_str() {
-                                        let max_date =
-                                            chrono::NaiveDate::parse_from_str(max_s, "%Y-%m-%d")
-                                                .unwrap_or(epoch);
-                                        let max_i = (max_date - epoch).num_days() as i32;
-                                        if filter.max_inclusive {
-                                            ok &= val <= max_i;
-                                        } else {
-                                            ok &= val < max_i;
-                                        }
-                                    }
-                                }
-                                ok
-                            }
-                            // Time32 range
-                            (arrow::datatypes::DataType::Time32(unit), Some(min), _) => {
-                                let val = match unit {
-                                    arrow::datatypes::TimeUnit::Second => key_array
-                                        .as_any()
-                                        .downcast_ref::<arrow::array::Time32SecondArray>()
-                                        .map(|a| a.value(i)),
-                                    arrow::datatypes::TimeUnit::Millisecond => key_array
-                                        .as_any()
-                                        .downcast_ref::<arrow::array::Time32MillisecondArray>()
-                                        .map(|a| a.value(i)),
-                                    _ => None,
-                                };
-
-                                if let Some(v) = val {
-                                    let min_i = min.as_i64().unwrap_or(i64::MIN) as i32;
-                                    if filter.min_inclusive {
-                                        v >= min_i
-                                    } else {
-                                        v > min_i
-                                    }
-                                } else {
-                                    true // Default to true if type check fails to avoid false negatives? Or false? usually false.
-                                }
-                            }
-                            // Time64 range
-                            (arrow::datatypes::DataType::Time64(unit), Some(min), _) => {
-                                let val = match unit {
-                                    arrow::datatypes::TimeUnit::Microsecond => key_array
-                                        .as_any()
-                                        .downcast_ref::<arrow::array::Time64MicrosecondArray>()
-                                        .map(|a| a.value(i)),
-                                    arrow::datatypes::TimeUnit::Nanosecond => key_array
-                                        .as_any()
-                                        .downcast_ref::<arrow::array::Time64NanosecondArray>()
-                                        .map(|a| a.value(i)),
-                                    _ => None,
-                                };
-
-                                if let Some(v) = val {
-                                    let min_i = min.as_i64().unwrap_or(i64::MIN);
-                                    if filter.min_inclusive {
-                                        v >= min_i
-                                    } else {
-                                        v > min_i
-                                    }
-                                } else {
-                                    true
-                                }
-                            }
-                            // Boolean equality
-                            (arrow::datatypes::DataType::Boolean, Some(min), _) => {
-                                let val = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::BooleanArray>()
-                                    .context("Invalid cast")?
-                                    .value(i);
-                                let target = min.as_bool().unwrap_or(false);
-
-                                val == target
-                            }
-                            // Binary equality
-                            (arrow::datatypes::DataType::Binary, Some(min), Some(max))
-                                if min == max && filter.min_inclusive && filter.max_inclusive =>
-                            {
-                                let val = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::BinaryArray>()
-                                    .context("Invalid cast")?
-                                    .value(i);
-                                // Assume filter value is string or bytes? JSON usually string.
-                                if let Some(s) = min.as_str() {
-                                    val == s.as_bytes()
-                                } else {
-                                    false
-                                }
-                            }
-                            // Decimal128 range (Best effort f64 comparison for now)
-                            (arrow::datatypes::DataType::Decimal128(_p, s), Some(min), _) => {
-                                let val_i128 = key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Decimal128Array>()
-                                    .context("Invalid cast")?
-                                    .value(i);
-                                // Convert i128 to f64 for comparison against JSON number
-                                // Value = i128 / 10^scale
-                                let divisor = 10_f64.powi(*s as i32);
-                                let val_f64 = val_i128 as f64 / divisor;
-
-                                let min_f = min.as_f64().unwrap_or(f64::MIN);
-                                if filter.min_inclusive {
-                                    val_f64 >= min_f
-                                } else {
-                                    val_f64 > min_f
-                                }
-                            }
-                            _ => true,
-                        }
-                    };
+                    if key_array.is_null(i) {
+                        continue;
+                    }
+                    let key_ok = evaluate_inverted_key(
+                        key_array,
+                        i,
+                        filter,
+                        is_timestamp_day,
+                        &mut key_check_exact,
+                    )?;
 
                     if key_ok {
                         let row_ids = row_ids_list.value(i);
@@ -776,33 +505,34 @@ impl HybridReader {
                     }
                 }
             }
-            bitmap
+            (bitmap, key_check_exact)
         } else {
-            // Step 1: Read the scalar bitmap (`.idx`). Prefer the manifest's
-            // `scalar` index path; fall back to the legacy guessed path only when
-            // the manifest has no entry.
+            // Legacy/fallback scalar bitmap (`.idx`) has no per-key predicate filtering.
+
             let idx_path = match bitmap_idx_info {
-                Some(info) => Path::from(info.file_path.as_str()),
+                Some(info) => {
+                    let p = self.resolve_index_path(&info.file_path);
+                    Path::from(p.as_str())
+                }
                 None => self.resolve_object_path(&format!("{}.idx", filter_column)),
             };
             let idx_path_str = idx_path.to_string();
 
             let cache_key = if let Some(info) = bitmap_idx_info {
                 if let Some(offset) = info.blob_offset {
-                    format!("{}/{}:{}", self.root_uri, idx_path_str, offset)
+                    format!("{}/{}:{}", self.cache_root(), idx_path_str, offset)
                 } else {
-                    format!("{}/{}", self.root_uri, idx_path_str)
+                    format!("{}/{}", self.cache_root(), idx_path_str)
                 }
             } else {
-                format!("{}/{}", self.root_uri, idx_path_str)
+                format!("{}/{}", self.cache_root(), idx_path_str)
             };
 
-            // Check Cache
             if let Some(cached) = crate::core::cache::INDEX_CACHE
                 .get_with_metrics(&cache_key, "index")
                 .await
             {
-                cached.as_ref().clone()
+                (cached.as_ref().clone(), false)
             } else {
                 let bytes_res = if let Some(info) = bitmap_idx_info {
                     if let (Some(offset), Some(length)) = (info.blob_offset, info.blob_length) {
@@ -830,10 +560,9 @@ impl HybridReader {
                         crate::core::cache::INDEX_CACHE
                             .insert(cache_key, Arc::new(bitmap.clone()))
                             .await;
-                        bitmap
+                        (bitmap, false)
                     }
                     Err(_) => {
-                        // No index found
                         return Ok(None);
                     }
                 }
@@ -843,13 +572,18 @@ impl HybridReader {
         // Step 1b: Handle Negation
         let mut final_bitmap = matching_bitmap;
         if filter.negated {
+            if !key_check_exact {
+                // Complementing an approximate/superset bitmap would omit matching rows.
+                return Ok(None);
+            }
             if let Some(total) = self.config.record_count {
                 let mut all = roaring::RoaringBitmap::new();
                 all.insert_range(0..total as u32);
                 final_bitmap = all - final_bitmap;
+                // NULL rows are absent from inverted indexes, so `all - final_bitmap`
+                // includes them; caller must evaluate the residual FilterExpr.
+                key_check_exact = false;
             } else {
-                // If we don't know total rows, we can't safely negate via bitmap
-                // Fallback to full scan by returning None
                 return Ok(None);
             }
         }
@@ -859,8 +593,10 @@ impl HybridReader {
         if !deleted.is_empty() {
             final_bitmap -= deleted;
         }
+        let eq_deletes = self.load_equality_deletes().await?;
+        let is_exact = key_check_exact && eq_deletes.is_empty();
 
-        Ok(Some(final_bitmap))
+        Ok(Some((final_bitmap, is_exact)))
     }
 
     #[tracing::instrument(skip(self, filter, target_schema))]
@@ -897,12 +633,13 @@ impl HybridReader {
             return Ok(None);
         };
 
-        let jp_path = Path::from(idx_info.file_path.as_str());
+        let jp_path_resolved = self.resolve_index_path(&idx_info.file_path);
+        let jp_path = Path::from(jp_path_resolved.as_str());
         let jp_path_str = jp_path.to_string();
         let cache_key = if let Some(offset) = idx_info.blob_offset {
-            format!("{}/{}:{}", self.root_uri, jp_path_str, offset)
+            format!("{}/{}:{}", self.cache_root(), jp_path_str, offset)
         } else {
-            format!("{}/{}", self.root_uri, jp_path_str)
+            format!("{}/{}", self.cache_root(), jp_path_str)
         };
 
         let bytes = if let Some(cached) = crate::core::cache::BYTE_CACHE
@@ -1006,7 +743,7 @@ impl HybridReader {
     }
 
     /// Materialize the rows selected by `matching_bitmap` from the segment's
-    /// Parquet file, applying schema evolution to `target_schema`.
+    /// Parquet file, applying equality deletes and schema evolution to `target_schema`.
     pub(crate) async fn read_rows_by_bitmap(
         &self,
         matching_bitmap: &RoaringBitmap,
@@ -1016,15 +753,16 @@ impl HybridReader {
             return Ok(vec![]);
         }
 
+        let equality_deletes = self.load_equality_deletes().await?;
+        let data_store = self.data_store().clone();
+
         // Step 2: Configure Parquet Range Request with Row Selection
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
+        let meta_cache_key = format!("{}/{}", self.cache_root(), pq_path_str);
 
         let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE
-            .get_with_metrics(
-                &format!("{}/{}", self.root_uri, pq_path_str),
-                "parquet_meta",
-            )
+            .get_with_metrics(&meta_cache_key, "parquet_meta")
             .await
         {
             // Cache Hit
@@ -1035,7 +773,7 @@ impl HybridReader {
                 e_tag: None,
                 version: None,
             };
-            let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+            let reader = ParquetObjectReader::new(data_store.clone(), object_meta.location);
 
             let arrow_meta = (*meta).clone();
             ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta)
@@ -1043,7 +781,7 @@ impl HybridReader {
             let head_res = if let Some(s) = self.config.file_size {
                 Ok((None, s as usize))
             } else {
-                self.store.head(&pq_path).await.map(|m| {
+                data_store.head(&pq_path).await.map(|m| {
                     let s = m.size as usize;
                     (Some(m), s)
                 })
@@ -1062,7 +800,7 @@ impl HybridReader {
             } else {
                 pq_path.clone()
             };
-            let mut reader = ParquetObjectReader::new(self.store.clone(), location.clone());
+            let mut reader = ParquetObjectReader::new(data_store.clone(), location.clone());
             let options = ArrowReaderOptions::new().with_page_index(true);
             let arrow_meta = match ArrowReaderMetadata::load_async(&mut reader, options).await {
                 Ok(m) => m,
@@ -1073,66 +811,122 @@ impl HybridReader {
             };
             let meta = Arc::new(arrow_meta);
             crate::core::cache::PARQUET_META_CACHE
-                .insert(
-                    format!("{}/{}", self.root_uri, pq_path_str),
-                    (meta.clone(), size),
-                )
+                .insert(meta_cache_key, (meta.clone(), size))
                 .await;
-            let reader = ParquetObjectReader::new(self.store.clone(), location);
+            let reader = ParquetObjectReader::new(data_store, location);
             ParquetRecordBatchStreamBuilder::new_with_metadata(reader, (*meta).clone())
         };
 
         builder = builder.with_batch_size(65536);
 
-        // Apply column projection if specified (skip reading unused columns like embeddings)
-        // Apply column projection/evolution
+        // Apply column projection/evolution (include equality-delete key columns so they
+        // can be evaluated even when omitted from the caller's target projection).
         let target_schema_ref = target_schema.clone();
         if let Some(schema) = &target_schema_ref {
             let parquet_schema = builder.metadata().file_metadata().schema_descr();
             let file_arrow_schema = builder.schema();
-            let column_indices: Vec<usize> = schema
+            let mut column_indices: Vec<usize> = schema
                 .fields()
                 .iter()
                 .filter_map(|field| file_arrow_schema.index_of(field.name()).ok())
                 .collect();
+            for del in &equality_deletes {
+                if let Ok(idx) = file_arrow_schema.index_of(&del.column_name) {
+                    if !column_indices.contains(&idx) {
+                        column_indices.push(idx);
+                    }
+                }
+            }
 
             let projection = ProjectionMask::roots(parquet_schema, column_indices);
             builder = builder.with_projection(projection);
         }
 
-        // Construct RowSelection from Bitmap
-        let selection = self.bitmap_to_row_selection(
-            matching_bitmap,
-            builder.metadata().file_metadata().num_rows() as usize,
-        );
-        builder = builder.with_row_selection(selection);
+        // Construct RowSelection from Bitmap, skipping untouched row groups.
+        let groups = Self::row_groups_covering(builder.metadata(), matching_bitmap);
+        let num_groups = builder.metadata().num_row_groups();
+        if !groups.is_empty() && groups.len() < num_groups {
+            let mut shifted = RoaringBitmap::new();
+            let mut base: u32 = 0;
+            for (rg, group_start) in &groups {
+                let rows = builder.metadata().row_group(*rg).num_rows() as u32;
+                for id in matching_bitmap.iter() {
+                    let id = id as usize;
+                    if id >= *group_start && id < *group_start + rows as usize {
+                        shifted.insert(base + (id as u32 - *group_start as u32));
+                    }
+                }
+                base += rows;
+            }
+            builder = builder.with_row_groups(groups.iter().map(|(rg, _)| *rg).collect());
+            let selection = self.bitmap_to_row_selection(&shifted, base as usize);
+            builder = builder.with_row_selection(selection);
+        } else {
+            let selection = self.bitmap_to_row_selection(
+                matching_bitmap,
+                builder.metadata().file_metadata().num_rows() as usize,
+            );
+            builder = builder.with_row_selection(selection);
+        }
 
         let mut stream = builder.build()?;
 
         let mut batches = Vec::new();
         while let Some(batch_result) = stream.next().await {
-            let batch = batch_result?;
-            // Schema Evolution Mapping
-            if let Some(target) = &target_schema_ref {
-                let mut new_columns = Vec::new();
-                for field in target.fields() {
-                    if let Ok(col) = batch.column_by_name(field.name()).ok_or(()) {
-                        if col.data_type() != field.data_type() {
-                            let casted = arrow::compute::cast(col, field.data_type())?;
-                            new_columns.push(casted);
-                        } else {
-                            new_columns.push(col.clone());
-                        }
-                    } else {
-                        let null_arr =
-                            arrow::array::new_null_array(field.data_type(), batch.num_rows());
-                        new_columns.push(null_arr);
+            let mut batch = batch_result?;
+
+            // Apply Equality Deletes BEFORE schema projection/evolution so delete key columns exist
+            if !equality_deletes.is_empty() && batch.num_rows() > 0 {
+                let mut keep_mask = arrow::array::BooleanArray::from(vec![true; batch.num_rows()]);
+                for delete in &equality_deletes {
+                    if let Some(col) = batch.column_by_name(&delete.column_name) {
+                        let delete_mask = check_is_in(col, &delete.values)?;
+                        let not_delete = arrow::compute::not(&delete_mask)?;
+                        keep_mask = arrow::compute::and(&keep_mask, &not_delete)?;
                     }
                 }
-                batches.push(arrow::record_batch::RecordBatch::try_new(
-                    target.clone(),
-                    new_columns,
-                )?);
+                batch = arrow::compute::filter_record_batch(&batch, &keep_mask)?;
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+            }
+
+            // Schema Evolution Mapping
+            if let Some(target) = &target_schema_ref {
+                if target.fields().is_empty() {
+                    batches.push(arrow::record_batch::RecordBatch::try_new_with_options(
+                        target.clone(),
+                        vec![],
+                        &arrow::record_batch::RecordBatchOptions::new()
+                            .with_row_count(Some(batch.num_rows())),
+                    )?);
+                } else {
+                    let mut new_columns = Vec::with_capacity(target.fields().len());
+                    for field in target.fields() {
+                        if let Some(col) = batch.column_by_name(field.name()) {
+                            if col.data_type() != field.data_type() {
+                                let casted = arrow::compute::cast(col, field.data_type())?;
+                                new_columns.push(casted);
+                            } else {
+                                new_columns.push(col.clone());
+                            }
+                        } else {
+                            if !field.is_nullable() && batch.num_rows() > 0 {
+                                anyhow::bail!(
+                                    "read: required column '{}' is missing from the source segment",
+                                    field.name()
+                                );
+                            }
+                            let null_arr =
+                                arrow::array::new_null_array(field.data_type(), batch.num_rows());
+                            new_columns.push(null_arr);
+                        }
+                    }
+                    batches.push(arrow::record_batch::RecordBatch::try_new(
+                        target.clone(),
+                        new_columns,
+                    )?);
+                }
             } else {
                 batches.push(batch);
             }
@@ -1278,4 +1072,548 @@ impl HybridReader {
         }
         filters
     }
+}
+
+fn json_to_exact_i128(value: &serde_json::Value) -> Option<i128> {
+    value
+        .as_i64()
+        .map(|i| i as i128)
+        .or_else(|| value.as_u64().map(|u| u as i128))
+}
+
+fn json_to_date32_day(value: &serde_json::Value) -> Option<i32> {
+    if let Some(i) = value.as_i64() {
+        return i32::try_from(i).ok();
+    }
+    if let Some(s) = value.as_str() {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            if let Some(epoch) = chrono::NaiveDate::from_ymd_opt(1970, 1, 1) {
+                return i32::try_from((d - epoch).num_days()).ok();
+            }
+        }
+    }
+    None
+}
+
+fn json_to_ts_day(value: &serde_json::Value) -> Option<i32> {
+    if let Some(us) = value.as_i64() {
+        return i32::try_from(us.div_euclid(86_400_000_000)).ok();
+    }
+    if let Some(s) = value.as_str() {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            return i32::try_from(dt.timestamp_micros().div_euclid(86_400_000_000)).ok();
+        }
+        for fmt in [
+            "%Y-%m-%d %H:%M:%S%.f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S%.f",
+            "%Y-%m-%dT%H:%M:%S",
+        ] {
+            if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+                return i32::try_from(ndt.and_utc().timestamp_micros().div_euclid(86_400_000_000))
+                    .ok();
+            }
+        }
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            if let Some(epoch) = chrono::NaiveDate::from_ymd_opt(1970, 1, 1) {
+                return i32::try_from((d - epoch).num_days()).ok();
+            }
+        }
+    }
+    None
+}
+
+fn parse_decimal_unscaled(s: &str, scale: i8) -> Option<i128> {
+    if scale < 0 {
+        return None;
+    }
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (neg, rest) = if let Some(r) = s.strip_prefix('-') {
+        (true, r)
+    } else if let Some(r) = s.strip_prefix('+') {
+        (false, r)
+    } else {
+        (false, s)
+    };
+    let mut parts = rest.split('.');
+    let int_part = parts.next()?;
+    let frac_part = parts.next().unwrap_or("");
+    if parts.next().is_some() {
+        return None;
+    }
+    let target_scale = scale as usize;
+    if frac_part.len() > target_scale {
+        let extra = &frac_part[target_scale..];
+        if extra.bytes().any(|b| b != b'0') {
+            return None;
+        }
+    }
+    let int_digits = if int_part.is_empty() { "0" } else { int_part };
+    if !int_digits.bytes().all(|b| b.is_ascii_digit())
+        || !frac_part.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let base: i128 = int_digits.parse().ok()?;
+    let pow10 = 10_i128.checked_pow(scale as u32)?;
+    let mut scaled = base.checked_mul(pow10)?;
+    let frac_used = &frac_part[..frac_part.len().min(target_scale)];
+    if !frac_used.is_empty() {
+        let frac_val: i128 = frac_used.parse().ok()?;
+        let pad = 10_i128.checked_pow((target_scale - frac_used.len()) as u32)?;
+        scaled = scaled.checked_add(frac_val.checked_mul(pad)?)?;
+    }
+    if neg {
+        scaled.checked_neg()
+    } else {
+        Some(scaled)
+    }
+}
+
+fn json_to_decimal_i128(value: &serde_json::Value, scale: i8) -> Option<i128> {
+    if scale < 0 {
+        return None;
+    }
+    if let Some(i) = json_to_exact_i128(value) {
+        let pow10 = 10_i128.checked_pow(scale as u32)?;
+        return i.checked_mul(pow10);
+    }
+    if let Some(s) = value.as_str() {
+        return parse_decimal_unscaled(s, scale);
+    }
+    None
+}
+
+fn arrow_cell_matches_json(col: &dyn Array, i: usize, value: &serde_json::Value) -> bool {
+    use arrow::array::*;
+    use arrow::datatypes::TimeUnit;
+
+    if col.is_null(i) {
+        return value.is_null();
+    }
+
+    if let Some(arr) = col.as_any().downcast_ref::<StringArray>() {
+        return value.as_str() == Some(arr.value(i));
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<LargeStringArray>() {
+        return value.as_str() == Some(arr.value(i));
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<StringViewArray>() {
+        return value.as_str() == Some(arr.value(i));
+    }
+
+    if let Some(arr) = col.as_any().downcast_ref::<Int8Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Int16Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Int32Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Int64Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<UInt8Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<UInt16Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<UInt32Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<UInt64Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+
+    if let Some(arr) = col.as_any().downcast_ref::<Float32Array>() {
+        return value.as_f64() == Some(arr.value(i) as f64);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Float64Array>() {
+        return value.as_f64() == Some(arr.value(i));
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<BooleanArray>() {
+        return value.as_bool() == Some(arr.value(i));
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Date32Array>() {
+        return json_to_date32_day(value) == Some(arr.value(i));
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Date64Array>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Decimal128Array>() {
+        let scale = match col.data_type() {
+            arrow::datatypes::DataType::Decimal128(_, s) => *s,
+            _ => 0,
+        };
+        return json_to_decimal_i128(value, scale) == Some(arr.value(i));
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Time32SecondArray>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Time32MillisecondArray>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Time64MicrosecondArray>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<Time64NanosecondArray>() {
+        return json_to_exact_i128(value) == Some(arr.value(i) as i128);
+    }
+    match col.data_type() {
+        arrow::datatypes::DataType::Timestamp(unit, _) => {
+            let cell_us = match unit {
+                TimeUnit::Second => col
+                    .as_any()
+                    .downcast_ref::<TimestampSecondArray>()
+                    .map(|a| a.value(i).saturating_mul(1_000_000)),
+                TimeUnit::Millisecond => col
+                    .as_any()
+                    .downcast_ref::<TimestampMillisecondArray>()
+                    .map(|a| a.value(i).saturating_mul(1_000)),
+                TimeUnit::Microsecond => col
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .map(|a| a.value(i)),
+                TimeUnit::Nanosecond => col
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .map(|a| a.value(i).div_euclid(1_000)),
+            };
+            if let Some(us) = cell_us {
+                if let Some(target_us) = value.as_i64() {
+                    return us == target_us;
+                }
+                if let Some(s) = value.as_str() {
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+                        return us == dt.timestamp_micros();
+                    }
+                    for fmt in [
+                        "%Y-%m-%d %H:%M:%S%.f",
+                        "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%dT%H:%M:%S%.f",
+                        "%Y-%m-%dT%H:%M:%S",
+                    ] {
+                        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+                            return us == ndt.and_utc().timestamp_micros();
+                        }
+                    }
+                }
+            }
+            false
+        }
+        arrow::datatypes::DataType::Binary => col
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .is_some_and(|a| value.as_str().map(str::as_bytes) == Some(a.value(i))),
+        arrow::datatypes::DataType::LargeBinary => col
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .is_some_and(|a| value.as_str().map(str::as_bytes) == Some(a.value(i))),
+        arrow::datatypes::DataType::FixedSizeBinary(_) => col
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .is_some_and(|a| value.as_str().map(str::as_bytes) == Some(a.value(i))),
+        _ => false,
+    }
+}
+
+fn evaluate_ord_filter<'a, T: Ord>(
+    key: T,
+    filter: &'a crate::core::planner::QueryFilter,
+    key_check_exact: &mut bool,
+    parse: impl Fn(&'a serde_json::Value) -> Option<T>,
+) -> bool {
+    if let Some(ref min_val) = filter.min {
+        if let Some(bound) = parse(min_val) {
+            if if filter.min_inclusive {
+                key < bound
+            } else {
+                key <= bound
+            } {
+                return false;
+            }
+        } else {
+            *key_check_exact = false;
+        }
+    }
+    if let Some(ref max_val) = filter.max {
+        if let Some(bound) = parse(max_val) {
+            if if filter.max_inclusive {
+                key > bound
+            } else {
+                key >= bound
+            } {
+                return false;
+            }
+        } else {
+            *key_check_exact = false;
+        }
+    }
+    if let Some(ref values) = filter.values {
+        let mut matched = false;
+        let mut any_unparsed = false;
+        for v in values {
+            match parse(v) {
+                Some(ref val) => {
+                    if key == *val {
+                        matched = true;
+                        break;
+                    }
+                }
+                None => {
+                    any_unparsed = true;
+                }
+            }
+        }
+        if !matched {
+            if any_unparsed {
+                *key_check_exact = false;
+                return true;
+            }
+            return false;
+        }
+    }
+    true
+}
+
+fn evaluate_inverted_key(
+    key_array: &dyn Array,
+    i: usize,
+    filter: &crate::core::planner::QueryFilter,
+    is_timestamp_day: bool,
+    key_check_exact: &mut bool,
+) -> Result<bool> {
+    use arrow::array::*;
+    use arrow::datatypes::DataType;
+
+    if let Some(arr) = key_array.as_any().downcast_ref::<StringArray>() {
+        return Ok(evaluate_ord_filter(
+            arr.value(i),
+            filter,
+            key_check_exact,
+            |v| v.as_str(),
+        ));
+    }
+    if let Some(arr) = key_array.as_any().downcast_ref::<LargeStringArray>() {
+        return Ok(evaluate_ord_filter(
+            arr.value(i),
+            filter,
+            key_check_exact,
+            |v| v.as_str(),
+        ));
+    }
+    if let Some(arr) = key_array.as_any().downcast_ref::<StringViewArray>() {
+        return Ok(evaluate_ord_filter(
+            arr.value(i),
+            filter,
+            key_check_exact,
+            |v| v.as_str(),
+        ));
+    }
+
+    let int_key: Option<i128> = if let Some(arr) = key_array.as_any().downcast_ref::<Int8Array>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<Int16Array>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<Int32Array>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<Int64Array>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<UInt8Array>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<UInt16Array>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<UInt32Array>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<UInt64Array>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<Time32SecondArray>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<Time32MillisecondArray>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<Time64MicrosecondArray>() {
+        Some(arr.value(i) as i128)
+    } else if let Some(arr) = key_array.as_any().downcast_ref::<Time64NanosecondArray>() {
+        Some(arr.value(i) as i128)
+    } else {
+        key_array
+            .as_any()
+            .downcast_ref::<Date64Array>()
+            .map(|arr| arr.value(i) as i128)
+    };
+    if let Some(k) = int_key {
+        return Ok(evaluate_ord_filter(
+            k,
+            filter,
+            key_check_exact,
+            json_to_exact_i128,
+        ));
+    }
+
+    if let Some(arr) = key_array.as_any().downcast_ref::<BooleanArray>() {
+        return Ok(evaluate_ord_filter(
+            arr.value(i),
+            filter,
+            key_check_exact,
+            |v| v.as_bool(),
+        ));
+    }
+
+    if let Some(arr) = key_array.as_any().downcast_ref::<Date32Array>() {
+        let key_day = arr.value(i);
+        if is_timestamp_day {
+            *key_check_exact = false;
+            if let Some(ref min_val) = filter.min {
+                if let Some(min_day) = json_to_ts_day(min_val) {
+                    if key_day < min_day {
+                        return Ok(false);
+                    }
+                }
+            }
+            if let Some(ref max_val) = filter.max {
+                if let Some(max_day) = json_to_ts_day(max_val) {
+                    if key_day > max_day {
+                        return Ok(false);
+                    }
+                }
+            }
+            if let Some(ref values) = filter.values {
+                let mut matched = false;
+                let mut any_unparsed = false;
+                for v in values {
+                    match json_to_ts_day(v) {
+                        Some(d) => {
+                            if key_day == d {
+                                matched = true;
+                                break;
+                            }
+                        }
+                        None => any_unparsed = true,
+                    }
+                }
+                if !matched && !any_unparsed {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        return Ok(evaluate_ord_filter(
+            key_day,
+            filter,
+            key_check_exact,
+            json_to_date32_day,
+        ));
+    }
+
+    let float_key: Option<(f64, bool)> =
+        if let Some(arr) = key_array.as_any().downcast_ref::<Float32Array>() {
+            Some((arr.value(i) as f64, true))
+        } else {
+            key_array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .map(|arr| (arr.value(i), false))
+        };
+    if let Some((kf, is_f32)) = float_key {
+        if kf.is_nan() {
+            *key_check_exact = false;
+            return Ok(true);
+        }
+        let check_f32_exact = |vf: f64, exact: &mut bool| {
+            if is_f32 && ((vf as f32) as f64 != vf) {
+                *exact = false;
+            }
+        };
+        if let Some(ref min_val) = filter.min {
+            if let Some(bound) = min_val.as_f64() {
+                check_f32_exact(bound, key_check_exact);
+                if if filter.min_inclusive {
+                    kf < bound
+                } else {
+                    kf <= bound
+                } {
+                    return Ok(false);
+                }
+            } else {
+                *key_check_exact = false;
+            }
+        }
+        if let Some(ref max_val) = filter.max {
+            if let Some(bound) = max_val.as_f64() {
+                check_f32_exact(bound, key_check_exact);
+                if if filter.max_inclusive {
+                    kf > bound
+                } else {
+                    kf >= bound
+                } {
+                    return Ok(false);
+                }
+            } else {
+                *key_check_exact = false;
+            }
+        }
+        if let Some(ref values) = filter.values {
+            let mut matched = false;
+            let mut any_unparsed = false;
+            for v in values {
+                match v.as_f64() {
+                    Some(bound) => {
+                        check_f32_exact(bound, key_check_exact);
+                        if kf == bound {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    None => any_unparsed = true,
+                }
+            }
+            if !matched {
+                if any_unparsed {
+                    *key_check_exact = false;
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+
+    if let Some(arr) = key_array.as_any().downcast_ref::<Decimal128Array>() {
+        let scale = match key_array.data_type() {
+            DataType::Decimal128(_, s) => *s,
+            _ => -1,
+        };
+        if scale < 0 {
+            *key_check_exact = false;
+            return Ok(true);
+        }
+        return Ok(evaluate_ord_filter(
+            arr.value(i),
+            filter,
+            key_check_exact,
+            |v| json_to_decimal_i128(v, scale),
+        ));
+    }
+
+    let binary_key: Option<&[u8]> =
+        if let Some(arr) = key_array.as_any().downcast_ref::<BinaryArray>() {
+            Some(arr.value(i))
+        } else if let Some(arr) = key_array.as_any().downcast_ref::<LargeBinaryArray>() {
+            Some(arr.value(i))
+        } else {
+            None
+        };
+    if let Some(kbytes) = binary_key {
+        return Ok(evaluate_ord_filter(kbytes, filter, key_check_exact, |v| {
+            v.as_str().map(str::as_bytes)
+        }));
+    }
+
+    *key_check_exact = false;
+    Ok(true)
 }

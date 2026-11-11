@@ -344,7 +344,9 @@ impl Table {
             .strip_prefix("file://")
             .unwrap_or(&self.uri)
             .to_string();
-        std::fs::create_dir_all(&base_path)?;
+        if !base_path.contains("://") && !base_path.is_empty() {
+            std::fs::create_dir_all(&base_path)?;
+        }
 
         let mut trim_policy =
             crate::core::memory::HeapTrimPolicy::from_budget_or_env(options.memory_budget_bytes);
@@ -375,7 +377,7 @@ impl Table {
                 async move {
                     let batch = read_range(&unit.path, unit.row_start, unit.row_end)?;
                     let rows = batch.num_rows();
-                    let entry = table
+                    let entries = table
                         .build_ingest_segment(
                             &base_path,
                             &batch,
@@ -386,7 +388,7 @@ impl Table {
                             &pk,
                         )
                         .await?;
-                    Ok::<_, anyhow::Error>((unit, entry, rows))
+                    Ok::<_, anyhow::Error>((unit, entries, rows))
                 }
             }))
             .await;
@@ -395,23 +397,25 @@ impl Table {
             // returns early, dropping its lease (released, not completed) so the
             // unit is retryable by another node.
             for (lease, build) in leases.into_iter().zip(builds) {
-                let (unit, entry, rows) = build?;
-                let path = entry.file_path.clone();
-                manifest_manager
-                    .commit(
-                        &[entry],
-                        &[],
-                        CommitMetadata {
-                            skip_missing_remove_paths: true,
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
+                let (unit, entries, rows) = build?;
+                let paths: Vec<String> = entries.iter().map(|e| e.file_path.clone()).collect();
+                if !entries.is_empty() {
+                    manifest_manager
+                        .commit(
+                            &entries,
+                            &[],
+                            CommitMetadata {
+                                skip_missing_remove_paths: true,
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                }
                 completed.insert(unit.key());
                 coordinator.complete(lease).await?;
                 report.units_committed += 1;
                 report.rows_ingested += rows;
-                report.segments.push(path);
+                report.segments.extend(paths);
 
                 if trim_policy.maybe_trim() {
                     tracing::info!(
@@ -476,10 +480,12 @@ impl Table {
             .strip_prefix("file://")
             .unwrap_or(&self.uri)
             .to_string();
-        std::fs::create_dir_all(&base_path)?;
+        if !base_path.contains("://") && !base_path.is_empty() {
+            std::fs::create_dir_all(&base_path)?;
+        }
 
-        // Bounded worker pool: read + build a private segment per unit.
-        let results: Vec<Result<(WorkUnit, ManifestEntry, usize)>> = stream::iter(pending)
+        // Bounded worker pool: read + build private partitioned segments per unit.
+        let results: Vec<Result<(WorkUnit, Vec<ManifestEntry>, usize)>> = stream::iter(pending)
             .map(|unit| {
                 let table = self.clone();
                 let base_path = base_path.clone();
@@ -490,7 +496,7 @@ impl Table {
                 async move {
                     let batch = read_range(&unit.path, unit.row_start, unit.row_end)?;
                     let rows = batch.num_rows();
-                    let entry = table
+                    let entries = table
                         .build_ingest_segment(
                             &base_path,
                             &batch,
@@ -501,7 +507,7 @@ impl Table {
                             &pk,
                         )
                         .await?;
-                    Ok((unit, entry, rows))
+                    Ok((unit, entries, rows))
                 }
             })
             .buffer_unordered(parallelism)
@@ -521,23 +527,25 @@ impl Table {
             crate::core::memory::HeapTrimPolicy::from_budget_or_env(options.memory_budget_bytes);
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         for res in results {
-            let (unit, entry, rows) = res?;
-            let path = entry.file_path.clone();
-            manifest_manager
-                .commit(
-                    &[entry],
-                    &[],
-                    CommitMetadata {
-                        skip_missing_remove_paths: true,
-                        ..Default::default()
-                    },
-                )
-                .await?;
+            let (unit, entries, rows) = res?;
+            let paths: Vec<String> = entries.iter().map(|e| e.file_path.clone()).collect();
+            if !entries.is_empty() {
+                manifest_manager
+                    .commit(
+                        &entries,
+                        &[],
+                        CommitMetadata {
+                            skip_missing_remove_paths: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+            }
             completed.insert(unit.key());
             self.save_ingest_state(&completed).await?;
             report.units_committed += 1;
             report.rows_ingested += rows;
-            report.segments.push(path);
+            report.segments.extend(paths);
 
             if trim_policy.maybe_trim() {
                 tracing::info!(
@@ -555,8 +563,8 @@ impl Table {
         Ok(report)
     }
 
-    /// Build one private segment (data + indexes) from `batch` and return its
-    /// manifest entry. Does not commit.
+    /// Build private partitioned segments (data + indexes) from `batch` and
+    /// return their manifest entries. Does not commit.
     #[allow(clippy::too_many_arguments)]
     async fn build_ingest_segment(
         &self,
@@ -567,7 +575,7 @@ impl Table {
         index_configs: &HashMap<String, ColumnIndexConfig>,
         default_device: Option<&str>,
         pk: &[String],
-    ) -> Result<ManifestEntry> {
+    ) -> Result<Vec<ManifestEntry>> {
         // Align to the table's evolved schema so every segment carries every
         // column (NULLs where absent), matching the flush path.
         let table_schema = self.arrow_schema();
@@ -599,20 +607,58 @@ impl Table {
             )?;
         }
 
-        let segment_id = format!("seg_{}", uuid::Uuid::new_v4());
-        let config = SegmentConfig::new(base_path, &segment_id)
-            .with_index_all(index_all)
-            .with_columns_to_index(index_cols.to_vec())
-            .with_default_device(default_device.map(|s| s.to_string()));
-        let mut writer = HybridSegmentWriter::new(config).with_index_configs(index_configs.clone());
-        writer.primary_key = pk.to_vec();
-        writer.set_store(self.store.clone());
+        let spec = self.partition_spec.clone();
+        let global_centroids = self.indexing.global_centroids.read().clone();
+        let sorted_batch = self.apply_sort_order(&batch)?;
+        let partitioned = spec.partition_batch(&sorted_batch)?;
 
-        writer.write_batch(&batch)?;
-        writer.build_indexes(&batch, 0)?;
-        writer.finish_indexing().await?;
-        writer.upload_to_store().await?;
-        Ok(writer.to_manifest_entry())
+        let mut entries = Vec::with_capacity(partitioned.len());
+        for (partition_values, part_batch) in partitioned {
+            if part_batch.num_rows() == 0 {
+                continue;
+            }
+            let hive_path = spec.partition_to_path(&partition_values);
+            let segment_id = format!("seg_{}", uuid::Uuid::new_v4());
+            let full_base_path = if hive_path.is_empty() {
+                base_path.trim_end_matches('/').to_string()
+            } else {
+                format!("{}/{}", base_path.trim_end_matches('/'), hive_path)
+            };
+            if !full_base_path.contains("://") && !full_base_path.is_empty() {
+                std::fs::create_dir_all(&full_base_path)?;
+            }
+            let parquet_path_rel =
+                crate::core::segment::ensure_prefix(&hive_path, &format!("{segment_id}.parquet"));
+
+            let config = SegmentConfig::new(&full_base_path, &segment_id)
+                .with_index_all(index_all)
+                .with_columns_to_index(index_cols.to_vec())
+                .with_default_device(default_device.map(|s| s.to_string()))
+                .with_partition_values(partition_values)
+                .with_parquet_path(parquet_path_rel);
+            let mut writer = HybridSegmentWriter::new(config)
+                .with_index_configs(index_configs.clone())
+                .with_global_centroids(global_centroids.clone());
+            writer.primary_key = pk.to_vec();
+            writer.set_store(self.store.clone());
+
+            writer.write_batch(&part_batch)?;
+            writer.build_indexes(&part_batch, 0)?;
+            writer.finish_indexing().await?;
+
+            // Capture manifest entry before `upload_to_store()` removes temporary
+            // remote staging files so `file_size_bytes` is always populated.
+            let mut entry = writer.to_manifest_entry();
+            writer.upload_to_store().await?;
+
+            entry.file_path = crate::core::segment::ensure_prefix(&hive_path, &entry.file_path);
+            for idx in &mut entry.index_files {
+                idx.file_path = crate::core::segment::ensure_prefix(&hive_path, &idx.file_path);
+            }
+            entries.push(entry);
+        }
+
+        Ok(entries)
     }
 
     /// Load the set of completed work-unit keys from the resume sidecar.

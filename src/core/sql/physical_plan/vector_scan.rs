@@ -171,11 +171,17 @@ impl ExecutionPlan for VectorScanExec {
         } else {
             self.partitions[partition].clone()
         };
+        let allowed_seg_ids: std::collections::HashSet<String> = self
+            .partitions
+            .iter()
+            .flatten()
+            .map(|e| crate::core::segment::segment_id_from_path(&e.file_path).to_string())
+            .collect();
 
-        let original_schema = table.arrow_schema();
+        let base_schema = self.base_schema.clone();
         let column_names = self.projection.as_ref().map(|proj| {
             proj.iter()
-                .map(|i| original_schema.field(*i).name().clone())
+                .filter_map(|&i| base_schema.fields().get(i).map(|f| f.name().clone()))
                 .collect::<Vec<_>>()
         });
 
@@ -184,16 +190,79 @@ impl ExecutionPlan for VectorScanExec {
         let expected_schema_inner = expected_schema.clone();
 
         let stream = async_stream::stream! {
-            for entry in entries {
-                let filter_expr = if let Some(ref f) = filter {
-                     let filters = QueryFilter::parse_multi(f);
-                     FilterExpr::from_filters(filters)
-                } else {
-                    None
-                };
+            let filter_expr = if let Some(ref f) = filter {
+                match FilterExpr::parse_sql(f, base_schema.clone()).await {
+                    Ok(fe) => Some(fe),
+                    Err(e) => {
+                        tracing::debug!(error = %e, filter = %f, "VectorScanExec::execute parse_sql fallback");
+                        FilterExpr::from_filters(QueryFilter::parse_multi(f))
+                    }
+                }
+            } else {
+                None
+            };
 
+            let manifest_opt = table.manifest().await.ok();
+            let iceberg_schema = manifest_opt.as_ref().and_then(|m| {
+                m.schemas
+                    .iter()
+                    .find(|s| s.schema_id == m.current_schema_id)
+                    .or_else(|| m.schemas.last())
+                    .cloned()
+            });
+
+            // Partition-scoped global cluster routing across surviving segments.
+            let mut resolved_params = vector_params.clone();
+            let mut routing_filters: Vec<(
+                std::collections::HashSet<String>,
+                std::collections::HashSet<String>,
+            )> = Vec::new();
+            for vp in &mut resolved_params {
+                if vp.targeted_clusters.is_none() {
+                    if let crate::core::index::VectorValue::Float32(ref q_f32) = vp.query {
+                        if let Ok(Some(router)) = table.ensure_vector_router(&vp.column).await {
+                            let n_lists = router.len();
+                            let default_p = if n_lists == 0 {
+                                16
+                            } else {
+                                (((n_lists as f64).sqrt() as usize) * 5)
+                                    .max(16)
+                                    .min(n_lists)
+                            };
+                            let probes = vp.probes.unwrap_or(default_p);
+                            let plan = router.route_allowed(q_f32, probes, Some(&allowed_seg_ids));
+                            if !plan.candidate_segments.is_empty() {
+                                let routed: std::collections::HashSet<String> = router
+                                    .segment_indices
+                                    .iter()
+                                    .map(|(seg, _)| seg.clone())
+                                    .filter(|seg| allowed_seg_ids.contains(seg))
+                                    .collect();
+                                routing_filters.push((routed, plan.candidate_segments));
+                                vp.targeted_clusters = Some(Arc::new(plan.segment_clusters));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let surviving_entries: Vec<ManifestEntry> = if routing_filters.is_empty() {
+                entries
+            } else {
+                entries
+                    .into_iter()
+                    .filter(|e| {
+                        let seg_id = crate::core::segment::segment_id_from_path(&e.file_path);
+                        routing_filters.iter().any(|(routed, cands)| {
+                            !routed.contains(seg_id) || cands.contains(seg_id)
+                        })
+                    })
+                    .collect()
+            };
+
+            for entry in surviving_entries {
                 let mut requests = Vec::new();
-                for vp in &vector_params {
+                for vp in &resolved_params {
                     let mut request = VectorSearchRequest::new(
                         vp.column.clone(),
                         vp.query.clone(),
@@ -204,7 +273,10 @@ impl ExecutionPlan for VectorScanExec {
                     .with_filter(filter_expr.clone())
                     .with_config(table.query_config().clone())
                     .with_ef_search(vp.ef_search)
-                    .with_targeted_clusters(vp.targeted_clusters.clone());
+                    .with_probes(vp.probes)
+                    .with_refine_factor(vp.refine_factor)
+                    .with_targeted_clusters(vp.targeted_clusters.clone())
+                    .with_iceberg_schema(iceberg_schema.clone());
 
                     if let Some(ref proj_names) = col_names_owned {
                         request = request.with_columns(Some(proj_names.clone()));
@@ -215,18 +287,31 @@ impl ExecutionPlan for VectorScanExec {
                 match execute_multi_vector_search_with_config(
                     vec![entry.clone()],
                     table.object_store(),
-                    None,
+                    table.data_store.clone(),
                     table.table_uri(),
                     requests,
                 ).await {
                     Ok(batches) => {
                         for (_segment_id, batch) in batches {
                             let mut b = batch;
-                            // Check if distance column exists (which it should from vector search)
                             if b.num_columns() == expected_schema_inner.fields().len() {
+                                let mut cols: Vec<Arc<dyn arrow::array::Array>> =
+                                    Vec::with_capacity(b.num_columns());
+                                for (col, field) in
+                                    b.columns().iter().zip(expected_schema_inner.fields().iter())
+                                {
+                                    if col.data_type() == field.data_type() {
+                                        cols.push(col.clone());
+                                    } else {
+                                        cols.push(
+                                            arrow::compute::cast(col.as_ref(), field.data_type())
+                                                .unwrap_or_else(|_| col.clone()),
+                                        );
+                                    }
+                                }
                                 let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
                                 options.row_count = Some(b.num_rows());
-                                b = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), b.columns().to_vec(), &options)
+                                b = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), cols, &options)
                                     .map_err(|e| DataFusionError::Execution(format!("Type mismatch in Vector Search: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
                             } else {
                                 yield Err(DataFusionError::Execution(format!("Field count mismatch in Vector Search: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));

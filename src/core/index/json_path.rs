@@ -20,7 +20,6 @@ use parquet::arrow::ArrowWriter;
 use roaring::RoaringBitmap;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::sync::Arc;
 
 /// One step of a parsed JSON path.
@@ -157,16 +156,14 @@ fn index_resolved(
     }
 }
 
-/// Build the `(path, value, row_ids)` index for a `Utf8` column.
-///
-/// `out_path` is the destination Parquet file. Rows whose JSON is invalid or
-/// whose path is absent are simply not indexed (the query falls back to a scan
-/// for those rows via the differential oracle).
-pub fn build_json_path_index(
+/// Accumulate JSON-path postings from `col_array` starting at `row_offset` into
+/// `postings` and record normalized paths in `covered_paths`.
+pub fn accumulate_json_path_postings(
     col_array: &Arc<dyn Array>,
     paths: &[String],
     row_offset: usize,
-    out_path: &std::path::Path,
+    postings: &mut BTreeMap<(String, String), Vec<u32>>,
+    covered_paths: &mut Vec<String>,
 ) -> Result<()> {
     let casted = arrow::compute::cast(col_array, &arrow::datatypes::DataType::Utf8)
         .context("Failed to cast column to Utf8 for JSON-path indexing")?;
@@ -180,24 +177,38 @@ pub fn build_json_path_index(
         .map(|p| (normalize_path(p), parse_path(p)))
         .collect();
 
-    // (path, value) -> sorted row ids.
-    let mut postings: BTreeMap<(String, String), Vec<u32>> = BTreeMap::new();
+    if !covered_paths.iter().any(|p| p == "$") {
+        covered_paths.push("$".to_string());
+    }
+    for (p, _) in &parsed_paths {
+        if !covered_paths.iter().any(|existing| existing == p) {
+            covered_paths.push(p.clone());
+        }
+    }
+
     for (i, val) in array.iter().enumerate() {
         let Some(json) = val else { continue };
         let Ok(v) = serde_json::from_str::<Value>(json) else {
             continue;
         };
         let row_id = (row_offset + i) as u32;
-        // Root value under the synthetic `$` path, so `json_exists` /
-        // `json_contains` against a root array or scalar can use the index.
-        index_resolved(&mut postings, "$", &v, row_id);
+        index_resolved(postings, "$", &v, row_id);
         for (path, steps) in &parsed_paths {
             if let Some(found) = resolve(&v, steps) {
-                index_resolved(&mut postings, path, found, row_id);
+                index_resolved(postings, path, found, row_id);
             }
         }
     }
 
+    Ok(())
+}
+
+/// Serialize accumulated `(path, value) -> row_ids` postings into Parquet bytes
+/// with the `json_paths` footer key/value metadata.
+pub fn build_json_path_parquet_bytes(
+    postings: BTreeMap<(String, String), Vec<u32>>,
+    mut covered: Vec<String>,
+) -> Result<Vec<u8>> {
     let mut path_builder = StringBuilder::new();
     let mut value_builder = StringBuilder::new();
     let mut list_builder = ListBuilder::new(UInt32Builder::new());
@@ -237,26 +248,47 @@ pub fn build_json_path_index(
 
     // Record the covered paths in the footer so a query on an unindexed path
     // falls back to a full scan instead of returning an empty (subset) bitmap.
-    let mut covered: Vec<String> = parsed_paths.iter().map(|(p, _)| p.clone()).collect();
-    covered.push("$".to_string());
+    if !covered.iter().any(|p| p == "$") {
+        covered.push("$".to_string());
+    }
     covered.sort();
     covered.dedup();
     let covered_json = serde_json::to_string(&covered)?;
 
-    let tmp = format!(
-        "{}.tmp",
-        out_path.to_str().context("Invalid UTF-8 in path")?
-    );
-    let file = File::create(&tmp)?;
+    let mut buffer = Vec::new();
     let props = parquet::file::properties::WriterProperties::builder()
         .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue {
             key: "json_paths".to_string(),
             value: Some(covered_json),
         }]))
         .build();
-    let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props))?;
     writer.write(&batch)?;
     writer.close()?;
+    Ok(buffer)
+}
+
+/// Build the `(path, value, row_ids)` index for a `Utf8` column.
+///
+/// `out_path` is the destination Parquet file. Rows whose JSON is invalid or
+/// whose path is absent are simply not indexed (the query falls back to a scan
+/// for those rows via the differential oracle).
+pub fn build_json_path_index(
+    col_array: &Arc<dyn Array>,
+    paths: &[String],
+    row_offset: usize,
+    out_path: &std::path::Path,
+) -> Result<()> {
+    let mut postings: BTreeMap<(String, String), Vec<u32>> = BTreeMap::new();
+    let mut covered = Vec::new();
+    accumulate_json_path_postings(col_array, paths, row_offset, &mut postings, &mut covered)?;
+    let bytes = build_json_path_parquet_bytes(postings, covered)?;
+
+    let tmp = format!(
+        "{}.tmp",
+        out_path.to_str().context("Invalid UTF-8 in path")?
+    );
+    std::fs::write(&tmp, &bytes)?;
     std::fs::rename(&tmp, out_path)?;
     Ok(())
 }

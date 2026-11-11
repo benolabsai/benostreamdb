@@ -76,8 +76,15 @@ impl HybridReader {
             .collect();
         parts.sort_unstable();
 
+        let cache_root = self.cache_root();
         let mut h1: u64 = 0xcbf29ce484222325;
         let mut h2: u64 = 0x84222325cbf29ce4;
+        for b in cache_root.as_bytes() {
+            h1 = (h1 ^ (*b as u64)).wrapping_mul(0x100000001b3);
+            h2 = (h2 ^ (*b as u64)).wrapping_mul(0x100000001b3);
+        }
+        h1 = (h1 ^ 0xfe).wrapping_mul(0x100000001b3);
+        h2 = (h2 ^ 0xfe).wrapping_mul(0x100000001b3);
         for part in parts {
             for b in part.as_bytes() {
                 h1 = (h1 ^ (*b as u64)).wrapping_mul(0x100000001b3);
@@ -90,7 +97,13 @@ impl HybridReader {
             h1 = (h1 ^ (*b as u64)).wrapping_mul(0x100000001b3);
             h2 = (h2 ^ (*b as u64)).wrapping_mul(0x100000001b3);
         }
-        Some(format!("{}:{}:{}", target_path.len(), h1, h2))
+        Some(format!(
+            "{}:{}:{}:{}",
+            cache_root.len(),
+            target_path.len(),
+            h1,
+            h2
+        ))
     }
 
     async fn load_merged_deletes_inner(&self) -> Result<RoaringBitmap> {
@@ -166,30 +179,28 @@ impl HybridReader {
                 let path_str = delete_file.file_path.clone();
                 let store = self.store.clone();
                 let root_uri = self.root_uri.clone();
+                let seg_dir = self.segment_dir_prefix();
 
                 futures.push(async move {
                     // Relativize the delete-file URI against the table root so
                     // the object store (rooted at the table URI) can resolve it.
                     // Works for `file://` and remote schemes (s3://, gs://, …).
-                    let resolved_path = {
-                        let root_clean = root_uri
-                            .strip_prefix("file://")
-                            .unwrap_or(&root_uri)
-                            .trim_end_matches('/');
-                        let path_clean = path_str.strip_prefix("file://").unwrap_or(&path_str);
-
-                        if !root_clean.is_empty() && path_clean.starts_with(root_clean) {
-                            path_clean[root_clean.len()..]
-                                .trim_start_matches('/')
-                                .to_string()
-                        } else {
-                            path_clean.trim_start_matches('/').to_string()
-                        }
-                    };
+                    let resolved_path =
+                        crate::core::segment::relativize_against(&root_uri, &path_str);
 
                     if resolved_path.ends_with(".parquet") || resolved_path.ends_with(".avro") {
+                        let fetch_path = if !resolved_path.contains('/') && !seg_dir.is_empty() {
+                            match store.head(&Path::from(resolved_path.as_str())).await {
+                                Ok(_) => resolved_path.clone(),
+                                Err(_) => {
+                                    crate::core::segment::ensure_prefix(&seg_dir, &resolved_path)
+                                }
+                            }
+                        } else {
+                            resolved_path.clone()
+                        };
                         let reader = crate::core::iceberg::PositionDeleteReader::new(store);
-                        match reader.fetch_deletes_map(&resolved_path).await {
+                        match reader.fetch_deletes_map(&fetch_path).await {
                             Ok(map) => FileDeletes::Map(map),
                             Err(e) => {
                                 tracing::warn!(
@@ -204,14 +215,24 @@ impl HybridReader {
                         }
                     } else {
                         let mut local_bitmap = RoaringBitmap::new();
-                        let path = Path::from(path_str.as_str());
-                        if let Ok(ret) = store.get(&path).await {
-                            if let Ok(bytes) = ret.bytes().await {
-                                crate::telemetry::metrics::IO_BYTES_READ_TOTAL
-                                    .inc_by(bytes.len() as u64);
-                                if let Ok(bm) = RoaringBitmap::deserialize_from(&bytes[..]) {
-                                    local_bitmap |= bm;
+                        let path = Path::from(resolved_path.as_str());
+                        let bytes_opt = match store.get(&path).await {
+                            Ok(ret) => ret.bytes().await.ok(),
+                            Err(_) if !resolved_path.contains('/') && !seg_dir.is_empty() => {
+                                let fallback =
+                                    crate::core::segment::ensure_prefix(&seg_dir, &resolved_path);
+                                match store.get(&Path::from(fallback.as_str())).await {
+                                    Ok(ret) => ret.bytes().await.ok(),
+                                    Err(_) => None,
                                 }
+                            }
+                            Err(_) => None,
+                        };
+                        if let Some(bytes) = bytes_opt {
+                            crate::telemetry::metrics::IO_BYTES_READ_TOTAL
+                                .inc_by(bytes.len() as u64);
+                            if let Ok(bm) = RoaringBitmap::deserialize_from(&bytes[..]) {
+                                local_bitmap |= bm;
                             }
                         }
                         FileDeletes::Bitmap(local_bitmap)
@@ -242,11 +263,11 @@ impl HybridReader {
             }
         }
 
-        let target_clean = target_path.strip_prefix("file://").unwrap_or(&target_path);
+        let target_rel = crate::core::segment::relativize_against(&self.root_uri, &target_path);
         let mut merged_from_maps = RoaringBitmap::new();
         for m in &maps {
             merged_from_maps |=
-                crate::core::iceberg::PositionDeleteReader::filter_map_to_bitmap(m, target_clean);
+                crate::core::iceberg::PositionDeleteReader::filter_map_to_bitmap(m, &target_rel);
         }
         crate::telemetry::metrics::MERGED_DELETES_PHASE_SECONDS
             .with_label_values(&["position_convert"])
@@ -273,16 +294,26 @@ impl HybridReader {
                 crate::telemetry::metrics::MERGED_DELETES_FILES_TOTAL
                     .with_label_values(&["deletion_vector"])
                     .inc();
-                let path = Path::from(puffin_file_path.as_str());
-                match self
-                    .store
-                    .get_range(
-                        &path,
-                        (*content_offset as u64)
-                            ..((*content_offset + *content_size_in_bytes) as u64),
-                    )
-                    .await
-                {
+                let rel_dv =
+                    crate::core::segment::relativize_against(&self.root_uri, puffin_file_path);
+                let primary_path = Path::from(rel_dv.as_str());
+                let range =
+                    (*content_offset as u64)..((*content_offset + *content_size_in_bytes) as u64);
+                let range_res = match self.store.get_range(&primary_path, range.clone()).await {
+                    Ok(bytes) => Ok(bytes),
+                    Err(first_err) if !rel_dv.contains('/') => {
+                        let fallback_dv = self.resolve_index_path(puffin_file_path);
+                        if fallback_dv != rel_dv {
+                            self.store
+                                .get_range(&Path::from(fallback_dv.as_str()), range)
+                                .await
+                        } else {
+                            Err(first_err)
+                        }
+                    }
+                    Err(e) => Err(e),
+                };
+                match range_res {
                     Ok(bytes) => {
                         crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(bytes.len() as u64);
                         match crate::core::puffin::read_deletion_vector_from_bytes(&bytes) {
@@ -377,25 +408,9 @@ impl HybridReader {
             {
                 let path_str = delete_file.file_path.as_str();
 
-                // Relativize path matches load_merged_deletes logic
-                let resolved_path = if path_str.starts_with("file://") {
-                    let root_local = self
-                        .root_uri
-                        .strip_prefix("file://")
-                        .unwrap_or(&self.root_uri)
-                        .trim_end_matches('/');
-                    let path_clean = path_str.strip_prefix("file://").unwrap_or(path_str);
-
-                    if !root_local.is_empty() && path_clean.starts_with(root_local) {
-                        path_clean[root_local.len()..]
-                            .trim_start_matches('/')
-                            .to_string()
-                    } else {
-                        path_clean.trim_start_matches('/').to_string()
-                    }
-                } else {
-                    path_str.to_string()
-                };
+                // Relativize path against table root (handles file://, s3://, etc.)
+                let resolved_path =
+                    crate::core::segment::relativize_against(&self.root_uri, path_str);
 
                 // Use provided schema or return error
                 let schema = if let Some(s) = &self.iceberg_schema {

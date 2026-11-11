@@ -826,11 +826,10 @@ impl Table {
 
             if !manifest.entries.is_empty() {
                 if let Some(entry) = manifest.entries.first() {
-                    let file_path = &entry.file_path;
-                    let parts: Vec<&str> = file_path.split('/').collect();
-                    let filename = parts.last().unwrap_or(&"wrapper");
-                    let segment_id = filename.replace(".parquet", "");
-                    let config = SegmentConfig::new("", &segment_id);
+                    let rel_parquet =
+                        crate::core::segment::relativize_against(_uri, &entry.file_path);
+                    let segment_id = crate::core::segment::segment_id_from_path(&rel_parquet);
+                    let config = SegmentConfig::new("", segment_id).with_parquet_path(rel_parquet);
                     let reader = HybridReader::new(config, store.clone(), _uri);
                     if let Ok(mut s) = reader
                         .stream_all(None as Option<arrow::datatypes::SchemaRef>)
@@ -866,7 +865,7 @@ impl Table {
             }
             if let Ok(meta) = res {
                 let p = meta.location.to_string();
-                if p.ends_with(".parquet") && !p.contains(".inv.parquet") && !p.contains(".hnsw.") {
+                if crate::core::segment::is_data_parquet_path(&p) {
                     first_file = Some(p);
                     break;
                 }
@@ -874,9 +873,9 @@ impl Table {
         }
 
         if let Some(path) = first_file {
-            let filename = path.split('/').next_back().unwrap_or(&path);
-            let segment_id = filename.replace(".parquet", "");
-            let config = SegmentConfig::new("", &segment_id);
+            let rel_parquet = crate::core::segment::relativize_against(_uri, &path);
+            let segment_id = crate::core::segment::segment_id_from_path(&rel_parquet);
+            let config = SegmentConfig::new("", segment_id).with_parquet_path(rel_parquet);
             let reader = HybridReader::new(config, store.clone(), _uri);
             if let Ok(mut s) = reader
                 .stream_all(None as Option<arrow::datatypes::SchemaRef>)

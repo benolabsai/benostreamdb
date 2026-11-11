@@ -794,6 +794,43 @@ pub async fn invalidate_file_caches(root_uri: &str, path: &str) {
     }
 }
 
+/// Invalidate per-column / per-index-entry caches across both offset-qualified
+/// and base keys (plus any caller-supplied keys such as container vector keys).
+pub async fn invalidate_column_caches_async(
+    column_name: &str,
+    key_with_offset: &str,
+    base_key: &str,
+    extra_keys: &[String],
+) {
+    let mut keys: Vec<String> = Vec::with_capacity(2 + extra_keys.len());
+    keys.push(key_with_offset.to_string());
+    if base_key != key_with_offset {
+        keys.push(base_key.to_string());
+    }
+    for k in extra_keys {
+        if !keys.contains(k) {
+            keys.push(k.clone());
+        }
+    }
+    let suffix_keys: Vec<String> = keys
+        .iter()
+        .flat_map(|k| [format!("{k}:source_type"), format!("{k}:{column_name}")])
+        .collect();
+    keys.extend(suffix_keys);
+
+    for k in &keys {
+        INVERTED_INDEX_CACHE.invalidate(k).await;
+        ANALYZER_META_CACHE.invalidate(k).await;
+        BYTE_CACHE.invalidate(k).await;
+        INDEX_CACHE.invalidate(k).await;
+        HNSW_CACHE.invalidate(k).await;
+        HNSW_IVF_CACHE.invalidate(k).await;
+        CSR_GRAPH_CACHE.invalidate(k).await;
+        BLOOM_FILTER_CACHE.invalidate(k).await;
+        PARQUET_META_CACHE.invalidate(k).await;
+    }
+}
+
 /// Invalidate the index and metadata caches for a single table, leaving other
 /// tables' entries resident.
 ///
