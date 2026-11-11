@@ -448,73 +448,24 @@ impl Table {
 
     /// Write a V3 `deletion-vector-v1` Puffin file for a single data file.
     ///
-    /// Iceberg V3 permits at most one deletion vector per data file per snapshot,
-    /// so positions are always encoded relative to one `referenced_data_file`.
-    /// Returns the manifest `DeleteFile` entry that points at the blob, with the
-    /// byte range (`content_offset`, `content_size_in_bytes`) the reader fetches
-    /// directly instead of reading the whole Puffin container.
+    /// Thin wrapper over [`crate::core::iceberg::delete::write_deletion_vector_puffin`]
+    /// so `Table::delete_async` and `MergePlanner`'s merge-on-read path emit
+    /// byte-identical DV entries.
     async fn write_deletion_vector_file_async(
         &self,
         entry: &crate::core::manifest::ManifestEntry,
         rel_parent: &str,
         positions: &[i64],
     ) -> Result<crate::core::manifest::DeleteFile> {
-        use crate::core::manifest::{DeleteContent, DeleteFile};
-
-        let mut bitmap = roaring::RoaringBitmap::new();
-        for &pos in positions {
-            let pos_u32 = u32::try_from(pos).with_context(|| {
-                format!(
-                    "deletion-vector position {pos} does not fit u32 for '{}'",
-                    entry.file_path
-                )
-            })?;
-            bitmap.insert(pos_u32);
-        }
-        let payload = crate::core::puffin::encode_deletion_vector_v1(&bitmap)?;
-
-        let mut properties = std::collections::HashMap::new();
-        properties.insert("referenced-data-file".to_string(), entry.file_path.clone());
-        properties.insert("cardinality".to_string(), bitmap.len().to_string());
-
-        let mut writer = crate::core::puffin::PuffinWriter::new(std::io::Cursor::new(Vec::new()))?;
-        let (content_offset, content_size_in_bytes) = writer.add_blob(
-            crate::core::puffin::DELETION_VECTOR_TYPE.to_string(),
-            Vec::new(),
-            0, // snapshot id: the surrounding manifest carries the real one
-            0, // sequence number: likewise
-            &payload,
-            properties,
-        )?;
-        let bytes = writer.finish()?.into_inner();
-
-        let file_name = format!("del-dv-{}.puffin", uuid::Uuid::new_v4());
-        let rel_path = if rel_parent.is_empty() {
-            file_name
-        } else {
-            format!("{}/{}", rel_parent.trim_matches('/'), file_name)
-        };
-
-        self.store
-            .put(
-                &object_store::path::Path::from(rel_path.as_str()),
-                bytes.clone().into(),
-            )
-            .await
-            .with_context(|| format!("Failed to upload deletion vector '{}'", rel_path))?;
-
-        Ok(DeleteFile {
-            file_path: rel_path.clone(),
-            content: DeleteContent::DeletionVector {
-                puffin_file_path: rel_path,
-                referenced_data_file: Some(entry.file_path.clone()),
-                content_offset,
-                content_size_in_bytes,
-            },
-            file_size_bytes: bytes.len() as i64,
-            record_count: bitmap.len() as i64,
-            partition_values: entry.partition_values.clone(),
-        })
+        crate::core::iceberg::delete::write_deletion_vector_puffin(
+            &self.store,
+            &self.uri,
+            &entry.file_path,
+            rel_parent,
+            positions,
+            &entry.partition_values,
+        )
+        .await
     }
 
     /// Resolve the object store and root location where Iceberg `TableMetadata`

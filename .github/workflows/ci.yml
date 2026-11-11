@@ -449,6 +449,44 @@ jobs:
         run: mvn -B clean test ${{ matrix.mvn-args }}
 
   #########################
+  # Cross-engine Iceberg conformance — the upstream `apache/iceberg-rust` reader
+  # opens tables written by the engine and asserts the row set. The oracle is a
+  # separate workspace (its own Cargo.lock) and links no BenoStreamDB code, so it
+  # catches metadata bugs our own reader cannot see. It has already caught three:
+  # numeric manifest `content` metadata, missing V3 snapshot row ranges, and
+  # relative deletion-vector `referenced_data_file` paths.
+  #########################
+  iceberg-oracle:
+    name: Iceberg V3 Oracle
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache: this job builds a different dependency graph
+          # (`iceberg` 0.11 pins arrow-* 58) than the engine jobs.
+          workspaces: ". -> target\ntests/iceberg_rust_oracle -> tests/iceberg_rust_oracle/target"
+      - name: Generate V2/V3 fixtures with the engine
+        run: |
+          BSDB_FIXTURE_DIR="$RUNNER_TEMP/bsdb_oracle_fixture" \
+            cargo test --test oracle_fixture -- --ignored --nocapture
+      - name: Verify with apache/iceberg-rust (V2)
+        run: |
+          BSDB_ORACLE_URI="file://$RUNNER_TEMP/bsdb_oracle_fixture/v2" \
+          BSDB_ORACLE_SUITE=v2 \
+          BSDB_ORACLE_EXPECT_IDS=1,2 \
+            cargo test --manifest-path tests/iceberg_rust_oracle/Cargo.toml -- --nocapture
+      - name: Verify with apache/iceberg-rust (V3)
+        run: |
+          BSDB_ORACLE_URI="file://$RUNNER_TEMP/bsdb_oracle_fixture/v3" \
+          BSDB_ORACLE_SUITE=v3 \
+          BSDB_ORACLE_EXPECT_IDS=1,2 \
+            cargo test --manifest-path tests/iceberg_rust_oracle/Cargo.toml -- --nocapture
+
+  #########################
   # Workflow lint — validate .github/workflows on every change so release- and
   # tag-only jobs (which are otherwise exercised only at release time) are at
   # least statically checked on every PR.

@@ -1,8 +1,89 @@
 # BenoStreamDB — Iceberg V3 Spec Conformance Plan
 
-**Status (2026-11-11, target release: post-`v0.16.0`): `V3.1` done; `V3.2`, `V3.3`, and `V3.4` open.**
-**Catalog parity (`C1–C4`) is complete and promoted to [`ADR-012`](https://github.com/benolabsai/benostreamdb/blob/main/docs/architecture/ADR_012_CATALOG_PARITY_AND_CAS_HARDENING.md).** What remains in this plan is Part I only: spec-exact V3 Deletion Vectors and the independent `apache/iceberg-rust` reader oracle.
+**Status (2026-11-11, `v0.16.0`): `V3.1`–`V3.4` shipped. The only remaining items are the documented gaps below.**
+**Catalog parity (`C1–C4`) is complete and promoted to [`ADR-012`](https://github.com/benolabsai/benostreamdb/blob/main/docs/architecture/ADR_012_CATALOG_PARITY_AND_CAS_HARDENING.md).**
 **Companion plan:** [production_readiness_plan.md](production_readiness_plan.md) (WS3/WS4 exit gates).
+
+### What `V3.2` and `V3.3` shipped (`v0.16.0`)
+
+- **Puffin codec.** `DELETION_VECTOR_TYPE` is `deletion-vector-v1`;
+  `encode_deletion_vector_v1` / `decode_deletion_vector_v1` implement the spec
+  envelope (4B BE length, magic `D1 D3 39 64`, portable 64-bit roaring bitmap,
+  4B BE CRC-32 over magic+bitmap) and reject a bad length, magic, or checksum
+  with `BenoStreamError::DeletionVectorDeserialize`. Seven unit tests cover
+  round-trip, framing shape, and each rejection path.
+- **Manifest metadata.** `IcebergWriter` carries the table's format version and
+  stamps it into the Avro `format-version` user metadata (previously hardcoded
+  `"2"`). `IcebergWriter::with_format_version` is the constructor; the writer is
+  built from `CommitMetadata::format_version` with the manifest's own version as
+  the fallback.
+- **Manifest entry schema.** `generate_manifest_schema` `r2` now declares fields
+  `143` (`referenced_data_file`), `144` (`content_offset`), and
+  `145` (`content_size_in_bytes`).
+- **Delete-entry encoding.** A Deletion Vector is written as `content = 1`
+  (`POSITION_DELETES`) with `file_format = "PUFFIN"` and populated 143/144/145;
+  the pre-V3 custom `content = 3` code and the spec shape are both accepted on
+  read.
+- **Write path.** `Table::delete_async` emits a `del-dv-<uuid>.puffin` blob
+  co-located with the data file (footer properties `referenced-data-file` and
+  `cardinality`) when `format_version >= 3`, and keeps Parquet position deletes
+  on V2 tables.
+- **Read path.** No new wiring was needed: `HybridReader` already fetched the
+  blob byte range from the manifest entry and merged it into the delete bitmap —
+  it was feeding those bytes to a raw `RoaringBitmap` decoder, which the V3.2
+  codec replaced. Compaction inherits the behaviour because it reads through
+  `HybridReader`, so a DV's rows vanish from the rewritten segment and the blob
+  becomes collectable. `vacuum` already retains every `DeleteFile.file_path`
+  (the Puffin file, for a DV) and reaps expired ones.
+- **Certification.** [`tests/test_iceberg_v3_conformance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_iceberg_v3_conformance.rs)
+  parses the Avro container header with a hand-written reader instead of
+  `apache_avro`, so a wrong key name or header shape cannot pass by
+  construction. It asserts the `format-version` stamp on V3 and V2 tables, the
+  143–145 fields, the delete manifest's `content = 1`, the absence of Parquet
+  position-delete files on a V3 delete, and that the V3 delete actually masks
+  rows end to end.
+
+### Known gaps after `V3.2`/`V3.3`
+
+- **(closed in `v0.16.0`) `MergePlanner` merge-on-read deletes now write V3
+  deletion vectors.** `write_deletion_vector_puffin` was extracted from
+  `Table::delete_async` into `src/core/iceberg/delete.rs` so both callers emit
+  byte-identical DV entries; merge positions are already per-data-file, so one DV
+  per file falls out naturally.
+- **`Table::write_mode()` stays `"buffered"` on V3**, because distributed
+  Spark/Trino task staging cannot reserve disjoint `_row_id` ranges without
+  driver-side allocation. This is the documented contract, not an oversight.
+- **The Java interop matrix (Spark 4.0 / Trino bi-directional V3 mutation) is
+  still manual.** The `iceberg-oracle` CI job now runs the Rust oracle on every
+  push; the JVM round-trip (Spark/Trino write → engine read → Spark/Trino read)
+  remains a manual nightly workflow.
+
+### `V3.4` shipped: the oracle and what it found
+
+`tests/iceberg_rust_oracle` is an excluded standalone crate (its own
+`[workspace]`, the same isolation `fuzz/` uses) that links `iceberg` 0.11 and
+never links BenoStreamDB. `tests/oracle_fixture.rs` generates V2 and V3 fixtures;
+the oracle opens them as a static table and asserts the format version, the
+table-level `next-row-id`, the snapshot row range, and the exact scanned row set.
+
+It found three interoperability bugs that neither BenoStreamDB's own reader nor
+PyIceberg could see, all now fixed:
+
+1. **Manifest `content` metadata used numbers.** We wrote `"0"` / `"1"`;
+   `iceberg-rust` parses that key with a strict `FromStr` accepting only `"data"` /
+   `"deletes"`, so every delete manifest failed with
+   `Invalid manifest content type: 1`.
+2. **V3 snapshots carried no row range.** `first-row-id` / `added-rows` were only
+   set on the flush path, so a delete or compaction snapshot advertised no
+   lineage. `TableMetadata` normalization now backfills a snapshot that adds no
+   rows with `first-row-id` = next unassigned id and `added-rows = 0`.
+3. **Deletion vectors referenced a relative data-file path.** Manifests store
+   `file:///…/seg_x.parquet` while `referenced_data_file` held `seg_x.parquet`, and
+   Iceberg matches a DV to its data file by comparing that string verbatim. The DV
+   matched nothing, so the external reader returned the deleted rows. Our reader
+   was blind to this because it applies every DV attached to an entry instead of
+   matching on `referenced_data_file` — precisely the class of bug an independent
+   oracle exists to catch.
 
 ---
 

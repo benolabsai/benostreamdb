@@ -570,29 +570,53 @@ impl MergePlanner {
                 }
 
                 if !deleted_positions.is_empty() {
-                    let file_path_col = arrow::array::StringArray::from(deleted_file_paths);
-                    let pos_col = arrow::array::Int64Array::from(deleted_positions);
-
-                    let partition_data = if !original_entry.partition_values.is_empty() {
+                    // V3 tables express merge-on-read deletes as deletion
+                    // vectors: one `deletion-vector-v1` Puffin blob per data
+                    // file per snapshot. V2 tables keep Parquet position-delete
+                    // files, which every V2 reader can decode.
+                    let delete_file = if format_version >= 3 {
                         let rel = crate::core::segment::relativize_against(
                             base_path,
                             &original_entry.file_path,
                         );
-                        let rel_path = rel
+                        let rel_parent = rel
                             .rfind('/')
                             .map(|pos| rel[..pos].to_string())
                             .unwrap_or_default();
-                        Some((rel_path, original_entry.partition_values.clone()))
+                        self.runtime_block_on(
+                            crate::core::iceberg::delete::write_deletion_vector_puffin(
+                                &store,
+                                base_path,
+                                &original_entry.file_path,
+                                &rel_parent,
+                                &deleted_positions,
+                                &original_entry.partition_values,
+                            ),
+                        )?
                     } else {
-                        None
-                    };
+                        let file_path_col = arrow::array::StringArray::from(deleted_file_paths);
+                        let pos_col = arrow::array::Int64Array::from(deleted_positions);
 
-                    let delete_file =
+                        let partition_data = if !original_entry.partition_values.is_empty() {
+                            let rel = crate::core::segment::relativize_against(
+                                base_path,
+                                &original_entry.file_path,
+                            );
+                            let rel_path = rel
+                                .rfind('/')
+                                .map(|pos| rel[..pos].to_string())
+                                .unwrap_or_default();
+                            Some((rel_path, original_entry.partition_values.clone()))
+                        } else {
+                            None
+                        };
+
                         self.runtime_block_on(delete_writer.write_position_delete(
                             partition_data,
                             &file_path_col,
                             &pos_col,
-                        ))?;
+                        ))?
+                    };
 
                     let mut updated_entry = original_entry.clone();
                     updated_entry.delete_files.push(delete_file);

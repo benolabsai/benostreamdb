@@ -313,6 +313,30 @@ impl TableMetadata {
                 snapshot.first_row_id = None;
                 snapshot.added_rows = None;
             }
+        } else {
+            // Every v3 snapshot must carry a row range. A snapshot that adds no
+            // rows — a delete, a compaction, a schema change — records
+            // `first-row-id` = the next unassigned row id with `added-rows` = 0.
+            // A missing range is not inferable by a reader (it cannot tell which
+            // `_row_id` the snapshot's rows start at), so it is backfilled here
+            // rather than emitted as a lineage hole. The oracle in
+            // `tests/iceberg_rust_oracle` is what caught this.
+            let mut cursor = 0i64;
+            for snapshot in &mut self.snapshots {
+                match (snapshot.first_row_id, snapshot.added_rows) {
+                    (Some(first), Some(added)) => {
+                        cursor = cursor.max(first.saturating_add(added));
+                    }
+                    (Some(first), None) => {
+                        snapshot.added_rows = Some(0);
+                        cursor = cursor.max(first);
+                    }
+                    _ => {
+                        snapshot.first_row_id = Some(cursor);
+                        snapshot.added_rows = Some(0);
+                    }
+                }
+            }
         }
     }
 }

@@ -71,7 +71,15 @@ fn attach_manifest_metadata<W: std::io::Write>(
         "format-version".to_string(),
         format_version.max(2).to_string(),
     )?;
-    writer.add_user_metadata("content".to_string(), content)?;
+    // The spec spells this key as the words "data" / "deletes". `apache/iceberg-rust`
+    // parses it with a strict `FromStr` that accepts only those two strings and
+    // rejects "0" / "1" with `Invalid manifest content type: 1` — which is how the
+    // oracle caught this. The numeric form is still accepted by our own reader.
+    let content_metadata = match content {
+        "1" => "deletes",
+        _ => "data",
+    };
+    writer.add_user_metadata("content".to_string(), content_metadata)?;
     Ok(())
 }
 

@@ -1,0 +1,17 @@
+[package]
+name = "benostreamdb-iceberg-oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Its own workspace root: the `iceberg` crate pins different `arrow` /
+# `object_store` versions than the engine, so it must never join the main
+# resolver graph. This mirrors what `fuzz/` does for libfuzzer-sys.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+arrow-array = "58.4"
+futures = "0.3.34"
+iceberg = "0.11.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

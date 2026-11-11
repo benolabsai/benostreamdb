@@ -377,14 +377,17 @@ async fn deletes_live_in_their_own_content_one_manifest() -> Result<()> {
         "the data manifest must declare data files"
     );
 
-    // The delete manifest is declared `content: 1` in Avro metadata and holds
-    // only delete entries.
+    // The delete manifest declares `content: "deletes"` in Avro metadata and
+    // holds only delete entries. The key is spelled as the spec words, not as
+    // `0`/`1`: `apache/iceberg-rust` parses it with a strict `FromStr` that
+    // accepts only "data"/"deletes" and rejects "1" with
+    // `Invalid manifest content type`.
     let delete_path = local_path(&delete_manifests[0])?;
     let reader = apache_avro::Reader::new(std::fs::File::open(&delete_path)?)?;
     let avro_metadata = reader.user_metadata();
     assert_eq!(
         avro_metadata.get("content").map(Vec::as_slice),
-        Some(&b"1"[..]),
+        Some(&b"deletes"[..]),
         "ManifestReader routes entries by this key"
     );
     assert!(

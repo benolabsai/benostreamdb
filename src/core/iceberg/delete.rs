@@ -471,6 +471,102 @@ fn avro_to_arrow_array(
     }
 }
 
+/// Write a V3 `deletion-vector-v1` Puffin file for one data file.
+///
+/// Shared by `Table::delete_async` and `MergePlanner`'s merge-on-read path so
+/// both produce byte-identical DV entries. Iceberg V3 permits at most one
+/// deletion vector per data file per snapshot, so every position passed here must
+/// belong to `referenced_data_file`.
+///
+/// Two details are load-bearing and were both found by the `iceberg-rust` oracle:
+///
+/// * `referenced_data_file` must be the **same string** the data manifest carries
+///   (an absolute URI once committed). Iceberg matches a DV to its data file by
+///   comparing that value verbatim, so a relative path matches nothing and the
+///   DV is silently ignored.
+/// * the blob payload must be the spec envelope, not a raw roaring bitmap, or a
+///   foreign reader rejects it.
+pub async fn write_deletion_vector_puffin(
+    store: &Arc<dyn object_store::ObjectStore>,
+    table_root_uri: &str,
+    referenced_data_file: &str,
+    rel_parent: &str,
+    positions: &[i64],
+    partition_values: &HashMap<String, serde_json::Value>,
+) -> Result<crate::core::manifest::DeleteFile> {
+    use crate::core::manifest::{DeleteContent, DeleteFile};
+
+    let absolute = |path: &str| -> String {
+        if path.contains("://") || path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!(
+                "{}/{}",
+                table_root_uri.trim_end_matches('/'),
+                path.trim_start_matches('/')
+            )
+        }
+    };
+    let referenced_data_file = absolute(referenced_data_file);
+
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for &pos in positions {
+        let pos_u32 = u32::try_from(pos).with_context(|| {
+            format!("deletion-vector position {pos} does not fit u32 for '{referenced_data_file}'")
+        })?;
+        bitmap.insert(pos_u32);
+    }
+    let payload = crate::core::puffin::encode_deletion_vector_v1(&bitmap)?;
+
+    let mut properties = HashMap::new();
+    properties.insert(
+        "referenced-data-file".to_string(),
+        referenced_data_file.clone(),
+    );
+    properties.insert("cardinality".to_string(), bitmap.len().to_string());
+
+    let mut writer = crate::core::puffin::PuffinWriter::new(std::io::Cursor::new(Vec::new()))?;
+    let (content_offset, content_size_in_bytes) = writer.add_blob(
+        crate::core::puffin::DELETION_VECTOR_TYPE.to_string(),
+        Vec::new(),
+        0, // snapshot id: the surrounding manifest carries the real one
+        0, // sequence number: likewise
+        &payload,
+        properties,
+    )?;
+    let bytes = writer.finish()?.into_inner();
+
+    let file_name = format!("del-dv-{}.puffin", uuid::Uuid::new_v4());
+    let rel_path = if rel_parent.is_empty() {
+        file_name
+    } else {
+        format!("{}/{}", rel_parent.trim_matches('/'), file_name)
+    };
+
+    store
+        .put(
+            &object_store::path::Path::from(rel_path.as_str()),
+            bytes.clone().into(),
+        )
+        .await
+        .with_context(|| format!("Failed to upload deletion vector '{}'", rel_path))?;
+
+    Ok(DeleteFile {
+        // The manifest must carry the resolvable URI; the store write above used
+        // the relative path.
+        file_path: absolute(&rel_path),
+        content: DeleteContent::DeletionVector {
+            puffin_file_path: absolute(&rel_path),
+            referenced_data_file: Some(referenced_data_file),
+            content_offset,
+            content_size_in_bytes,
+        },
+        file_size_bytes: bytes.len() as i64,
+        record_count: bitmap.len() as i64,
+        partition_values: partition_values.clone(),
+    })
+}
+
 /// Writer for Iceberg Delete Files (Position and Equality Deletes).
 ///
 /// Delete files are written through the table's `ObjectStore`, so they land in

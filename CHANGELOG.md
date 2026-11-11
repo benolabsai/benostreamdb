@@ -11,6 +11,33 @@ contains the correctness fixes alone, which it does not.
 
 ### Added
 
+- **`e-means` coarse quantizer + SIMD residual fastscan** (`benostream-gpu-ann`,
+  `src/core/index/e_means.rs`): a k-means-family coarse quantizer with Meta scaling
+  laws and attribution, residual-encoded IVF postings, and a SIMD fastscan over
+  them (`fastscan.rs`, `ivf_fastscan.rs`). New `fuzz/fuzz_targets/e_means.rs` target
+  and `tests/test_ivf_fastscan.rs`. Merged from `feature/e-means`.
+- **Iceberg V3 deletion vectors, end to end** (`V3.2`/`V3.3`): `DELETION_VECTOR_TYPE`
+  is the spec identifier `deletion-vector-v1`; `encode_deletion_vector_v1` /
+  `decode_deletion_vector_v1` implement the exact envelope (4B BE length, magic
+  `D1 D3 39 64`, portable 64-bit roaring bitmap, 4B BE CRC-32) with length/magic/CRC
+  validation surfacing `BenoStreamError::DeletionVectorDeserialize`. `IcebergWriter`
+  carries the table format version and stamps the Avro `format-version` metadata
+  (previously hardcoded `"2"`); the manifest entry schema declares fields `143`
+  (`referenced_data_file`), `144` (`content_offset`), `145`
+  (`content_size_in_bytes`). `Table::delete_async` writes a
+  `del-dv-<uuid>.puffin` blob co-located with the data file when
+  `format_version >= 3` and records an entry with `content = 1` (`POSITION_DELETES`)
+  and `file_format = "PUFFIN"`. See
+  [`plans/iceberg_v3_and_catalog_parity_plan.md`](plans/iceberg_v3_and_catalog_parity_plan.md).
+- **Independent `apache/iceberg-rust` reader oracle** (`tests/iceberg_rust_oracle`,
+  `V3.4`): an excluded standalone crate that links `iceberg` 0.11 and never links
+  `benostreamdb`, plus `tests/oracle_fixture.rs` to generate V2/V3 fixtures. It
+  verifies format version, `next-row-id`, the snapshot row range, and the exact
+  scanned row set against a foreign reader.
+- **`tests/test_iceberg_v3_conformance.rs`**: parses the Avro container header with
+  a hand-written reader rather than `apache_avro`, so a wrong key name cannot pass
+  by construction.
+
 - **`CatalogType::Memory` — in-process reference catalog** (`src/core/catalog/memory.rs`,
   `PyMemoryCatalog`): backed by `Arc<parking_lot::RwLock<MemoryCatalogState>>`, with
   two clients naming the same `memory://<name>` URI sharing one process-wide state.
@@ -92,6 +119,38 @@ contains the correctness fixes alone, which it does not.
   as landing in `v0.15.2`; the accumulated scope moved that target to `v0.16.0`.
 
 ### Fixed
+
+- **A segment could be resurrected by its own index build** (the CI failure in
+  `multi_writer_v2_differential_matches_union_model`, *Phase A linearizable reader
+  observed duplicate row id*): the background index-attachment task commits an
+  in-place update (add the indexed entry, remove the unindexed one). When a
+  concurrent compaction had already removed that segment, the removal was a no-op
+  while the add still landed, so the file came back — and its rows were now in both
+  it and the compacted replacement. The commit now sets
+  `discard_add_on_missing_remove`, so a missing input drops the update. Reproduced
+  at ~50% by pinning the test binary to 2 CPUs; 20/20 clean afterwards.
+- **SQL scans could see a flushed row twice.** `scan()` read the manifest at plan
+  time and `BenoStreamExec` read the write buffer at execute time, so a flush
+  publishing its manifest in between returned a row from both the new segment and
+  the still-staged batch. New `Table::consistent_scan_view` captures both under one
+  `buffer_epoch` retry (the protocol `read_expr_stream_async` already used), and
+  `BenoStreamExec` carries that captured buffer.
+- **Manifest `content` metadata used numbers instead of the spec words**
+  (`src/core/iceberg/writer.rs`). `apache/iceberg-rust` parses that key with a strict
+  `FromStr` accepting only `"data"` / `"deletes"` and rejected every delete manifest
+  with `Invalid manifest content type: 1`. Found by the V3.4 oracle.
+- **V3 snapshots carried no row range** (`src/core/metadata.rs`): `first-row-id` /
+  `added-rows` were only populated on the flush path, so a delete or compaction
+  snapshot advertised no lineage and an external reader could not assign `_row_id`.
+  Normalization now backfills a snapshot that adds no rows with `first-row-id` =
+  next unassigned id and `added-rows = 0`. Found by the V3.4 oracle.
+- **Deletion vectors referenced a relative data-file path**
+  (`Table::write_deletion_vector_file_async`): manifests store
+  `file:///…/seg_x.parquet` while `referenced_data_file` held `seg_x.parquet`, and
+  Iceberg matches a DV to its data file by comparing that string verbatim — so the
+  DV matched nothing and `iceberg-rust` returned the deleted rows. Paths are now
+  normalized to the manifest's absolute form. Our own reader was blind to this
+  because it applies every DV attached to an entry.
 
 - **BM25 equality predicates were pruned before the BM25 branch could run**
   (`src/core/sql/mod.rs`): `WHERE text = 'query'` against a tokenized column is a

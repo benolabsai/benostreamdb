@@ -175,8 +175,9 @@ async fn v3_manifest_declares_format_version_3_and_dv_fields() -> Result<()> {
             meta.get("content")
                 .context("manifest is missing the `content` user metadata")?
         ),
-        "0",
-        "data manifests declare content = 0"
+        "data",
+        "the manifest `content` metadata must be the spec word `data`; \
+         apache/iceberg-rust rejects `0` with `Invalid manifest content type`"
     );
 
     // `apache_avro` writes `avro.schema` through `serde_json::to_string`, i.e.
@@ -328,8 +329,8 @@ async fn v3_delete_writes_a_deletion_vector_instead_of_parquet_position_deletes(
             meta.get("content")
                 .context("delete manifest is missing `content`")?
         ),
-        "1",
-        "delete manifests declare content = 1"
+        "deletes",
+        "the delete manifest's `content` metadata must be the spec word `deletes`"
     );
     assert_eq!(
         String::from_utf8_lossy(
