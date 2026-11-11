@@ -26,6 +26,58 @@ import json
 TEST_DIR = (Path(tempfile.gettempdir()) / "benostream_compat_tests")
 TEST_DIR.mkdir(exist_ok=True)
 
+# The per-PR `ecosystem` job cannot read Iceberg-format tables from the pip
+# `pyspark` package (it ships no Iceberg JAR), so these tests skip there. The
+# `Iceberg Interop (JVM)` workflow sets both variables below to turn the skips
+# into hard failures and to fetch the Iceberg Spark runtime from Maven:
+#
+#   BSDB_REQUIRE_JVM_INTEROP=1
+#   BSDB_SPARK_ICEBERG_PACKAGES=org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.11.0
+#
+# The Iceberg runtime artifact is keyed by Spark *minor series*, and Maven
+# Central publishes exactly: 3.4, 3.5, 4.0, 4.1 (each `_2.12` and `_2.13`).
+# There is no 4.2 runtime, so Spark 4.2.x cannot be paired with a supported
+# Iceberg build — pin 3.5.2 (+ `3.5_2.12`) or 4.0/4.1 (+ `_2.13`). Iceberg 1.11
+# is used rather than 1.6 because V3 deletion vectors and row lineage need a
+# recent runtime.
+REQUIRE_JVM_INTEROP = os.environ.get("BSDB_REQUIRE_JVM_INTEROP") == "1"
+SPARK_ICEBERG_PACKAGES = os.environ.get(
+    "BSDB_SPARK_ICEBERG_PACKAGES",
+    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.11.0",
+)
+
+
+def _table_format_version(table_path: str) -> int | None:
+    """Read `format-version` from the table's latest metadata.json."""
+    metadata_dir = Path(table_path) / "metadata"
+    if not metadata_dir.is_dir():
+        return None
+    best = None
+    for p in metadata_dir.iterdir():
+        name = p.name
+        if name.startswith("v") and name.endswith(".metadata.json"):
+            try:
+                best = max(best or 0, int(name[1 : -len(".metadata.json")]))
+            except ValueError:
+                continue
+    if best is None:
+        return None
+    try:
+        return int(json.loads((metadata_dir / f"v{best}.metadata.json").read_text())["format-version"])
+    except (KeyError, ValueError, OSError):
+        return None
+
+
+def _spark_submit_available() -> bool:
+    return shutil.which("spark-submit") is not None
+
+
+def _require_or_skip(reason: str) -> None:
+    """Skip locally / per-PR, but fail in the interop workflow."""
+    if REQUIRE_JVM_INTEROP:
+        pytest.fail(f"JVM interop is required but unavailable: {reason}")
+    pytest.skip(reason)
+
 class TestSparkCompatibility:
     """Test BenoStreamDB → Spark compatibility"""
     
@@ -47,13 +99,15 @@ class TestSparkCompatibility:
         self.table.write_pandas(df)
     
     def test_spark_read_basic(self):
-        """Test Spark can read BenoStreamDB table"""
-        if shutil.which("spark-submit") is None or importlib.util.find_spec("pyspark") is None:
-            pytest.skip("pyspark/spark-submit not available")
-        # The pip-installed pyspark in CI lacks the Iceberg JAR needed to read
-        # Iceberg-format tables. Spark 4.x ships Iceberg natively only in the
-        # full binary distribution, not the pip package.
-        if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+        """Test Spark can read a BenoStreamDB table as an Iceberg table."""
+        if not _spark_submit_available():
+            _require_or_skip("spark-submit not available")
+        # The pip-installed pyspark lacks the Iceberg JAR, so plain CI skips.
+        # The interop workflow sets BSDB_REQUIRE_JVM_INTEROP=1 and lets
+        # spark-submit fetch the runtime from Maven via --packages.
+        if not REQUIRE_JVM_INTEROP and (
+            os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS")
+        ):
             pytest.skip("pyspark pip package lacks Iceberg JAR in CI")
 
         import textwrap
@@ -77,26 +131,80 @@ class TestSparkCompatibility:
             f.write(spark_script)
             script_path = f.name
         try:
-            result = subprocess.run(
-                ["spark-submit", "--master", "local[*]", script_path],
-                capture_output=True,
-                text=True,
-            )
+            cmd = ["spark-submit", "--master", "local[*]"]
+            if REQUIRE_JVM_INTEROP:
+                cmd += ["--packages", SPARK_ICEBERG_PACKAGES]
+            cmd.append(script_path)
+            result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 if "SparkClassNotFoundException" in result.stdout or \
                    "DATA_SOURCE_NOT_FOUND" in result.stdout:
-                    pytest.skip("Iceberg Spark runtime JAR not available")
+                    _require_or_skip("Iceberg Spark runtime JAR not available")
                 assert result.returncode == 0, \
                     f"Spark submit failed:\n{result.stderr}\n{result.stdout}"
         finally:
             if os.path.exists(script_path):
                 os.remove(script_path)
-    
+
     def test_spark_read_v3_metadata(self):
-        """Test Spark can read V3 metadata columns"""
-        # This test would verify _row_id and _last_updated_sequence_number
-        # are accessible from Spark
-        pass
+        """Spark must expose V3 row-lineage metadata columns.
+
+        `_row_id` / `_last_updated_sequence_number` are metadata columns, not
+        table-schema columns, so this only has teeth where the Iceberg runtime
+        implements V3 lineage — i.e. under the interop workflow.
+        """
+        if not REQUIRE_JVM_INTEROP:
+            pytest.skip("V3 lineage read needs the Iceberg runtime; run the interop workflow")
+        version = _table_format_version(self.table_path)
+        if version != 3:
+            pytest.skip(
+                f"table is format-version {version}, not 3; V3 lineage is absent by design"
+            )
+        if not _spark_submit_available():
+            _require_or_skip("spark-submit not available")
+
+        import textwrap
+        spark_script = textwrap.dedent(f"""\
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.builder \\
+            .appName("BenoStreamDB V3 Lineage Test") \\
+            .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \\
+            .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog") \\
+            .config("spark.sql.catalog.local.type", "hadoop") \\
+            .config("spark.sql.catalog.local.warehouse", "{self.table_path}") \\
+            .getOrCreate()
+
+        df = spark.read.format("iceberg").load("{self.table_path}")
+        cols = set(df.columns)
+        assert "_row_id" in cols, f"missing _row_id; saw {{sorted(cols)}}"
+        assert "_last_updated_sequence_number" in cols, \\
+            f"missing _last_updated_sequence_number; saw {{sorted(cols)}}"
+        print("OK Spark saw V3 lineage columns")
+        """)
+
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+            f.write(spark_script)
+            script_path = f.name
+        try:
+            result = subprocess.run(
+                [
+                    "spark-submit",
+                    "--master",
+                    "local[*]",
+                    "--packages",
+                    SPARK_ICEBERG_PACKAGES,
+                    script_path,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, (
+                f"Spark V3 lineage read failed:\n{result.stderr}\n{result.stdout}"
+            )
+        finally:
+            if os.path.exists(script_path):
+                os.remove(script_path)
 
 
 class TestTrinoCompatibility:
@@ -116,10 +224,34 @@ class TestTrinoCompatibility:
         self.table.write_pandas(df)
     
     def test_trino_read_basic(self):
-        """Test Trino can read BenoStreamDB table"""
-        # This would use Trino CLI or Python client
-        # to query the table and verify results
-        pass
+        """Trino must read a BenoStreamDB table as an Iceberg table.
+
+        Requires a Trino server whose Iceberg connector points at the same
+        directory tree (the interop workflow starts one with a filesystem
+        catalog over `TEST_DIR`). Skipped everywhere else.
+        """
+        host = os.environ.get("TRINO_HOST")
+        if not host:
+            _require_or_skip("TRINO_HOST is not set")
+        try:
+            import trino  # noqa: F401
+        except ImportError:
+            _require_or_skip("the `trino` Python client is not installed")
+
+        import trino
+
+        conn = trino.dbapi.connect(
+            host=host,
+            port=int(os.environ.get("TRINO_PORT", "8080")),
+            user="ci",
+            catalog="iceberg",
+            schema="default",
+        )
+        cur = conn.cursor()
+        # A filesystem catalog names the table after its directory.
+        cur.execute('SELECT count(*) FROM iceberg.default."trino_test_table"')
+        (count,) = cur.fetchone()
+        assert count == 500, f"Trino saw {count} rows, expected 500"
 
 
 class TestV2Features:

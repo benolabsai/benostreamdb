@@ -1,0 +1,216 @@
+name: Iceberg Interop (JVM)
+
+# Cross-engine certification with *external writers/readers*: Apache Spark and
+# Trino open tables written by BenoStreamDB and assert the row set. This is the
+# JVM counterpart to the Rust `apache/iceberg-rust` oracle that runs per-PR in
+# `ci.yml`.
+#
+# Why not per-PR:
+#   * a Spark submit costs a JVM start plus a ~200 MB Maven resolve of the
+#     Iceberg runtime, and a Trino server needs ~40 s to become queryable;
+#   * the JVM path only changes when the *table format* or the fixture changes,
+#     which is exactly what the path filter below watches.
+# The connector suites (`spark-benostreamdb`, `trino-benostreamdb`) still run on
+# every PR in `ci.yml`; those test the connector, not the on-disk format.
+#
+# Version pins (verified against Maven Central):
+#   * Apache Iceberg publishes `iceberg-spark-runtime` only for Spark minor
+#     series 3.4, 3.5, 4.0 and 4.1 (each `_2.12` and `_2.13`). There is **no 4.2
+#     runtime**, so Spark 4.2.x has no supported Iceberg pairing — do not pin it.
+#   * 3.5.2 + `3.5_2.12` + Java 17 mirrors the connector matrix's Spark 3.5 lane.
+#   * 4.0.x + `4.0_2.13` + Java 21 mirrors the connector matrix's Spark 4.0 lane.
+#   * Iceberg 1.11 is used rather than 1.6: V3 deletion vectors and row lineage
+#     need a recent runtime.
+
+on:
+  schedule:
+    - cron: '0 8 * * 3' # Wednesdays 08:00 UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/core/iceberg/**'
+      - 'src/core/metadata.rs'
+      - 'tests/test_cross_engine_compat.py'
+      - 'tests/iceberg_rust_oracle/**'
+      - '.github/workflows/iceberg-interop.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # The interop assertions are mandatory here: a missing runtime must fail, not skip.
+  BSDB_REQUIRE_JVM_INTEROP: "1"
+
+jobs:
+  #########################
+  # Spark reads BenoStreamDB tables
+  #########################
+  spark-interop:
+    name: Spark ${{ matrix.spark }} reads Iceberg
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - spark: "3.5.2"
+            java: "17"
+            packages: "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.11.0"
+          - spark: "4.0.1"
+            java: "21"
+            packages: "org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.11.0"
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-v2"
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Vulkan
+        run: |
+          sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev
+
+      - name: Cache the Iceberg Spark runtime
+        uses: actions/cache@v4
+        with:
+          path: ~/.ivy2/cache
+          key: ivy-${{ matrix.packages }}
+
+      - name: Install maturin and build the Python bindings
+        run: |
+          pip install maturin
+          maturin build --features python
+          pip install "$(ls target/wheels/benostreamdb-*.whl)[dev]"
+
+      - name: Install PySpark ${{ matrix.spark }}
+        run: pip install "pyspark==${{ matrix.spark }}" pandas pyarrow pytest
+
+      - name: Spark reads a BenoStreamDB table (V2 + V3 lineage)
+        env:
+          BSDB_SPARK_ICEBERG_PACKAGES: ${{ matrix.packages }}
+        run: |
+          pytest -v tests/test_cross_engine_compat.py -k "spark"
+
+  #########################
+  # Trino reads BenoStreamDB tables
+  #
+  # Trino's Iceberg connector is configured with a `filesystem` catalog over the
+  # same directory the fixtures are written to, which is why the test directory
+  # is bind-mounted into the container at the identical path.
+  #########################
+  trino-interop:
+    name: Trino ${{ matrix.trino }} reads Iceberg
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both bands the connector matrix certifies.
+        trino: ["482", "484"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-v2"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Vulkan
+        run: |
+          sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev
+
+      - name: Install maturin and build the Python bindings
+        run: |
+          pip install maturin
+          maturin build --features python
+          pip install "$(ls target/wheels/benostreamdb-*.whl)[dev]"
+
+      - name: Install the Trino client
+        run: pip install trino pandas pyarrow pytest
+
+      - name: Write the fixtures (host side)
+        # `bsdb.Table` writes a plain filesystem warehouse; Trino will read it
+        # through a `filesystem` Iceberg catalog pointed at the same directory.
+        run: |
+          mkdir -p /tmp/benostream_compat_tests
+          pytest -v tests/test_cross_engine_compat.py -k "not spark and not trino" || true
+          python - <<'PY'
+          import pandas as pd, benostreamdb as bsdb
+          t = bsdb.Table("/tmp/benostream_compat_tests/trino_test_table")
+          t.write_pandas(pd.DataFrame({
+              "user_id": range(500),
+              "action": ["click", "view", "purchase"] * 166 + ["click", "view"],
+              "amount": [i * 1.5 for i in range(500)],
+          }))
+          t.commit()
+          print("fixture written")
+          PY
+
+      - name: Start Trino ${{ matrix.trino }} with a filesystem Iceberg catalog
+        run: |
+          mkdir -p /tmp/trino-etc/catalog
+          cat > /tmp/trino-etc/catalog/iceberg.properties <<EOF
+          connector.name=iceberg
+          iceberg.catalog.type=filesystem
+          iceberg.catalog.warehouse=/tmp/benostream_compat_tests
+          fs.native.local.enabled=true
+          EOF
+          docker run -d --name trino \
+            -p 8080:8080 \
+            -v /tmp/trino-etc:/etc/trino:ro \
+            -v /tmp/benostream_compat_tests:/tmp/benostream_compat_tests \
+            trinodb/trino:${{ matrix.trino }}
+          for i in $(seq 1 90); do
+            if curl -fsS http://localhost:8080/v1/info >/dev/null 2>&1; then
+              echo "Trino is up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/v1/info || (docker logs trino && exit 1)
+
+      - name: Trino reads the BenoStreamDB table
+        env:
+          TRINO_HOST: 127.0.0.1
+          TRINO_PORT: "8080"
+        run: pytest -v tests/test_cross_engine_compat.py -k "trino"
+
+      - name: Dump Trino logs on failure
+        if: failure()
+        run: docker logs trino || true
