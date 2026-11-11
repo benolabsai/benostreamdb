@@ -9,6 +9,7 @@ pub mod build_vector;
 pub mod cluster_index;
 pub mod csr_graph;
 pub mod distance;
+pub mod e_means;
 pub mod global_centroids;
 pub mod gpu;
 pub mod hnsw_ivf;

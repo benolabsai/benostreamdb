@@ -35,12 +35,14 @@ impl Ord for SearchResult {
 /// Divides vector space into Voronoi cells via coarse k-means centroids.
 /// During query time, coarse centroid search prunes the search space to `n_probe`
 /// buckets, which are then scanned in parallel on the GPU with zero graph-building overhead.
+/// Supports residual encoding to center vectors around coarse centroids.
 pub struct IvfFlatIndex {
     centroids: Vec<f32>,
     bucket_vectors: Vec<Vec<f32>>,
     bucket_ids: Vec<Vec<u64>>,
     dim: usize,
     metric: Metric,
+    use_residuals: bool,
     ctx: ComputeContext,
 }
 
@@ -52,6 +54,19 @@ impl IvfFlatIndex {
         dim: usize,
         n_lists: Option<usize>,
         metric: Metric,
+        ctx: Option<ComputeContext>,
+    ) -> Result<Self> {
+        Self::build_with_options(vectors, ids, dim, n_lists, metric, true, ctx)
+    }
+
+    /// Build an IVF-Flat index with explicit residual encoding configuration.
+    pub fn build_with_options(
+        vectors: &[f32],
+        ids: Option<&[u64]>,
+        dim: usize,
+        n_lists: Option<usize>,
+        metric: Metric,
+        use_residuals: bool,
         ctx: Option<ComputeContext>,
     ) -> Result<Self> {
         let n_vectors = vectors.len() / dim;
@@ -67,14 +82,15 @@ impl IvfFlatIndex {
             .min(n_vectors);
 
         tracing::info!(
-            "Building GPU IVF-Flat index: {} vectors, dim={}, clusters={}, backend={}",
+            "Building GPU IVF-Flat index: {} vectors, dim={}, clusters={}, residuals={}, backend={}",
             n_vectors,
             dim,
             n_lists,
+            use_residuals,
             ctx.name()
         );
 
-        // 1. Train cluster centroids on GPU
+        // 1. Train cluster centroids on GPU (routes to e-means when eligible)
         let centroids = train_kmeans(vectors, dim, n_lists, 10, &ctx)?;
         let actual_k = centroids.len() / dim;
 
@@ -87,7 +103,7 @@ impl IvfFlatIndex {
                     .unwrap_or_default()
             });
 
-        // 3. Bucket vectors into flat contiguous arrays
+        // 3. Bucket vectors into flat contiguous arrays (optionally as residuals)
         let mut bucket_vectors: Vec<Vec<f32>> = vec![Vec::new(); actual_k];
         let mut bucket_ids: Vec<Vec<u64>> = vec![Vec::new(); actual_k];
 
@@ -96,7 +112,13 @@ impl IvfFlatIndex {
             if cid < actual_k {
                 let id = ids.map(|s| s[i]).unwrap_or(i as u64);
                 let v = &vectors[i * dim..(i + 1) * dim];
-                bucket_vectors[cid].extend_from_slice(v);
+                if use_residuals && metric == Metric::L2 {
+                    let c = &centroids[cid * dim..(cid + 1) * dim];
+                    let r: Vec<f32> = v.iter().zip(c.iter()).map(|(&x, &cent)| x - cent).collect();
+                    bucket_vectors[cid].extend_from_slice(&r);
+                } else {
+                    bucket_vectors[cid].extend_from_slice(v);
+                }
                 bucket_ids[cid].push(id);
             }
         }
@@ -107,6 +129,7 @@ impl IvfFlatIndex {
             bucket_ids,
             dim,
             metric,
+            use_residuals,
             ctx,
         })
     }
@@ -150,10 +173,24 @@ impl IvfFlatIndex {
                 continue;
             }
 
-            // GPU distance evaluation for the entire cluster in parallel
-            let distances = self
-                .ctx
-                .compute_distance(query, bucket_vecs, self.dim, self.metric)?;
+            // If residuals are used with L2 distance, evaluate distance relative to query residual q - c
+            let query_buf: Vec<f32>;
+            let q_to_use: &[f32] = if self.use_residuals && self.metric == Metric::L2 {
+                let c = &self.centroids[cluster_id * self.dim..(cluster_id + 1) * self.dim];
+                query_buf = query
+                    .iter()
+                    .zip(c.iter())
+                    .map(|(&q, &cent)| q - cent)
+                    .collect();
+                &query_buf
+            } else {
+                query
+            };
+
+            // Hardware distance evaluation for the entire cluster in parallel
+            let distances =
+                self.ctx
+                    .compute_distance(q_to_use, bucket_vecs, self.dim, self.metric)?;
 
             for (local_idx, &dist) in distances.iter().enumerate() {
                 let id = bucket_ids[local_idx];

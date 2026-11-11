@@ -17,6 +17,8 @@ pub struct IvfIndex {
     pub n_lists: usize,
     /// Vector dimensionality
     pub dim: usize,
+    /// Whether vectors in inverted_lists are stored as residuals (x - c_j)
+    pub use_residuals: bool,
 }
 
 /// Assign vectors to the nearest centroids using L2 distance.
@@ -51,8 +53,17 @@ pub fn simple_kmeans_assignment(
 }
 
 impl IvfIndex {
-    /// Build IVF index from vectors
+    /// Build IVF index from vectors with residual encoding enabled by default
     pub fn build(vectors: Vec<Vec<f32>>, n_lists: Option<usize>) -> Result<Self> {
+        Self::build_with_options(vectors, n_lists, true)
+    }
+
+    /// Build IVF index with explicit residual encoding configuration
+    pub fn build_with_options(
+        vectors: Vec<Vec<f32>>,
+        n_lists: Option<usize>,
+        use_residuals: bool,
+    ) -> Result<Self> {
         if vectors.is_empty() {
             anyhow::bail!("Cannot build IVF index from empty vector set");
         }
@@ -62,16 +73,25 @@ impl IvfIndex {
         let n_lists = n_lists.unwrap_or_else(|| (n as f64).sqrt() as usize).max(1);
         let max_iters = 10;
 
-        // 1. Cluster vectors using k-means
+        // 1. Cluster vectors using k-means / e-means
         let (centroids, labels) = simple_kmeans(&vectors, n_lists, max_iters)?;
 
-        // 2. Transpose into inverted lists
+        // 2. Transpose into inverted lists (stored as residuals when use_residuals is true)
         let mut inverted_lists = HashMap::with_capacity(n_lists);
         for (i, (vec, &label)) in vectors.into_iter().zip(labels.iter()).enumerate() {
+            let stored_vec = if use_residuals && label < centroids.len() {
+                let c = &centroids[label];
+                vec.iter()
+                    .zip(c.iter())
+                    .map(|(&v, &cent)| v - cent)
+                    .collect()
+            } else {
+                vec
+            };
             inverted_lists
                 .entry(label)
                 .or_insert_with(Vec::new)
-                .push((vec, i));
+                .push((stored_vec, i));
         }
 
         Ok(IvfIndex {
@@ -79,6 +99,7 @@ impl IvfIndex {
             inverted_lists,
             n_lists,
             dim,
+            use_residuals,
         })
     }
 
@@ -111,13 +132,25 @@ impl IvfIndex {
         for i in 0..n_probes.min(self.n_lists) {
             let cluster_id = centroid_distances[i].0;
             if let Some(list) = self.inverted_lists.get(&cluster_id) {
+                let query_buf: Vec<f32>;
+                let q_to_use: &[f32] = if self.use_residuals && cluster_id < self.centroids.len() {
+                    let c = &self.centroids[cluster_id];
+                    query_buf = q_vec
+                        .iter()
+                        .zip(c.iter())
+                        .map(|(&q, &cent)| q - cent)
+                        .collect();
+                    &query_buf
+                } else {
+                    q_vec
+                };
                 for (vec, row_id) in list {
                     if let Some(f) = filter {
                         if !f.contains(*row_id as u32) {
                             continue;
                         }
                     }
-                    candidates.push((*row_id, l2_distance_squared(q_vec, vec)));
+                    candidates.push((*row_id, l2_distance_squared(q_to_use, vec)));
                 }
             }
         }
@@ -149,6 +182,7 @@ impl IvfIndex {
                 }
             }
         }
+        buf.write_all(&[if self.use_residuals { 1u8 } else { 0u8 }])?;
         Ok(buf)
     }
 
@@ -191,11 +225,24 @@ impl IvfIndex {
             }
             inverted_lists.insert(cluster_id, vectors);
         }
+
+        // Optional trailing flag for residual encoding (100% backward compatible)
+        let use_residuals = if (cursor.position() as usize) < data.len() {
+            let mut flag = [0u8; 1];
+            cursor
+                .read_exact(&mut flag)
+                .map(|_| flag[0] != 0)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
         Ok(IvfIndex {
             centroids,
             inverted_lists,
             n_lists,
             dim,
+            use_residuals,
         })
     }
 }
@@ -250,6 +297,22 @@ pub fn simple_kmeans_with_seed(
     // Default to a deterministic seed (0x00C0_FFEE_1337) if none is provided,
     // ensuring reproducibility across platforms, cores, and CI runs.
     let seed_val = seed.unwrap_or(0x00C0_FFEE_1337);
+
+    // Gated dispatch: route eligible configurations to high-throughput e-means
+    if crate::core::index::e_means::is_emeans_eligible(n, k, dim) {
+        let config = crate::core::index::e_means::EMeansConfig {
+            k,
+            nepochs: 3,
+            batch_law: crate::core::index::e_means::BatchLaw::Auto,
+            fixed_alpha0: None,
+            unused_threshold: None,
+            seed: seed_val,
+        };
+        let (centroids, _) = crate::core::index::e_means::train_emeans_vectors(vectors, &config)?;
+        let labels = assign_capacity_capped(vectors, &centroids, k);
+        return Ok((centroids, labels));
+    }
+
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed_val);
 
     // Step 1: Flatten training vectors once for SIMD/Cache locality
@@ -417,11 +480,17 @@ pub fn simple_kmeans_with_seed(
         }
     }
 
-    // Final assignment: nearest centroid, but with a per-cluster capacity so no
-    // single cluster can dominate the (superlinear) HNSW build. Points that
-    // would overflow a full cluster spill to their next-nearest cluster. The
-    // capacity is 1.5x the mean, so only dense-region overflow is displaced and
-    // recall impact is small.
+    let labels = assign_capacity_capped(vectors, &centroids, k);
+    Ok((centroids, labels))
+}
+
+/// Final assignment: nearest centroid, with a per-cluster capacity (1.5x mean)
+/// so no single cluster can dominate the (superlinear) HNSW build.
+pub fn assign_capacity_capped(
+    vectors: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    k: usize,
+) -> Vec<usize> {
     use std::cell::RefCell;
     use std::sync::atomic::AtomicUsize;
 
@@ -436,7 +505,7 @@ pub fn simple_kmeans_with_seed(
     let capacity = capacity.max(1);
     let counts: Vec<AtomicUsize> = (0..k).map(|_| AtomicUsize::new(0)).collect();
 
-    let labels: Vec<usize> = vectors
+    vectors
         .par_iter()
         .map(|v| {
             DISTS.with(|cell| {
@@ -461,9 +530,7 @@ pub fn simple_kmeans_with_seed(
                 dists[0].0
             })
         })
-        .collect();
-
-    Ok((centroids, labels))
+        .collect()
 }
 
 #[cfg(test)]
@@ -527,5 +594,72 @@ mod tests {
             "largest cluster {max} exceeds capacity {capacity} (mean {mean:.1}); counts={counts:?}"
         );
         assert!(min > 0, "empty cluster present; counts={counts:?}");
+    }
+
+    #[test]
+    fn test_emeans_dispatch_in_simple_kmeans() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x00C0_FFEE_1337);
+        let n = 10_000usize;
+        let k = 64usize;
+        let dim = 8usize;
+
+        assert!(crate::core::index::e_means::is_emeans_eligible(n, k, dim));
+
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(n);
+        for _ in 0..n {
+            vectors.push((0..dim).map(|_| rng.gen_range(-5.0..5.0)).collect());
+        }
+
+        let (centroids, labels) = simple_kmeans(&vectors, k, 10).unwrap();
+        assert_eq!(centroids.len(), k);
+        assert_eq!(labels.len(), n);
+
+        let mut counts = vec![0usize; k];
+        for &l in &labels {
+            assert!(l < k, "label {l} out of range");
+            counts[l] += 1;
+        }
+
+        let mean = n as f64 / k as f64;
+        let capacity = (mean * 1.5).ceil() as usize;
+        let max = *counts.iter().max().unwrap();
+        let min = *counts.iter().min().unwrap();
+
+        assert!(
+            max <= capacity,
+            "largest cluster {max} exceeds capacity {capacity} (mean {mean:.1})"
+        );
+        assert!(
+            min > 0,
+            "empty cluster present in e-means dispatch; counts={counts:?}"
+        );
+    }
+
+    #[test]
+    fn test_ivf_residual_serialization_roundtrip() {
+        let vectors = vec![
+            vec![1.0, 0.0, 0.5, 0.2],
+            vec![1.1, 0.1, 0.6, 0.3],
+            vec![0.0, 1.0, -0.5, 0.8],
+            vec![0.1, 1.1, -0.4, 0.9],
+        ];
+
+        let index = IvfIndex::build(vectors.clone(), Some(2)).unwrap();
+        assert!(index.use_residuals);
+
+        let query = crate::core::index::VectorValue::Float32(vec![1.05, 0.05, 0.55, 0.25]);
+        let results_before = index.search(&query, 2, 2, None);
+
+        let bytes = index.serialize().unwrap();
+        let loaded = IvfIndex::deserialize(&bytes).unwrap();
+        assert!(loaded.use_residuals);
+
+        let results_after = loaded.search(&query, 2, 2, None);
+        assert_eq!(results_before.len(), results_after.len());
+        for (a, b) in results_before.iter().zip(results_after.iter()) {
+            assert_eq!(a.0, b.0);
+            assert!((a.1 - b.1).abs() < 1e-6);
+        }
     }
 }

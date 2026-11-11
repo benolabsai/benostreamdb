@@ -439,6 +439,32 @@ Themes are ordered by priority.
 
 ---
 
+### Theme 12: High-Throughput Vector Indexing Suite (e-means + Residuals + SIMD FastScan) (v0.16.0)
+*10× faster index construction via e-means coarse clustering, 70–85% variance reduction via residual encoding, and 4–6× faster query scans via 4-bit in-register SIMD FastScan.* — 🔴 **High Priority (Committed for v0.16.0)**
+
+> **Why now.** Rather than treating vector indexing bottlenecks in isolation, this theme unifies coarse clustering, inverted list layout, and SIMD query traversal into an integrated vector pipeline:
+> 1. **Coarse Clustering Bottleneck (Solved via e-means)**: Replaces truncated Lloyd's algorithm with Meta FAIR's stochastic Exponential Moving Average (EMA) e-means algorithm (*"e-means: outperforming k-means in one-tenth the epochs"*, Bessa et al., arXiv:2611.09501), achieving true convergence in 1.2–2.5 epochs (~10× faster training, zero dead clusters).
+> 2. **Dynamic Range & DC Offset Bottleneck (Solved via Residual Encoding)**: Storing inverted list vectors as residuals $r = x - c_j$ compresses coordinate variance by 70–85%, eliminating the large DC offsets that distort 4-bit and 8-bit quantization.
+> 3. **CPU Scan Throughput Bottleneck (Solved via SIMD FastScan)**: Storing 4-bit subvector codes interleaved in contiguous blocks allows distance lookup tables to fit entirely inside SIMD registers. Lookups execute via hardware byte shuffles (`_mm256_shuffle_epi8` on x86, `vtbl1_u8` on ARM NEON), evaluating 32 vector distances per cycle without L1/L2 cache misses.
+
+- [x] **e-means Coarse Quantizer Engine (`benostream-gpu-ann/src/e_means.rs` & `src/core/index/e_means.rs`)** — ✅ **Completed**:
+  - Bumped sub-crate `benostream-gpu-ann` to `v0.2.0`.
+  - Implemented streaming mini-batch accumulator, cosine step schedule ($\alpha_0 \to 0.1\alpha_0$), and mass-proportional donor splitting with alternating coordinate perturbation ($\epsilon = 10^{-4}$).
+  - Hardware dispatch across GPU (CUDA/Metal/WGPU) and multi-core CPU with Rayon.
+  - Gated dispatch in `src/core/index/ivf.rs` (`simple_kmeans_with_seed`), preserving capacity-capped Voronoi balancing. Verified: 10,000 vectors clustered into 64 partitions in 150ms.
+- [x] **Fuzzing & Robustness (`fuzz/fuzz_targets/e_means.rs`)** — ✅ **Completed**:
+  - Registered `e_means` fuzz target fuzzing degenerate inputs (zero vectors, colinear points, extreme norms, NaNs).
+- [ ] **Residual Inverted List Encoding (`src/core/index/ivf.rs` & `benostream-gpu-ann/src/ivf_flat.rs`)** — 🔴 **High Priority**:
+  - Subtract coarse centroid $c_j$ during inverted list insertion ($r = x - c_j$).
+  - Compute query residual $q_r = q - c_j$ once per probed cluster during fine search, preserving exact distance equivalence while shrinking storage and quantization noise.
+- [ ] **In-Register 4-bit SIMD FastScan Engine** — 🔴 **High Priority**:
+  - Implement 4-bit PQ codebook quantization and 32-vector interleaved block packing.
+  - Implement AVX2 (`_mm256_shuffle_epi8`) and ARM NEON (`vtbl1_u8`) in-register distance accumulation kernels.
+- [ ] **Empirical Benchmarks (SIFT-1M & Cohere-10M)** — 🔴 **High Priority**:
+  - Benchmark index construction wall-clock time and query recall@10 vs. latency curves across Lloyd, e-means, and FastScan.
+
+---
+
 ## Benchmarks as Product Work
 
 Benchmarks and demonstrations are part of the product, not marketing polish.
