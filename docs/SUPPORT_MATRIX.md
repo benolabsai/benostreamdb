@@ -58,7 +58,7 @@ Not part of the supported-core guarantee:
 
 | Surface | Where | Status |
 |---|---|---|
-| Spark connector (`spark-benostreamdb`) | subproject | Native (Iceberg-free) path; see [ADR-009](https://www.benostreamdb.org/guides/adr_009.html) |
+| Spark connector (`spark-benostreamdb`) | subproject | Native (Iceberg-free) path; see [ADR-007](https://www.benostreamdb.org/guides/adr_007.html) |
 | Trino connector (`trino-benostreamdb`) | subproject | Native path; typed set-returning table functions still open |
 | Flink | — | **No bespoke connector.** Integrate via the Iceberg Flink connector + Flight SQL/JDBC |
 | GPU backends (CUDA / ROCm / Metal / Intel) | feature-gated + `benostream-gpu-ann` | Batch-oriented acceleration only; not end-to-end resident GPU search ([`docs/GPU_SETUP_GUIDE.md`](GPU_SETUP_GUIDE.md)) |

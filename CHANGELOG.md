@@ -28,7 +28,7 @@ contains the correctness fixes alone, which it does not.
   `del-dv-<uuid>.puffin` blob co-located with the data file when
   `format_version >= 3` and records an entry with `content = 1` (`POSITION_DELETES`)
   and `file_format = "PUFFIN"`. See
-  [`plans/iceberg_v3_and_catalog_parity_plan.md`](plans/iceberg_v3_and_catalog_parity_plan.md).
+  [`ADR-010`](docs/architecture/ADR_010_ICEBERG_V3_DELETION_VECTORS_AND_CROSS_ENGINE_CONFORMANCE.md).
 - **Independent `apache/iceberg-rust` reader oracle** (`tests/iceberg_rust_oracle`,
   `V3.4`): an excluded standalone crate that links `iceberg` 0.11 and never links
   `benostreamdb`, plus `tests/oracle_fixture.rs` to generate V2/V3 fixtures. It
@@ -45,7 +45,7 @@ contains the correctness fixes alone, which it does not.
   `assert-ref-snapshot-id`, `assert-current-schema-id`, `assert-last-assigned-field-id`,
   `assert-default-spec-id`) and returns `CatalogRequest { status: Some(409), .. }` on
   conflict, so multi-writer convergence is testable with zero infrastructure. See
-  [`ADR-012`](docs/architecture/ADR_012_CATALOG_PARITY_AND_CAS_HARDENING.md).
+  [`ADR-009`](docs/architecture/ADR_009_CATALOG_PARITY_AND_CAS_HARDENING.md).
 - **`CatalogType::S3Tables` + `RestCatalogAuth::AwsSigV4`** (`src/core/catalog/rest.rs`,
   `PyS3TablesCatalog`): AWS SigV4 request signing over the Iceberg REST v1 protocol
   for Amazon S3 Tables, with region derivation from the table-bucket ARN, `/v1/config`
@@ -70,7 +70,7 @@ contains the correctness fixes alone, which it does not.
   `read.rs`, `stage.rs`, `maintenance.rs`, `wal.rs`, and `metadata.rs`, with
   linearizable reads during the `buffer`→`manifest` handoff, retained drained
   batches across pre-manifest upload failures, and WAL truncation that cannot drop
-  transactions appended during a flush. See [`ADR-010`](docs/architecture/ADR_010_PENDING_COMMIT_STATE_MACHINE.md).
+  transactions appended during a flush. See [`ADR-008`](docs/architecture/ADR_008_PENDING_COMMIT_STATE_MACHINE.md).
 - **Hive-partitioned indexing and query-execution conformance**: partition-constrained
   vector routing (`TableVectorRouter::route_allowed` / `route_with_policy_allowed`),
   cache-root/`segment_id` parity between `Table` and `HybridReader`, Hive-aware
@@ -78,8 +78,8 @@ contains the correctness fixes alone, which it does not.
   `BenoStreamExec` / `VectorScanExec`, partition-aware and index-preserving
   `MergePlanner`, and `is_local_uri` guards so non-local writes stop creating
   `s3:/bucket/...` directories in the process CWD. New
-  `tests/test_partitioned_indexing.rs` (6/6). See
-  [`ADR-011`](docs/architecture/ADR_011_PARTITIONED_INDEXING_AND_QUERY_EXECUTION.md).
+  `tests/test_partitioned_indexing.rs` (6/6). (This work has no ADR: it is a
+  correctness fix set, not a design decision.)
 - **Trino `system.keyword_search`** (`trino-benostreamdb`): BM25-only retrieval
   as a table function, the lexical counterpart of `system.hybrid_search`. It
   returns every table column plus `score`, validated against the engine's BM25
@@ -105,17 +105,21 @@ contains the correctness fixes alone, which it does not.
   non-`#[non_exhaustive]` enum reachable through `benostreamdb::core::catalog`,
   so downstream crates that `match` it exhaustively will need a new arm. This is
   the only breaking surface in the release.
-- `plans/` now contains only live work. Completed plans are promoted to ADRs:
-  the connector plan became `ADR_009`, `ADR_010` covers `PendingCommit`,
-  `ADR_011` covers partitioned indexing and query execution, and `ADR_012`
-  covers catalog parity and CAS hardening.
+- `plans/` now contains a single live document. Completed plans were promoted to
+  ADRs only where they recorded a decision: the connector plan became `ADR-007`,
+  `ADR-008` covers `PendingCommit`, `ADR-009` covers catalog parity and CAS
+  hardening, and `ADR-010` covers Iceberg V3 and cross-engine conformance. Three
+  former records were deleted as non-ADRs (a graph-RAG feature set, a binding
+  ergonomics fix ledger, and a partitioned-indexing fix ledger); their surviving
+  content lives in this changelog. See
+  [`docs/architecture/README.md`](docs/architecture/README.md) for the standard.
 - Catalog semantics now live in one place (`src/core/catalog/common.rs`):
   `ensure_storage_table_initialized`, `extract_metadata_location_from_updates`,
   `load_table_metadata_from_location`, `persist_updates_to_storage`,
   `table_root_from_metadata_location`, `validate_requirements_against_metadata`,
   and `catalog_conflict_error` are shared by all adapters rather than
   reimplemented per backend.
-- `M2` is described in `docs/architecture/ADR_010_PENDING_COMMIT_STATE_MACHINE.md`
+- `M2` is described in `docs/architecture/ADR_008_PENDING_COMMIT_STATE_MACHINE.md`
   as landing in `v0.15.2`; the accumulated scope moved that target to `v0.16.0`.
 
 ### Fixed
@@ -1230,7 +1234,7 @@ needed to publish the resulting numbers honestly.
   `vector_max`, `vector_stddev`, `vector_median`, `bm25_score`, `tf_idf` in
   `python/benostreamdb/__init__.py`, keeping the Rust, Python, and SQL surfaces
   1:1.
-- **[`docs/architecture/ADR_006_SQL_DDL_AND_MAINTENANCE_SURFACE.md`](docs/architecture/ADR_006_SQL_DDL_AND_MAINTENANCE_SURFACE.md)** — design spec for the SQL surface, and a full
+- **[`docs/architecture/ADR_005_SQL_DDL_AND_MAINTENANCE_SURFACE.md`](docs/architecture/ADR_005_SQL_DDL_AND_MAINTENANCE_SURFACE.md)** — design spec for the SQL surface, and a full
   SQL language guide (all statements, UDFs, and pgvector syntax) in
   `server/flight_sql/README.md`.
 - **`Table::reindex_inverted_column`** — a *targeted* reindex that rebuilds only

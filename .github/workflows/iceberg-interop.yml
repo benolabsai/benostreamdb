@@ -95,8 +95,18 @@ jobs:
           python-version: "3.12"
 
       - name: Install Vulkan
+        # The wheel build links against Vulkan. A runner DNS blip while fetching
+        # `libvulkan-dev` failed the first run of this workflow with
+        # "Temporary failure resolving 'azure.archive.ubuntu.com'", so retry
+        # rather than let infrastructure flakiness masquerade as a conformance
+        # failure.
         run: |
-          sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev && exit 0
+            echo "apt attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          exit 1
 
       - name: Cache the Iceberg Spark runtime
         uses: actions/cache@v4
@@ -152,8 +162,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install Vulkan
+        # Same runner-DNS retry as the Spark job; see the note there.
         run: |
-          sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev && exit 0
+            echo "apt attempt ${attempt} failed; retrying in 15s"
+            sleep 15
+          done
+          exit 1
 
       - name: Install maturin and build the Python bindings
         run: |

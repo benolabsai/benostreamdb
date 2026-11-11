@@ -20,7 +20,7 @@ If another client successfully committed `v101.json` while the first client was 
 - The first client's write operation will fail with an `AlreadyExists` or conflict error.
 - BenoStreamDB automatically **retries** the commit inside the `ManifestManager` / `TableMetadata` CAS loops (and up to 64 attempts on strict V3 row-lineage OCC conflicts, cleaning up obsolete staged Parquet files before retrying).
 - In each retry, the client re-reads the *new* latest version, merges its changes again, and attempts to commit the *next* version (e.g., `v102`).
-- Randomized backoff is used between retries to reduce contention. For concurrent writes buffered inside a single handle, commits transition explicitly through `PendingCommit` (`Staging -> ManifestCommitted -> IcebergPublished`); see [ADR-010](https://www.benostreamdb.org/guides/adr_010.html).
+- Randomized backoff is used between retries to reduce contention. For concurrent writes buffered inside a single handle, commits transition explicitly through `PendingCommit` (`Staging -> ManifestCommitted -> IcebergPublished`); see [ADR-008](https://www.benostreamdb.org/guides/adr_008.html).
 
 ## Distributed Locking (`FileBasedLock`)
 

@@ -1,4 +1,4 @@
-# ADR-007: Trino Vector and Graph Pushdown via Table Functions
+# ADR-006: Trino Vector and Graph Pushdown via Table Functions
 
 - **Status**: Implemented — promoted from `plans/trino_vector_pushdown.md`  
 - **Target**: Trino 482-483 (band `d`) and 484+ (band `e`); see

@@ -1,4 +1,4 @@
-# ADR-009: Native Connector Architecture, UDF Exposure, and Version Matrix
+# ADR-007: Native Connector Architecture, UDF Exposure, and Version Matrix
 
 ## Status and scope
 

@@ -1,9 +1,9 @@
-# ADR-012: Catalog Parity, Compare-and-Swap Hardening, and the Cross-Catalog Conformance Contract
+# ADR-009: Catalog Parity, Compare-and-Swap Hardening, and the Cross-Catalog Conformance Contract
 
 > **Status: implemented (`v0.16.0`).**
 > Implemented across [`src/core/catalog/mod.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/mod.rs), [`common.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/common.rs), [`memory.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/memory.rs), [`rest.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/rest.rs), [`jdbc.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/jdbc.rs), [`glue.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/glue.rs), [`hive.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/hive.rs), [`unity.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/unity.rs), [`nessie.rs`](https://github.com/benolabsai/benostreamdb/blob/main/src/core/catalog/nessie.rs), and the Python bindings under [`src/python/catalog/`](https://github.com/benolabsai/benostreamdb/blob/main/src/python/catalog/mod.rs).
 > Certified by [`tests/test_catalog_conformance.rs`](https://github.com/benolabsai/benostreamdb/blob/main/tests/test_catalog_conformance.rs) (13 tests: in-process memory, SQLite in-memory and file-backed CAS, optional PostgreSQL, an Axum mock Iceberg REST catalog with OAuth2, an AWS-SigV4 mock for `s3tables` and Glue REST, a Unity mock covering both the Unity Tables and Iceberg REST surfaces, and a Nessie REST v2 mock).
-> Promoted from the completed Part II of `plans/iceberg_v3_and_catalog_parity_plan.md`. The Iceberg V3 spec-conformance work from the same plan remains open and stays a live plan.
+> Promoted from the completed Part II of the retired `iceberg_v3_and_catalog_parity_plan.md`. Part I (Iceberg V3 spec conformance) shipped as [`ADR-010`](https://github.com/benolabsai/benostreamdb/blob/main/docs/architecture/ADR_010_ICEBERG_V3_DELETION_VECTORS_AND_CROSS_ENGINE_CONFORMANCE.md).
 
 ---
 
