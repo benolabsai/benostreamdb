@@ -471,6 +471,16 @@ class LanceDbAdapter(VectorAdapter):
                     qb = qb.nprobes(max(1, int(ef_search) // 10))
             except (AttributeError, TypeError):
                 pass
+            # Two-stage exact rescoring, the same concept as BenoStreamDB's
+            # `refine_factor`: LanceDB re-ranks the candidate set from the
+            # full-precision payload instead of the quantized codes. Only meaningful
+            # for a quantized index, so it is guarded and opt-in via REFINE_FACTOR.
+            _rf = int(os.environ.get("REFINE_FACTOR", "1") or 1)
+            if _rf > 1:
+                try:
+                    qb = qb.refine_factor(_rf)
+                except (AttributeError, TypeError):
+                    pass
             rows = qb.to_list()
             out.append([int(r["id"]) for r in rows])
         return np.array(out)
@@ -488,6 +498,12 @@ class LanceDbAdapter(VectorAdapter):
                     qb = qb.nprobes(max(1, int(ef_search) // 10))
             except (AttributeError, TypeError):
                 pass
+            _rf = int(os.environ.get("REFINE_FACTOR", "1") or 1)
+            if _rf > 1:
+                try:
+                    qb = qb.refine_factor(_rf)
+                except (AttributeError, TypeError):
+                    pass
             out.append(qb.to_list())
         return out
 
@@ -1159,6 +1175,10 @@ def run_vector(adapter: VectorAdapter, args) -> dict:
         "index_mb": round(adapter.index_bytes(handle) / 1e6, 2),
         "recall_at_k": round(recall, 4),
         "pure_index_qps": round(q / pure_total, 1),
+        # Recorded for every engine so the report's Refine column is meaningful:
+        # engines with no refinement concept (faiss, hnswlib, pgvector, opensearch)
+        # carry 1, i.e. "off", and are reported as an em dash.
+        "refine_factor": int(os.environ.get("REFINE_FACTOR", "1") or 1),
         "pure_p50_ms": round(pure_p50, 3),
         "pure_p99_ms": round(pure_p99, 3),
         "full_row_qps": round(q / full_total, 1),

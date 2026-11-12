@@ -109,6 +109,13 @@ patch_*.py
 patch_*.sh
 fix_*.py
 run_*.sh
+# Exceptions: these are benchmark fixtures, not ad-hoc scratch scripts. The bench
+# image COPYs run_bench.sh, and the docs/quick-starts invoke the other three, so a
+# clean clone could not build bsdb-bench-runner or follow the guide without them.
+!benchmarks/competitors/run_bench.sh
+!benchmarks/run_musique_docker.sh
+!benchmarks/run_musique_entrypoint.sh
+!benchmarks/run_neurips_docker.sh
 bench_*.py
 
 # ── Private / commercial planning (not part of the public repo) ─────────────
