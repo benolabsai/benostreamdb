@@ -12,13 +12,17 @@ echo " BenoStreamDB Pre-Release Steering Gate"
 echo "================================================================="
 echo "Repo root: ${REPO_ROOT}"
 
-# 1. Select Rust toolchain (prefer 1.98.0 to match CI)
-CARGO_CMD="cargo"
-if command -v rustup &> /dev/null; then
-    if rustup toolchain list | grep -q "^1.98.0"; then
-        CARGO_CMD="rustup run 1.98.0 cargo"
-    fi
-fi
+# 1. Rust toolchain.
+#
+# `rust-toolchain.toml` is the single source of truth: cargo resolves the pinned
+# channel for anything invoked inside this directory, and rustup auto-installs it
+# on first use. This script used to hardcode the version here as well, which made
+# a bump a three-place edit (pin file, 19 CI pins, this script) and — worse —
+# silently kept verifying the *old* compiler whenever a machine had that
+# toolchain lying around. It did exactly that during the 1.100.0 bump: a
+# `rust-version = "1.100"` floor plus this 1.98.0 override produced
+# "requires rustc 1.100" on every crate.
+CARGO_CMD="${CARGO_CMD:-cargo}"
 echo "Using: $(${CARGO_CMD} --version)"
 
 # 2. Rust Formatting Check (mirrors ci.yml 'Check formatting')

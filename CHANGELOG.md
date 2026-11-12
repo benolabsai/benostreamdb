@@ -187,6 +187,17 @@
 
 ### CI
 
+- **Toolchain pinned to 1.100.0** (`rust-toolchain.toml`, `.github/workflows/*.yml`,
+  `scripts/pre_release_check.sh`, `Cargo.toml`). The version was named in three
+  places — the pin file, 19 `dtolnay/rust-toolchain@` pins, and the pre-release
+  gate's `rustup run 1.98.0 cargo` — so a bump was a three-place edit, and a
+  missed one silently verified the *old* compiler. The gate now just runs
+  `cargo`, which resolves `rust-toolchain.toml` for anything invoked in the
+  repository. `rust-version = "1.100"` states the MSRV instead of leaving it
+  implied by a pin. Clippy 1.100 introduced `needless_bool`;
+  `core/planner.rs::might_match_clustering` was written in exactly that shape
+  (`if disjoint { return false } true`) and is now the interval-overlap test it
+  always meant.
 - `wal_segment` added to the [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml) matrix.
 - `test_multi_writer_differential` wired into [`scripts/pre_release_soak.sh`](scripts/pre_release_soak.sh)
   as step 5/5 (steps renumbered 1/5…5/5).

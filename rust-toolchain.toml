@@ -7,5 +7,5 @@
 # Keep this in sync with the `dtolnay/rust-toolchain@<version>` pins in
 # .github/workflows/ (ci.yml, soak.yml, release.yml).
 [toolchain]
-channel = "1.98.0"
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]

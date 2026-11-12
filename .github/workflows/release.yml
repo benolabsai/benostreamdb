@@ -383,7 +383,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           # Match rust-toolchain.toml so `cargo metadata` inside maturin does
           # not lazily install rustfmt/clippy and race the runner's cargo-fmt.
@@ -417,7 +417,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
       - name: Cache Rust dependencies
@@ -554,7 +554,7 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.11
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
       - name: Update version from tag

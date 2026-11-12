@@ -2,6 +2,11 @@
 name = "benostreamdb"
 version.workspace = true
 edition = "2021"
+# Declared MSRV, kept in step with `rust-toolchain.toml` and the
+# `dtolnay/rust-toolchain@<version>` pins in `.github/workflows/`. Without this,
+# the supported compiler is implied by a pin file rather than stated, and a
+# dependency resolver has no floor to honour.
+rust-version = "1.100"
 license = "MIT AND Apache-2.0"
 authors = ["Richard Albright and BenoStreamDB Contributors"]
 description = "BenoStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"

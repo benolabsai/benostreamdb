@@ -1994,11 +1994,10 @@ impl QueryPlanner {
             crate::core::clustering::gray_code_interleave_index(n_cols, bits_per_col, &query_maxs)
         };
 
-        if query_min_score > max_s || query_max_score < min_s {
-            return false;
-        }
-
-        true
+        // The query's score interval and the cluster's overlap. Written as the
+        // overlap test rather than `if disjoint { false } else { true }`, which
+        // clippy 1.100 rejects under `needless_bool` — and which reads worse.
+        query_min_score <= max_s && query_max_score >= min_s
     }
 
     #[allow(dead_code)]
