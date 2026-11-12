@@ -309,10 +309,23 @@ pub enum SortDirection {
     Desc,
 }
 
+/// Iceberg's `null-order` for a sort field.
+///
+/// The spec spells these `nulls-first` / `nulls-last`. `rename_all =
+/// "lowercase"` produced `nullsfirst` / `nullslast`, which the Java client
+/// rejects: `SortOrderParser` upper-cases the value and replaces `-` with `_`
+/// before `NullOrder.valueOf`, so `nullslast` becomes `NULLSLAST` and does not
+/// exist. Spark and Trino therefore refused to open any BenoStreamDB table that
+/// had a sort order, with `IllegalArgumentException: Unexpected null order:
+/// nullslast`.
+///
+/// The old concatenated spelling stays as an `alias` so metadata written by
+/// earlier releases still parses.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
 pub enum NullOrder {
+    #[serde(rename = "nulls-first", alias = "nullsfirst")]
     NullsFirst,
+    #[serde(rename = "nulls-last", alias = "nullslast")]
     NullsLast,
 }
 
@@ -1822,5 +1835,45 @@ mod index_algorithm_name_tests {
         // rather than silently mis-indexing.
         assert!(IndexAlgorithm::from_name("not_an_index").is_none());
         assert!(IndexAlgorithm::from_name("").is_none());
+    }
+}
+
+#[cfg(test)]
+mod sort_order_spec_spelling_tests {
+    use super::*;
+
+    /// Spark and Trino parse `null-order` with
+    /// `NullOrder.valueOf(value.to_uppercase().replace('-', '_'))`, so the value
+    /// must be `nulls-first` / `nulls-last`. Writing `nullsfirst` made every
+    /// foreign reader reject the table with
+    /// `IllegalArgumentException: Unexpected null order: nullslast`.
+    #[test]
+    fn null_order_is_written_with_the_spec_hyphen() {
+        let field = SortField {
+            source_id: 1,
+            transform: "identity".to_string(),
+            direction: SortDirection::Desc,
+            null_order: NullOrder::NullsLast,
+        };
+        let json = serde_json::to_string(&field).expect("serialize sort field");
+        assert!(json.contains(r#""null-order":"nulls-last""#), "{json}");
+        assert!(json.contains(r#""direction":"desc""#), "{json}");
+
+        let json = serde_json::to_string(&NullOrder::NullsFirst).expect("serialize null order");
+        assert_eq!(json, r#""nulls-first""#);
+    }
+
+    /// Metadata written by releases that emitted the concatenated spelling must
+    /// still load, or the fix would strand existing tables.
+    #[test]
+    fn legacy_concatenated_null_order_still_deserializes() {
+        let legacy =
+            r#"{"source-id":1,"transform":"identity","direction":"desc","null-order":"nullslast"}"#;
+        let field: SortField = serde_json::from_str(legacy).expect("parse legacy sort field");
+        assert_eq!(field.null_order, NullOrder::NullsLast);
+
+        let legacy_first: NullOrder =
+            serde_json::from_str(r#""nullsfirst""#).expect("parse legacy null order");
+        assert_eq!(legacy_first, NullOrder::NullsFirst);
     }
 }

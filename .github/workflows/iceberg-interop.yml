@@ -198,6 +198,13 @@ jobs:
           print("fixture written")
           PY
 
+      # Mount ONLY the catalog directory. Bind-mounting all of /etc/trino replaces
+      # the image's jvm.config, node.properties and config.properties with an empty
+      # directory, and the launcher exits before Trino ever listens:
+      #   ERROR: JVM config file is missing: could not find file: /etc/trino/jvm.config
+      # That is what every run of this job died on — it never reached the
+      # containment assertions. Verified locally against trinodb/trino:482: with
+      # only `catalog/` mounted, /v1/info answers within 3s.
       - name: Start Trino ${{ matrix.trino }} with a filesystem Iceberg catalog
         run: |
           mkdir -p /tmp/trino-etc/catalog
@@ -209,7 +216,7 @@ jobs:
           EOF
           docker run -d --name trino \
             -p 8080:8080 \
-            -v /tmp/trino-etc:/etc/trino:ro \
+            -v /tmp/trino-etc/catalog:/etc/trino/catalog:ro \
             -v /tmp/benostream_compat_tests:/tmp/benostream_compat_tests \
             trinodb/trino:${{ matrix.trino }}
           for i in $(seq 1 90); do

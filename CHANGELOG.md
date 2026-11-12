@@ -122,6 +122,19 @@
 
 ### Fixed
 
+- **Sort orders were written with a non-spec `null-order`**
+  (`src/core/manifest/types.rs`): Iceberg specifies `nulls-first` / `nulls-last`,
+  but `#[serde(rename_all = "lowercase")]` emitted `nullsfirst` / `nullslast`.
+  The Java client upper-cases the value and replaces `-` with `_` before
+  `NullOrder.valueOf`, so `nullslast` became `NULLSLAST` and every foreign reader
+  refused the table — Spark 4.0.1 reported it as
+  `IllegalArgumentException: Unexpected null order: nullslast`, which its retry
+  wrapper re-reported as `TABLE_OR_VIEW_NOT_FOUND` and hid the cause. The enum now
+  writes the spec spelling and still accepts the old one through `alias`, so
+  tables written by earlier releases keep loading; a unit test pins both
+  directions. Verified end to end: Spark 4.0.1 with
+  `iceberg-spark-runtime-4.0_2.13:1.11.0` reads a 1000-row BenoStreamDB table with
+  a two-field sort order.
 - **Index builds were not reproducible** (`benostream-gpu-ann/src/lib.rs`,
   `src/core/index/hnsw_rs/hnsw.rs`, `src/core/index/ivf.rs`): `LayerGenerator`
   drew each node's HNSW level from `rand::thread_rng()`, so every build produced
@@ -198,6 +211,13 @@
   `core/planner.rs::might_match_clustering` was written in exactly that shape
   (`if disjoint { return false } true`) and is now the interval-overlap test it
   always meant.
+- **Iceberg interop: Trino containers never started** (`.github/workflows/iceberg-interop.yml`).
+  The step bind-mounted a directory holding only `catalog/iceberg.properties` over
+  all of `/etc/trino`, which replaced the image's `jvm.config`, `node.properties`
+  and `config.properties`; the launcher exited with `ERROR: JVM config file is
+  missing: could not find file: /etc/trino/jvm.config` before Trino listened.
+  Only `catalog/` is mounted now, so the image keeps its own configuration.
+  Verified against `trinodb/trino:482`: `/v1/info` answers within 3s.
 - `wal_segment` added to the [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml) matrix.
 - `test_multi_writer_differential` wired into [`scripts/pre_release_soak.sh`](scripts/pre_release_soak.sh)
   as step 5/5 (steps renumbered 1/5…5/5).
