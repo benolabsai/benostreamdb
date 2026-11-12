@@ -6,68 +6,68 @@
     {
       "concurrency": 1,
       "total_queries": 1000,
-      "duration_s": 2.113,
-      "qps": 473.2,
-      "p50_ms": 2.04,
-      "p90_ms": 2.33,
-      "p99_ms": 2.94,
-      "mean_ms": 2.1,
+      "duration_s": 2.147,
+      "qps": 465.8,
+      "p50_ms": 2.08,
+      "p90_ms": 2.32,
+      "p99_ms": 2.95,
+      "mean_ms": 2.13,
       "speedup": 1.0
     },
     {
       "concurrency": 2,
       "total_queries": 1000,
-      "duration_s": 1.113,
-      "qps": 898.2,
-      "p50_ms": 2.14,
-      "p90_ms": 2.49,
-      "p99_ms": 3.07,
-      "mean_ms": 2.2,
-      "speedup": 1.9
+      "duration_s": 1.116,
+      "qps": 896.3,
+      "p50_ms": 2.16,
+      "p90_ms": 2.47,
+      "p99_ms": 2.92,
+      "mean_ms": 2.21,
+      "speedup": 1.92
     },
     {
       "concurrency": 4,
       "total_queries": 1000,
-      "duration_s": 0.677,
-      "qps": 1477.1,
-      "p50_ms": 2.58,
-      "p90_ms": 3.09,
-      "p99_ms": 4.09,
-      "mean_ms": 2.65,
-      "speedup": 3.12
+      "duration_s": 0.685,
+      "qps": 1460.3,
+      "p50_ms": 2.61,
+      "p90_ms": 3.05,
+      "p99_ms": 4.1,
+      "mean_ms": 2.67,
+      "speedup": 3.14
     },
     {
       "concurrency": 8,
       "total_queries": 1000,
-      "duration_s": 0.698,
-      "qps": 1432.5,
+      "duration_s": 0.701,
+      "qps": 1425.5,
       "p50_ms": 5.37,
-      "p90_ms": 6.86,
-      "p99_ms": 8.43,
-      "mean_ms": 5.44,
-      "speedup": 3.03
+      "p90_ms": 6.82,
+      "p99_ms": 8.45,
+      "mean_ms": 5.45,
+      "speedup": 3.06
     },
     {
       "concurrency": 16,
       "total_queries": 992,
-      "duration_s": 0.745,
-      "qps": 1331.3,
-      "p50_ms": 10.77,
-      "p90_ms": 15.11,
-      "p99_ms": 20.37,
-      "mean_ms": 10.91,
-      "speedup": 2.81
+      "duration_s": 0.78,
+      "qps": 1271.2,
+      "p50_ms": 11.71,
+      "p90_ms": 16.49,
+      "p99_ms": 21.36,
+      "mean_ms": 12.03,
+      "speedup": 2.73
     },
     {
       "concurrency": 32,
       "total_queries": 992,
-      "duration_s": 0.806,
-      "qps": 1231.4,
-      "p50_ms": 9.34,
-      "p90_ms": 25.62,
-      "p99_ms": 41.32,
-      "mean_ms": 12.58,
-      "speedup": 2.6
+      "duration_s": 0.799,
+      "qps": 1240.8,
+      "p50_ms": 10.03,
+      "p90_ms": 26.21,
+      "p99_ms": 37.34,
+      "mean_ms": 13.29,
+      "speedup": 2.66
     }
   ]
 }

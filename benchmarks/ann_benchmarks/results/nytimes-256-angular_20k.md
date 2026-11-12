@@ -13,11 +13,11 @@
 | ef_search | 200 |
 | refine_factor | 1 |
 | recall@10 | 0.9854 |
-| QPS | 715.2 |
+| QPS | 749.1 |
 | Build time | 1.4s |
 | Index size | 68.0 MB |
-| p50 latency | 1.21 ms |
-| p99 latency | 2.08 ms |
-| Pure Index QPS | 1229.1 |
+| p50 latency | 1.15 ms |
+| p99 latency | 1.93 ms |
+| Pure Index QPS | 1208.9 |
 | Pure Index p50 latency | 0.79 ms |
-| Pure Index p99 latency | 1.34 ms |
+| Pure Index p99 latency | 1.75 ms |

@@ -17,7 +17,7 @@
     {
       "algorithm": "pagerank",
       "available": true,
-      "build_s": 0.154253,
+      "build_s": 0.155383,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -33,7 +33,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 0.154253,
+      "load_s": 0.155383,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
@@ -42,7 +42,7 @@
       },
       "project_s": 0.0,
       "result_size": 10000,
-      "seconds": 0.012157,
+      "seconds": 0.010556,
       "source": {
         "node": 0,
         "target": 10
@@ -53,7 +53,7 @@
     {
       "algorithm": "pagerank",
       "available": true,
-      "build_s": 0.083705,
+      "build_s": 0.083492,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -69,7 +69,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 0.083705,
+      "load_s": 0.083492,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
@@ -78,7 +78,7 @@
       },
       "project_s": 0.0,
       "result_size": 10000,
-      "seconds": 0.076464,
+      "seconds": 0.078156,
       "source": {
         "node": 0,
         "target": 10
@@ -89,7 +89,7 @@
     {
       "algorithm": "pagerank",
       "available": true,
-      "build_s": 1.655211,
+      "build_s": 1.754814,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -105,27 +105,27 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 1.509873,
+      "load_s": 1.65719,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
         "iterations": 30,
         "max_edges": 0
       },
-      "project_s": 0.145337,
+      "project_s": 0.097624,
       "result_size": 10000,
-      "seconds": 0.272695,
+      "seconds": 0.258256,
       "source": {
         "node": 0,
         "target": 10
       },
-      "teardown_s": 31.344108,
+      "teardown_s": 33.96776,
       "workload": "graph"
     },
     {
       "algorithm": "connected_components",
       "available": true,
-      "build_s": 0.161161,
+      "build_s": 0.163284,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -141,7 +141,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 0.161161,
+      "load_s": 0.163284,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
@@ -150,7 +150,7 @@
       },
       "project_s": 0.0,
       "result_size": 1,
-      "seconds": 0.002635,
+      "seconds": 0.002447,
       "source": {
         "node": 0,
         "target": 10
@@ -161,7 +161,7 @@
     {
       "algorithm": "connected_components",
       "available": true,
-      "build_s": 0.097868,
+      "build_s": 0.092643,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -177,7 +177,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 0.097868,
+      "load_s": 0.092643,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
@@ -186,7 +186,7 @@
       },
       "project_s": 0.0,
       "result_size": 1,
-      "seconds": 0.008533,
+      "seconds": 0.006947,
       "source": {
         "node": 0,
         "target": 10
@@ -197,7 +197,7 @@
     {
       "algorithm": "connected_components",
       "available": true,
-      "build_s": 1.655211,
+      "build_s": 1.754814,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -213,27 +213,27 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 1.509873,
+      "load_s": 1.65719,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
         "iterations": 30,
         "max_edges": 0
       },
-      "project_s": 0.145337,
+      "project_s": 0.097624,
       "result_size": 10000,
-      "seconds": 0.211856,
+      "seconds": 0.211905,
       "source": {
         "node": 0,
         "target": 10
       },
-      "teardown_s": 31.344108,
+      "teardown_s": 33.96776,
       "workload": "graph"
     },
     {
       "algorithm": "shortest_path",
       "available": true,
-      "build_s": 0.181605,
+      "build_s": 0.158496,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -249,7 +249,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 0.181605,
+      "load_s": 0.158496,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
@@ -258,7 +258,7 @@
       },
       "project_s": 0.0,
       "result_size": 3,
-      "seconds": 4.6e-05,
+      "seconds": 4.2e-05,
       "source": {
         "node": 0,
         "target": 10
@@ -269,7 +269,7 @@
     {
       "algorithm": "shortest_path",
       "available": true,
-      "build_s": 0.082182,
+      "build_s": 0.074559,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -285,7 +285,7 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 0.082182,
+      "load_s": 0.074559,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
@@ -294,7 +294,7 @@
       },
       "project_s": 0.0,
       "result_size": 3,
-      "seconds": 0.000426,
+      "seconds": 0.000406,
       "source": {
         "node": 0,
         "target": 10
@@ -305,7 +305,7 @@
     {
       "algorithm": "shortest_path",
       "available": true,
-      "build_s": 1.655211,
+      "build_s": 1.754814,
       "dataset": "synth_10k",
       "device": "cpu",
       "edges": 49975,
@@ -321,21 +321,21 @@
         "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
         "python": "3.14.4"
       },
-      "load_s": 1.509873,
+      "load_s": 1.65719,
       "nodes": 10000,
       "params": {
         "damping": 0.85,
         "iterations": 30,
         "max_edges": 0
       },
-      "project_s": 0.145337,
+      "project_s": 0.097624,
       "result_size": 1,
-      "seconds": 0.083212,
+      "seconds": 0.075051,
       "source": {
         "node": 0,
         "target": 10
       },
-      "teardown_s": 31.344108,
+      "teardown_s": 33.96776,
       "workload": "graph"
     }
   ],

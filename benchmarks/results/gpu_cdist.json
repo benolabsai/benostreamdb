@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T16:45:16Z",
+  "generated_at": "2026-11-12T20:20:46Z",
   "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
   "python": "3.14.4",
   "gpu": [
@@ -12,32 +12,32 @@
       "vectors": 50000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 528.42,
-      "cpu_mdist_s": 48.4
+      "cpu_ms": 606.63,
+      "cpu_mdist_s": 42.2
     },
     {
       "queries": 2048,
       "vectors": 50000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 1959.85,
-      "cpu_mdist_s": 52.2
+      "cpu_ms": 2103.39,
+      "cpu_mdist_s": 48.7
     },
     {
       "queries": 1024,
       "vectors": 200000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 4032.07,
-      "cpu_mdist_s": 50.8
+      "cpu_ms": 4812.09,
+      "cpu_mdist_s": 42.6
     },
     {
       "queries": 512,
       "vectors": 50000,
       "dim": 100,
       "metric": "cosine",
-      "cpu_ms": 770.5,
-      "cpu_mdist_s": 33.2
+      "cpu_ms": 772.78,
+      "cpu_mdist_s": 33.1
     }
   ],
   "dual_gpu": null

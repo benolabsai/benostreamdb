@@ -6,60 +6,60 @@
     "nodes": 20000,
     "edges": 99975,
     "max_degree": 667,
-    "pagerank_ms": 18.78,
+    "pagerank_ms": 21.96,
     "strata": [
       {
         "stratum": "Low Degree (p25)",
         "avg_degree": 5.0,
-        "subgraph_p50_ms": 35.96,
-        "subgraph_p90_ms": 39.92,
-        "subgraph_p99_ms": 46.14,
+        "subgraph_p50_ms": 35.59,
+        "subgraph_p90_ms": 38.58,
+        "subgraph_p99_ms": 57.0,
         "avg_subgraph_edges": 239.0,
         "shortest_path_p50_ms": 0.04,
-        "shortest_path_p99_ms": 3.9
+        "shortest_path_p99_ms": 3.74
       },
       {
         "stratum": "Median Degree (p50)",
         "avg_degree": 6.5,
-        "subgraph_p50_ms": 35.5,
-        "subgraph_p90_ms": 37.98,
-        "subgraph_p99_ms": 39.09,
+        "subgraph_p50_ms": 34.97,
+        "subgraph_p90_ms": 37.89,
+        "subgraph_p99_ms": 38.72,
         "avg_subgraph_edges": 347.0,
         "shortest_path_p50_ms": 0.04,
-        "shortest_path_p99_ms": 0.07
+        "shortest_path_p99_ms": 0.08
       },
       {
         "stratum": "High Degree (p90)",
         "avg_degree": 10.6,
-        "subgraph_p50_ms": 37.16,
-        "subgraph_p90_ms": 39.32,
-        "subgraph_p99_ms": 41.02,
+        "subgraph_p50_ms": 35.92,
+        "subgraph_p90_ms": 39.53,
+        "subgraph_p99_ms": 41.51,
         "avg_subgraph_edges": 564.0,
-        "shortest_path_p50_ms": 0.07,
-        "shortest_path_p99_ms": 0.33
+        "shortest_path_p50_ms": 0.06,
+        "shortest_path_p99_ms": 0.35
       },
       {
         "stratum": "Supernode Hub (p99+)",
         "avg_degree": 92.9,
-        "subgraph_p50_ms": 36.99,
-        "subgraph_p90_ms": 39.62,
-        "subgraph_p99_ms": 41.58,
+        "subgraph_p50_ms": 36.56,
+        "subgraph_p90_ms": 39.65,
+        "subgraph_p99_ms": 41.75,
         "avg_subgraph_edges": 5676.0,
-        "shortest_path_p50_ms": 0.09,
-        "shortest_path_p99_ms": 0.27
+        "shortest_path_p50_ms": 0.08,
+        "shortest_path_p99_ms": 0.21
       }
     ]
   },
   "relational": {
     "rows": 200000,
     "hot_key_mass_pct": 75.1,
-    "hot_p50_ms": 6.62,
-    "hot_p99_ms": 8.54,
-    "cold_p50_ms": 5.91,
-    "cold_p99_ms": 6.69,
-    "mixed_p50_ms": 6.4,
-    "mixed_p90_ms": 7.02,
-    "mixed_p99_ms": 8.05,
-    "tail_inflation_factor": 1.26
+    "hot_p50_ms": 6.58,
+    "hot_p99_ms": 8.5,
+    "cold_p50_ms": 5.86,
+    "cold_p99_ms": 7.17,
+    "mixed_p50_ms": 6.42,
+    "mixed_p90_ms": 6.97,
+    "mixed_p99_ms": 7.98,
+    "tail_inflation_factor": 1.24
   }
 }
