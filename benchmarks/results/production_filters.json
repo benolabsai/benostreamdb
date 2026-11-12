@@ -4,7 +4,7 @@
   "workload": "pathological_filters_differential_oracle",
   "host": "x86_64 (Linux)",
   "rows": 200000,
-  "session_overhead_ms": 0.79,
+  "session_overhead_ms": 0.74,
   "cases": [
     {
       "name": "F1 (Ultra-Selective 0.01%)",
@@ -13,10 +13,10 @@
       "selectivity_pct": 0.0,
       "bsdb_rows": 7,
       "duckdb_rows": 7,
-      "bsdb_total_p50_ms": 7.86,
-      "session_overhead_ms": 0.79,
-      "pure_compute_p50_ms": 7.07,
-      "duckdb_p50_ms": 1.79,
+      "bsdb_total_p50_ms": 8.5,
+      "session_overhead_ms": 0.74,
+      "pure_compute_p50_ms": 7.76,
+      "duckdb_p50_ms": 1.55,
       "oracle_pass": true
     },
     {
@@ -26,10 +26,10 @@
       "selectivity_pct": 4.98,
       "bsdb_rows": 9954,
       "duckdb_rows": 9954,
-      "bsdb_total_p50_ms": 9.5,
-      "session_overhead_ms": 0.79,
-      "pure_compute_p50_ms": 8.71,
-      "duckdb_p50_ms": 1.74,
+      "bsdb_total_p50_ms": 10.17,
+      "session_overhead_ms": 0.74,
+      "pure_compute_p50_ms": 9.42,
+      "duckdb_p50_ms": 2.18,
       "oracle_pass": true
     },
     {
@@ -39,10 +39,10 @@
       "selectivity_pct": 100.0,
       "bsdb_rows": 1,
       "duckdb_rows": 1,
-      "bsdb_total_p50_ms": 7.38,
-      "session_overhead_ms": 0.79,
-      "pure_compute_p50_ms": 6.59,
-      "duckdb_p50_ms": 0.83,
+      "bsdb_total_p50_ms": 8.13,
+      "session_overhead_ms": 0.74,
+      "pure_compute_p50_ms": 7.38,
+      "duckdb_p50_ms": 0.96,
       "oracle_pass": true
     },
     {
@@ -52,10 +52,10 @@
       "selectivity_pct": 15.82,
       "bsdb_rows": 1,
       "duckdb_rows": 1,
-      "bsdb_total_p50_ms": 3.26,
-      "session_overhead_ms": 0.79,
-      "pure_compute_p50_ms": 2.47,
-      "duckdb_p50_ms": 1.66,
+      "bsdb_total_p50_ms": 3.51,
+      "session_overhead_ms": 0.74,
+      "pure_compute_p50_ms": 2.76,
+      "duckdb_p50_ms": 1.75,
       "oracle_pass": true
     },
     {
@@ -65,10 +65,10 @@
       "selectivity_pct": 8.33,
       "bsdb_rows": 1,
       "duckdb_rows": 1,
-      "bsdb_total_p50_ms": 8.19,
-      "session_overhead_ms": 0.79,
-      "pure_compute_p50_ms": 7.4,
-      "duckdb_p50_ms": 1.27,
+      "bsdb_total_p50_ms": 7.75,
+      "session_overhead_ms": 0.74,
+      "pure_compute_p50_ms": 7.01,
+      "duckdb_p50_ms": 1.3,
       "oracle_pass": true
     },
     {
@@ -78,10 +78,10 @@
       "selectivity_pct": 16.7,
       "bsdb_rows": 1,
       "duckdb_rows": 1,
-      "bsdb_total_p50_ms": 5.15,
-      "session_overhead_ms": 0.79,
-      "pure_compute_p50_ms": 4.36,
-      "duckdb_p50_ms": 0.88,
+      "bsdb_total_p50_ms": 5.25,
+      "session_overhead_ms": 0.74,
+      "pure_compute_p50_ms": 4.51,
+      "duckdb_p50_ms": 0.84,
       "oracle_pass": true
     },
     {
@@ -91,10 +91,10 @@
       "selectivity_pct": 14.32,
       "bsdb_rows": 1,
       "duckdb_rows": 1,
-      "bsdb_total_p50_ms": 6.32,
-      "session_overhead_ms": 0.79,
-      "pure_compute_p50_ms": 5.53,
-      "duckdb_p50_ms": 1.02,
+      "bsdb_total_p50_ms": 6.02,
+      "session_overhead_ms": 0.74,
+      "pure_compute_p50_ms": 5.28,
+      "duckdb_p50_ms": 0.94,
       "oracle_pass": true
     }
   ]

@@ -28,12 +28,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 89.9739,
-        "measured_at": "2026-11-12T04:10:47Z",
-        "random_gather_ns_per_access": 8.4519,
-        "triad_gbs": 10.5623
+        "matmul_gflops": 241.4565,
+        "measured_at": "2026-11-12T11:34:00Z",
+        "random_gather_ns_per_access": 7.9952,
+        "triad_gbs": 12.8023
       },
-      "captured_at": "2026-11-12T04:10:47Z",
+      "captured_at": "2026-11-12T11:34:00Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -78,16 +78,19 @@
         "results/production_concurrent.json",
         "results/production_maintenance.json",
         "results/production_filters.json",
-        "results/production_filters.md"
+        "results/production_filters.md",
+        "results/production_skew.json",
+        "results/production_skew.md",
+        "results/production_soak.md"
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 273.5168,
-        "measured_at": "2026-11-12T04:11:14Z",
-        "random_gather_ns_per_access": 7.6746,
-        "triad_gbs": 12.1826
+        "matmul_gflops": 212.2339,
+        "measured_at": "2026-11-12T11:36:52Z",
+        "random_gather_ns_per_access": 7.9287,
+        "triad_gbs": 11.6295
       },
-      "captured_at": "2026-11-12T04:11:14Z",
+      "captured_at": "2026-11-12T11:36:52Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -301,6 +304,108 @@
       "captured_at": "2026-11-12T03:48:42Z",
       "note": null,
       "session": "8c5598405a7d"
+    },
+    "vector_row": {
+      "artifacts": [
+        "competitors/results/benostreamdb_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_tq8_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_sift-128-euclidean_cpu.json",
+        "competitors/results/faiss_gist-960-euclidean_cpu.json",
+        "competitors/results/faiss_glove-100-angular_cpu.json",
+        "competitors/results/faiss_glove-200-angular_cpu.json",
+        "competitors/results/faiss_lastfm-64-dot_cpu.json",
+        "competitors/results/faiss_mnist-784-euclidean_cpu.json",
+        "competitors/results/faiss_nytimes-256-angular_cpu.json",
+        "competitors/results/faiss_sift-128-euclidean_cpu.json",
+        "competitors/results/hnswlib_gist-960-euclidean_cpu.json",
+        "competitors/results/hnswlib_glove-100-angular_cpu.json",
+        "competitors/results/hnswlib_glove-200-angular_cpu.json",
+        "competitors/results/hnswlib_lastfm-64-dot_cpu.json",
+        "competitors/results/hnswlib_mnist-784-euclidean_cpu.json",
+        "competitors/results/hnswlib_nytimes-256-angular_cpu.json",
+        "competitors/results/hnswlib_sift-128-euclidean_cpu.json",
+        "competitors/results/lancedb_gist-960-euclidean_cpu.json",
+        "competitors/results/lancedb_glove-100-angular_cpu.json",
+        "competitors/results/lancedb_glove-200-angular_cpu.json",
+        "competitors/results/lancedb_lastfm-64-dot_cpu.json",
+        "competitors/results/lancedb_mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_nytimes-256-angular_cpu.json",
+        "competitors/results/lancedb_sift-128-euclidean_cpu.json",
+        "competitors/results/milvus_gist-960-euclidean_cpu.json",
+        "competitors/results/milvus_glove-100-angular_cpu.json",
+        "competitors/results/milvus_glove-200-angular_cpu.json",
+        "competitors/results/milvus_lastfm-64-dot_cpu.json",
+        "competitors/results/milvus_mnist-784-euclidean_cpu.json",
+        "competitors/results/milvus_nytimes-256-angular_cpu.json",
+        "competitors/results/milvus_sift-128-euclidean_cpu.json",
+        "competitors/results/opensearch_gist-960-euclidean_cpu.json",
+        "competitors/results/opensearch_glove-100-angular_cpu.json",
+        "competitors/results/opensearch_glove-200-angular_cpu.json",
+        "competitors/results/opensearch_lastfm-64-dot_cpu.json",
+        "competitors/results/opensearch_mnist-784-euclidean_cpu.json",
+        "competitors/results/opensearch_nytimes-256-angular_cpu.json",
+        "competitors/results/opensearch_sift-128-euclidean_cpu.json",
+        "competitors/results/pgvector_gist-960-euclidean_cpu.json",
+        "competitors/results/pgvector_glove-100-angular_cpu.json",
+        "competitors/results/pgvector_glove-200-angular_cpu.json",
+        "competitors/results/pgvector_lastfm-64-dot_cpu.json",
+        "competitors/results/pgvector_mnist-784-euclidean_cpu.json",
+        "competitors/results/pgvector_nytimes-256-angular_cpu.json",
+        "competitors/results/pgvector_sift-128-euclidean_cpu.json",
+        "competitors/results/qdrant_gist-960-euclidean_cpu.json",
+        "competitors/results/qdrant_glove-100-angular_cpu.json",
+        "competitors/results/qdrant_glove-200-angular_cpu.json",
+        "competitors/results/qdrant_lastfm-64-dot_cpu.json",
+        "competitors/results/qdrant_mnist-784-euclidean_cpu.json",
+        "competitors/results/qdrant_nytimes-256-angular_cpu.json",
+        "competitors/results/qdrant_sift-128-euclidean_cpu.json",
+        "competitors/results/weaviate_gist-960-euclidean_cpu.json",
+        "competitors/results/weaviate_glove-100-angular_cpu.json",
+        "competitors/results/weaviate_glove-200-angular_cpu.json",
+        "competitors/results/weaviate_lastfm-64-dot_cpu.json",
+        "competitors/results/weaviate_mnist-784-euclidean_cpu.json",
+        "competitors/results/weaviate_nytimes-256-angular_cpu.json",
+        "competitors/results/weaviate_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/faiss_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/hnswlib_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/milvus_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/opensearch_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/pgvector_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/qdrant_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/weaviate_fashion-mnist-784-euclidean_cpu.json"
+      ],
+      "calibration": {
+        "available": true,
+        "matmul_gflops": 187.1186,
+        "measured_at": "2026-11-12T11:14:53Z",
+        "random_gather_ns_per_access": 7.7805,
+        "triad_gbs": 13.3368
+      },
+      "captured_at": "2026-11-12T11:14:53Z",
+      "note": null,
+      "session": "8c5598405a7d"
     }
   },
   "sessions": {
@@ -375,6 +480,34 @@
           "measured_at": "2026-11-12T04:11:14Z",
           "random_gather_ns_per_access": 7.6746,
           "triad_gbs": 12.1826
+        },
+        {
+          "available": true,
+          "matmul_gflops": 233.9021,
+          "measured_at": "2026-11-12T04:36:49Z",
+          "random_gather_ns_per_access": 6.4178,
+          "triad_gbs": 15.212
+        },
+        {
+          "available": true,
+          "matmul_gflops": 187.1186,
+          "measured_at": "2026-11-12T11:14:53Z",
+          "random_gather_ns_per_access": 7.7805,
+          "triad_gbs": 13.3368
+        },
+        {
+          "available": true,
+          "matmul_gflops": 241.4565,
+          "measured_at": "2026-11-12T11:34:00Z",
+          "random_gather_ns_per_access": 7.9952,
+          "triad_gbs": 12.8023
+        },
+        {
+          "available": true,
+          "matmul_gflops": 212.2339,
+          "measured_at": "2026-11-12T11:36:52Z",
+          "random_gather_ns_per_access": 7.9287,
+          "triad_gbs": 11.6295
         }
       ],
       "fingerprint": {
@@ -399,7 +532,7 @@
         "python": "3.14.4"
       },
       "first_seen": "2026-11-12T03:12:43Z",
-      "last_seen": "2026-11-12T04:11:14Z",
+      "last_seen": "2026-11-12T11:36:52Z",
       "sections": [
         "gpu_cdist",
         "vector_ann",
@@ -408,7 +541,8 @@
         "sql",
         "beir",
         "filters",
-        "production"
+        "production",
+        "vector_row"
       ]
     },
     "90e73110d464": {

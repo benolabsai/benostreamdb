@@ -144,8 +144,15 @@ class VectorAdapter:
 
     def search_full_row(
         self, handle, queries: np.ndarray, k: int, ef_search: int, metric: str
-    ):
-        """Execute ANN search AND retrieve the full row payload."""
+    ) -> Any:
+        """Execute ANN search AND retrieve the full row payload.
+
+        The return type is `Any` on purpose: the payload is engine-specific. The
+        embedded engines return an ``ndarray`` of ids, while the server engines
+        (Milvus, Weaviate, Qdrant) return the stored payload alongside each hit as a
+        list of objects. Annotating this ``-> np.ndarray`` made every server-side
+        override an incompatible override.
+        """
         return self.search(handle, queries, k, ef_search, metric)
 
     def index_bytes(self, handle) -> int:
@@ -188,7 +195,9 @@ class FaissAdapter(VectorAdapter):
             faiss.normalize_L2(data)
 
         if self.index_type in ("hnsw_sq", "sq"):
-            index = faiss.IndexHNSWSQ(dim, faiss.ScalarQuantizer.QT_8bit, params["m"], faiss_metric)
+            # faiss' runtime signature is IndexHNSWSQ(d, qtype, M, metric); the stub
+            # types the 4th positional as a ScalarQuantizer, which is the 2nd arg.
+            index = faiss.IndexHNSWSQ(dim, faiss.ScalarQuantizer.QT_8bit, params["m"], faiss_metric)  # type: ignore[arg-type]
             index.hnsw.efConstruction = params["ef_construction"]
             index.train(data)
             index.add(data)
@@ -251,8 +260,9 @@ class HnswlibAdapter(VectorAdapter):
         space = {
             "cosine": "cosine",
             "inner_product": "ip",
-        }.get(params.get("metric"), "l2")
-        index = hnswlib.Index(space=space, dim=train.shape[1])
+        }.get(params.get("metric") or "l2", "l2")
+        # hnswlib accepts the space string at runtime; the stub narrows it to a Literal.
+        index = hnswlib.Index(space=space, dim=train.shape[1])  # type: ignore[arg-type]
         index.init_index(
             max_elements=train.shape[0],
             ef_construction=params["ef_construction"],
@@ -406,10 +416,13 @@ class LanceDbAdapter(VectorAdapter):
         t = db.create_table("bench", data=tbl, mode="overwrite")
         # LanceDB distance types are l2 / cosine / dot. A dot-product dataset
         # must use "dot" (not l2), or the ranking uses the wrong metric.
-        metric = {
+        # Declared Any: the lancedb stubs narrow `distance_type` to a Literal, and the
+        # value is only ever one of the three literals below, so the narrowing adds
+        # three call-site ignores and no safety.
+        metric: Any = {
             "cosine": "cosine",
             "inner_product": "dot",
-        }.get(params.get("metric"), "l2")
+        }.get(str(params.get("metric") or ""), "l2")
         # New unified API: the first positional arg is the vector column name.
         if self.index_type in ("hnsw_flat", "flat"):
             from lancedb.index import HnswFlat
@@ -512,7 +525,9 @@ class OpenSearchAdapter(VectorAdapter):
             "cosine": "cosinesimil",
             "inner_product": "innerproduct",
         }.get(metric, "l2")
-        es.indices.delete(index="bsdb-bench", ignore_unavailable=True)
+        # `ignore_unavailable` is valid for the Elasticsearch/OpenSearch REST API but
+        # missing from the client stubs.
+        es.indices.delete(index="bsdb-bench", ignore_unavailable=True)  # type: ignore[call-arg]
         es.indices.create(
             index="bsdb-bench",
             body={
@@ -745,7 +760,7 @@ class MilvusAdapter(VectorAdapter):
         metric = {
             "cosine": "COSINE",
             "inner_product": "IP",
-        }.get(params.get("metric"), "L2")
+        }.get(str(params.get("metric") or ""), "L2")
         name = "bsdb_bench"
         if client.has_collection(name):
             client.drop_collection(name)
@@ -793,6 +808,23 @@ class MilvusAdapter(VectorAdapter):
                 data=[{"id": int(i), "vector": train[i].tolist()} for i in range(start, end)],
             )
         client.load_collection(name)
+        # `load_collection` acknowledges the request; it is not a barrier. Searching
+        # before every segment is queryable returns fewer than `k` neighbours, which
+        # scores as low recall rather than as an error. On the 20k slices only the
+        # cosine datasets showed it (milvus 0.68–0.85 vs qdrant 0.998), because COSINE
+        # indexing is the slowest to become queryable, so wait for Loaded explicitly.
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            try:
+                state = client.get_load_state(collection_name=name)
+            except Exception:
+                break  # older client: nothing to poll, fall through and search
+            if isinstance(state, dict):
+                state = state.get("state", state)
+            label = getattr(state, "name", str(state))
+            if str(label).strip().lower() == "loaded":
+                break
+            time.sleep(0.1)
         return (client, name, metric, int(train.shape[1]), int(len(train)))
 
     def _search_params(self, mtype, ef_search):
@@ -862,7 +894,7 @@ class WeaviateAdapter(VectorAdapter):
         dist = {
             "cosine": VectorDistances.COSINE,
             "inner_product": VectorDistances.DOT,
-        }.get(params.get("metric"), VectorDistances.L2_SQUARED)
+        }.get(str(params.get("metric") or ""), VectorDistances.L2_SQUARED)
         name = "BsdbBench"
         if client.collections.exists(name):
             client.collections.delete(name)
@@ -1194,11 +1226,12 @@ def _graph_neo4j(args, edges) -> dict:
 
             t0 = time.time()
             if algo == "shortest_path":
-                out_rows = list(session.run(graph_call, **params))
+                # neo4j 5 requires LiteralString|Query; the query is built at runtime.
+                out_rows = list(session.run(graph_call, **params))  # type: ignore[arg-type]
                 n_out = len(out_rows)
                 compute_ms = None
             else:
-                summary = session.run(graph_call, **params).single()
+                summary = session.run(graph_call, **params).single()  # type: ignore[arg-type]
                 data = dict(summary) if summary is not None else {}
                 compute_ms = data.get("computeMillis")
                 n_out = (
@@ -1396,7 +1429,7 @@ def _graph_memgraph(args, edges) -> dict:
                 ).consume()
             load_s = time.time() - t_load
             t0 = time.time()
-            rec = session.run(call).single()
+            rec = session.run(call).single()  # type: ignore[arg-type]
             seconds = time.time() - t0
         return {
             "engine": "memgraph",
@@ -1477,8 +1510,11 @@ def _graph_kuzu(args, edges) -> dict:
                     "CALL weakly_connected_components('g') RETURN count(*) AS n"
                 )
         n_out = None
-        while res.has_next():
-            n_out = res.get_next()[0]
+        # kuzu returns a QueryResult with has_next()/get_next(); its bundled stubs
+        # type the value as a list, so hold it as Any instead of fighting the stub.
+        res_any: Any = res
+        while res_any.has_next():
+            n_out = res_any.get_next()[0]
         seconds = time.time() - t0
         return {
             "engine": "kuzu",
@@ -1631,7 +1667,8 @@ def _lexical_opensearch(args, corpus, queries, qrels) -> dict:
     es = OpenSearch(host)
 
     # 1. Build index
-    es.indices.delete(index="bsdb-lexical", ignore_unavailable=True)
+    # `ignore_unavailable` is valid for the REST API but missing from the client stubs.
+    es.indices.delete(index="bsdb-lexical", ignore_unavailable=True)  # type: ignore[call-arg]
     es.indices.create(
         index="bsdb-lexical",
         body={

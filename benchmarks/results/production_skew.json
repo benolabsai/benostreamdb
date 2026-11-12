@@ -1,0 +1,65 @@
+{
+  "engine": "benostreamdb",
+  "workload": "skewed_data_distributions",
+  "host": "x86_64 (Linux)",
+  "graph": {
+    "nodes": 20000,
+    "edges": 99975,
+    "max_degree": 667,
+    "pagerank_ms": 19.96,
+    "strata": [
+      {
+        "stratum": "Low Degree (p25)",
+        "avg_degree": 5.0,
+        "subgraph_p50_ms": 36.95,
+        "subgraph_p90_ms": 39.63,
+        "subgraph_p99_ms": 47.24,
+        "avg_subgraph_edges": 239.0,
+        "shortest_path_p50_ms": 0.04,
+        "shortest_path_p99_ms": 4.8
+      },
+      {
+        "stratum": "Median Degree (p50)",
+        "avg_degree": 6.5,
+        "subgraph_p50_ms": 37.04,
+        "subgraph_p90_ms": 40.67,
+        "subgraph_p99_ms": 46.03,
+        "avg_subgraph_edges": 347.0,
+        "shortest_path_p50_ms": 0.05,
+        "shortest_path_p99_ms": 0.1
+      },
+      {
+        "stratum": "High Degree (p90)",
+        "avg_degree": 10.6,
+        "subgraph_p50_ms": 37.96,
+        "subgraph_p90_ms": 42.12,
+        "subgraph_p99_ms": 47.49,
+        "avg_subgraph_edges": 564.0,
+        "shortest_path_p50_ms": 0.07,
+        "shortest_path_p99_ms": 0.38
+      },
+      {
+        "stratum": "Supernode Hub (p99+)",
+        "avg_degree": 92.9,
+        "subgraph_p50_ms": 38.43,
+        "subgraph_p90_ms": 40.15,
+        "subgraph_p99_ms": 41.21,
+        "avg_subgraph_edges": 5676.0,
+        "shortest_path_p50_ms": 0.09,
+        "shortest_path_p99_ms": 0.26
+      }
+    ]
+  },
+  "relational": {
+    "rows": 200000,
+    "hot_key_mass_pct": 75.1,
+    "hot_p50_ms": 6.87,
+    "hot_p99_ms": 9.77,
+    "cold_p50_ms": 6.46,
+    "cold_p99_ms": 8.35,
+    "mixed_p50_ms": 6.7,
+    "mixed_p90_ms": 7.67,
+    "mixed_p99_ms": 8.74,
+    "tail_inflation_factor": 1.3
+  }
+}

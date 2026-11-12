@@ -13,16 +13,16 @@
 | index | m=16, ef_construction=200, ef_search=200, metric=cosine |
 | queries | 500 |
 | k | 10 |
-| build_s | 4.586 |
+| build_s | 4.575 |
 | index_mb | 16.0 |
-| recall_at_k | 0.8872 |
-| pure_index_qps | 837.7 |
-| pure_p50_ms | 1.002 |
-| pure_p99_ms | 1.947 |
-| full_row_qps | 843.9 |
-| full_p50_ms | 1.159 |
-| full_p99_ms | 1.566 |
-| qps | 837.7 |
-| p50_ms | 1.159 |
-| p99_ms | 1.566 |
+| recall_at_k | 0.8882 |
+| pure_index_qps | 855.2 |
+| pure_p50_ms | 1.0 |
+| pure_p99_ms | 1.437 |
+| full_row_qps | 846.5 |
+| full_p50_ms | 1.16 |
+| full_p99_ms | 1.577 |
+| qps | 855.2 |
+| p50_ms | 1.16 |
+| p99_ms | 1.577 |
 | env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-42-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |

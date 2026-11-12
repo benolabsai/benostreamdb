@@ -15,14 +15,14 @@
 | k | 10 |
 | build_s | 0.856 |
 | index_mb | 18.97 |
-| recall_at_k | 0.9456 |
-| pure_index_qps | 2738.0 |
-| pure_p50_ms | 0.199 |
-| pure_p99_ms | 0.418 |
-| full_row_qps | 3343.4 |
-| full_p50_ms | 0.29 |
-| full_p99_ms | 0.441 |
-| qps | 2738.0 |
-| p50_ms | 0.29 |
-| p99_ms | 0.441 |
+| recall_at_k | 0.9468 |
+| pure_index_qps | 2680.6 |
+| pure_p50_ms | 0.222 |
+| pure_p99_ms | 0.421 |
+| full_row_qps | 3144.9 |
+| full_p50_ms | 0.312 |
+| full_p99_ms | 0.458 |
+| qps | 2680.6 |
+| p50_ms | 0.312 |
+| p99_ms | 0.458 |
 | env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-42-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |

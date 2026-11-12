@@ -278,6 +278,10 @@ services:
     environment: *bench-env
     volumes:
       - ./run_competitor.py:/opt/bench/run_competitor.py:ro
+      # Mounted for the same reason as run_competitor.py: the runner is otherwise
+      # only the copy baked into bsdb-bench-runner:latest, so a fix to it (the
+      # multi-wheel install below) silently does nothing until the image is rebuilt.
+      - ./run_bench.sh:/opt/bench/run_bench.sh:ro
       - ./results:/results
       - ./data:/opt/bench/data
       # BEIR corpus/queries/qrels (read-only) and the report output dir. The

@@ -31,6 +31,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_DIR="$(cd "$HERE/.." && pwd)"
 ROOT_DIR="$(cd "$BENCH_DIR/.." && pwd)"
 
+# Anchor every relative path at the repo root, exactly as docs/BENCHMARKING.md §3
+# spells its commands. The host-side harnesses write to repo-relative paths
+# (`benchmarks/results/...`), so invoking this script from any other directory made
+# `production_workload.py` and `filters/run.py` do all their work and then fail on
+# the write, which surfaced as "section FAILED" with no clue why.
+cd "$ROOT_DIR"
+
 # The interpreter that measures must be the interpreter that summarizes: the venv
 # carries the abi3 wheel of the engine under test, and `generate_summary.py` quotes
 # the engine version it is told. Override with SWEEP_PYTHON=... for a different env.
@@ -112,9 +119,22 @@ section() {
 step() {
     echo "    \$ $*"
     [ "$DRY_RUN" = "1" ] && return 0
-    if ! "$@"; then
-        SECTION_FAILED=1
-    fi
+    "$@" && return 0
+    # Report which step failed. A bare "section FAILED" cost a full re-run to
+    # diagnose, because every step in the section is silent on success.
+    echo "    step failed ($*)" >&2
+    SECTION_FAILED=1
+}
+
+# Some harnesses hardcode output paths relative to the repo root, so they have to
+# run from there. Subshell so the cwd never leaks, and the failure still lands in
+# the parent shell's SECTION_FAILED.
+step_in_root() {
+    echo "    \$ (cd $ROOT_DIR && $*)"
+    [ "$DRY_RUN" = "1" ] && return 0
+    ( cd "$ROOT_DIR" && "$@" ) && return 0
+    echo "    step failed in $ROOT_DIR ($*)" >&2
+    SECTION_FAILED=1
 }
 
 section_done() {
@@ -176,15 +196,6 @@ VECTOR_DATASETS=(
 # goes to `run_competitor.py`, which is what implements pgvector / qdrant /
 # weaviate / milvus / opensearch / faiss / hnswlib / lancedb. Results land in the
 # bind-mounted `/results` as `<engine>_<dataset>_<device>.json`.
-ROW_DATASETS=(
-    sift-128-euclidean
-    mnist-784-euclidean
-    lastfm-64-dot
-    glove-100-angular
-    glove-200-angular
-    nytimes-256-angular
-    gist-960-euclidean
-)
 
 ROW_ENGINES=(
     benostreamdb
@@ -236,7 +247,9 @@ fi
 # long-running services (pgvector, weaviate, qdrant, opensearch, ...). This is the
 # section that produces the per-engine, per-dataset row in the report.
 if section vector_row "competitors/results/*.json"; then
-    for ds in "${ROW_DATASETS[@]}"; do
+    # Iterates VECTOR_DATASETS directly: a second hand-maintained list is how
+    # fashion-mnist ended up with no BenoStreamDB row while every competitor had one.
+    for ds in "${VECTOR_DATASETS[@]}"; do
         for eng in "${ROW_ENGINES[@]}"; do
             step env ENGINE="$eng" DATASET="$ds" LIMIT=20000 QUERIES=500 \
                 docker compose -f "$HERE/docker-compose.bench.yml" \
@@ -286,9 +299,22 @@ if section filters "results/production_filters.*"; then
     section_done
 fi
 
-if section production "results/production_*"; then
+# Deliberately not "results/production_*": that pattern also matches
+# production_filters.*, which the filters section writes, so running production
+# afterwards quarantined the filters artifacts and left §6 empty.
+if section production \
+    "results/production_concurrent*" "results/production_concurrency*" \
+    "results/production_maintenance*" "results/production_skew.*" \
+    "results/production_soak.*"; then
     step "$PYTHON" benchmarks/production_workload.py --workload concurrent --sweep
     step "$PYTHON" benchmarks/production_workload.py --workload maintenance
+    # §7 and §8 read exactly `results/production_skew.md` and
+    # `results/production_soak.md`. They used to come from artifacts left by an
+    # earlier session, so a sweep that quarantined `results/production_*` and then
+    # did not rewrite them regenerated the report with two empty sections.
+    step_in_root "$PYTHON" benchmarks/skew/run.py
+    step env SOAK_REPORT="$BENCH_DIR/results/production_soak.md" \
+        bash "$ROOT_DIR/scripts/pre_release_soak.sh" --quick
     section_done
 fi
 

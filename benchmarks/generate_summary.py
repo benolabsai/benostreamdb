@@ -301,6 +301,8 @@ def _sort_tables_by_qps(text: str) -> str:
                     return [c.strip().replace("*", "") for c in row.strip().strip("|").split("|")]
 
                 def _q(row: str) -> float:
+                    if qps_idx is None:  # narrowed for the type checker
+                        return float("-inf")
                     try:
                         return float(_cells(row)[qps_idx])
                     except (IndexError, ValueError):
@@ -1222,6 +1224,29 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
     content = _sort_tables_by_qps("\n".join(sections)) + "\n"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(content)
+
+    # A section renders `*No ... results found.*` when its artifact is absent.
+    # Writing the report anyway is exactly how two sections shipped empty: a sweep
+    # quarantined their artifacts and never re-measured them, and the generator had
+    # no opinion about it. Fail loudly instead, so the run that caused the gap is the
+    # run that reports it rather than the next reader.
+    missing = [
+        line.strip()
+        for line in content.splitlines()
+        if line.strip().startswith("*No ") and line.strip().endswith("found.*")
+    ]
+    if missing:
+        print(
+            f"ERROR: {len(missing)} report section(s) have no artifacts:",
+            file=sys.stderr,
+        )
+        for line in missing:
+            print(f"  {line}", file=sys.stderr)
+        print(
+            "Measure the missing section (docs/BENCHMARKING.md §3), then regenerate.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     print(f"Generated comprehensive report at {report_path}")
 
