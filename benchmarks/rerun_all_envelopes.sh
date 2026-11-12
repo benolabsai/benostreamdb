@@ -142,13 +142,27 @@ musique_parity() {
         echo "      dev set instead of the Zilliz manifest slice (not byte-identical)."
         manifest_args=(--max-questions 1000)
     fi
+    # The reranker and embedder are pulled from the Hugging Face hub at load time.
+    # The benchmark container has no egress, and the parity baseline was measured
+    # against the weights already in the operator's cache, so mount that cache and
+    # pin the harness offline: a download would silently change the model revision
+    # and make the comparison a different experiment.
+    HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
+    [ -d "$HF_CACHE" ] || {
+        echo "Hugging Face cache not found at $HF_CACHE (set HF_CACHE)" >&2
+        exit 1
+    }
     docker run --rm --name bsdb-musique-parity \
         --cpus=8 --memory=32g --memory-swap=32g \
         -v "$BSDB_DATA_ROOT/musique:/data/musique" \
         -v "$BENCH_DIR:/opt/bench:ro" \
         -v "$SCRATCH:/work/scratch" \
         -v "$WHEELS:/wheels:ro" \
+        -v "$HF_CACHE:/hf-cache" \
         -e TMPDIR=/work/scratch/tmp \
+        -e HF_HOME=/hf-cache \
+        -e HF_HUB_OFFLINE=1 \
+        -e TRANSFORMERS_OFFLINE=1 \
         -e BENCH_SCRIPT=run_musique_parity.py \
         "$MUSIQUE_IMAGE" \
         --data-dir /data/musique \

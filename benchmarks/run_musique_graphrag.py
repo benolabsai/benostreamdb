@@ -662,6 +662,14 @@ def encode_corpus_resumable(backend, passage_texts, embed_dim: int, cache_path: 
     tag = label or backend.device
     partial_path = (cache_path[:-4] if cache_path.endswith(".npy") else cache_path) + ".partial.npy"
 
+    # The checkpoint lives under `scratch_dir`, which a fresh run has not created
+    # yet: nothing between argument parsing and this point makes it. Without this
+    # the first `np.save` raises, and it raises *after* the whole corpus has been
+    # embedded, so the expensive work is thrown away.
+    cache_parent = os.path.dirname(cache_path)
+    if cache_parent:
+        os.makedirs(cache_parent, exist_ok=True)
+
     matrix = None
     if os.path.exists(partial_path):
         partial = np.load(partial_path)
