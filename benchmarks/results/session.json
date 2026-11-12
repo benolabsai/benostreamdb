@@ -12,14 +12,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 281.5876,
-        "measured_at": "2026-11-08T15:08:33Z",
-        "random_gather_ns_per_access": 6.0424,
-        "triad_gbs": 16.0887
+        "matmul_gflops": 181.7447,
+        "measured_at": "2026-11-12T04:10:45Z",
+        "random_gather_ns_per_access": 9.1654,
+        "triad_gbs": 12.1968
       },
-      "captured_at": "2026-11-08T15:08:33Z",
+      "captured_at": "2026-11-12T04:10:45Z",
       "note": null,
-      "session": "90e73110d464"
+      "session": "8c5598405a7d"
     },
     "filters": {
       "artifacts": [
@@ -28,14 +28,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 143.1966,
-        "measured_at": "2026-11-08T15:08:36Z",
-        "random_gather_ns_per_access": 6.2484,
-        "triad_gbs": 14.2216
+        "matmul_gflops": 89.9739,
+        "measured_at": "2026-11-12T04:10:47Z",
+        "random_gather_ns_per_access": 8.4519,
+        "triad_gbs": 10.5623
       },
-      "captured_at": "2026-11-08T15:08:36Z",
+      "captured_at": "2026-11-12T04:10:47Z",
       "note": null,
-      "session": "90e73110d464"
+      "session": "8c5598405a7d"
     },
     "gpu_cdist": {
       "artifacts": [
@@ -43,14 +43,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 196.1407,
-        "measured_at": "2026-11-08T14:09:21Z",
-        "random_gather_ns_per_access": 7.4035,
-        "triad_gbs": 13.7895
+        "matmul_gflops": 119.3497,
+        "measured_at": "2026-11-12T03:22:29Z",
+        "random_gather_ns_per_access": 8.2069,
+        "triad_gbs": 10.8964
       },
-      "captured_at": "2026-11-08T14:09:21Z",
+      "captured_at": "2026-11-12T03:22:29Z",
       "note": null,
-      "session": "90e73110d464"
+      "session": "8c5598405a7d"
     },
     "graph": {
       "artifacts": [
@@ -63,14 +63,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 272.4038,
-        "measured_at": "2026-11-08T14:58:22Z",
-        "random_gather_ns_per_access": 6.0437,
-        "triad_gbs": 15.9909
+        "matmul_gflops": 42.778,
+        "measured_at": "2026-11-12T04:10:04Z",
+        "random_gather_ns_per_access": 9.1792,
+        "triad_gbs": 9.6562
       },
-      "captured_at": "2026-11-08T14:58:22Z",
+      "captured_at": "2026-11-12T04:10:04Z",
       "note": null,
-      "session": "90e73110d464"
+      "session": "8c5598405a7d"
     },
     "production": {
       "artifacts": [
@@ -82,14 +82,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 244.4983,
-        "measured_at": "2026-11-08T15:10:48Z",
-        "random_gather_ns_per_access": 6.1541,
-        "triad_gbs": 14.8276
+        "matmul_gflops": 273.5168,
+        "measured_at": "2026-11-12T04:11:14Z",
+        "random_gather_ns_per_access": 7.6746,
+        "triad_gbs": 12.1826
       },
-      "captured_at": "2026-11-08T15:10:48Z",
+      "captured_at": "2026-11-12T04:11:14Z",
       "note": null,
-      "session": "90e73110d464"
+      "session": "8c5598405a7d"
     },
     "sql": {
       "artifacts": [
@@ -97,14 +97,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 209.9632,
-        "measured_at": "2026-11-08T14:58:27Z",
-        "random_gather_ns_per_access": 6.2513,
-        "triad_gbs": 15.8652
+        "matmul_gflops": 152.3066,
+        "measured_at": "2026-11-12T04:10:07Z",
+        "random_gather_ns_per_access": 9.1861,
+        "triad_gbs": 10.4815
       },
-      "captured_at": "2026-11-08T14:58:27Z",
+      "captured_at": "2026-11-12T04:10:07Z",
       "note": null,
-      "session": "90e73110d464"
+      "session": "8c5598405a7d"
     },
     "vector_ann": {
       "artifacts": [
@@ -143,14 +143,14 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 265.703,
-        "measured_at": "2026-11-08T14:17:48Z",
-        "random_gather_ns_per_access": 6.3913,
-        "triad_gbs": 14.719
+        "matmul_gflops": 200.8309,
+        "measured_at": "2026-11-12T03:25:35Z",
+        "random_gather_ns_per_access": 11.0097,
+        "triad_gbs": 9.3081
       },
-      "captured_at": "2026-11-08T14:17:48Z",
+      "captured_at": "2026-11-12T03:25:35Z",
       "note": null,
-      "session": "90e73110d464"
+      "session": "8c5598405a7d"
     },
     "vector_matrix": {
       "artifacts": [
@@ -293,17 +293,124 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 214.6434,
-        "measured_at": "2026-11-08T14:46:43Z",
-        "random_gather_ns_per_access": 6.0463,
-        "triad_gbs": 15.8605
+        "matmul_gflops": 209.8158,
+        "measured_at": "2026-11-12T03:48:42Z",
+        "random_gather_ns_per_access": 7.2396,
+        "triad_gbs": 13.1037
       },
-      "captured_at": "2026-11-08T14:46:43Z",
+      "captured_at": "2026-11-12T03:48:42Z",
       "note": null,
-      "session": "90e73110d464"
+      "session": "8c5598405a7d"
     }
   },
   "sessions": {
+    "8c5598405a7d": {
+      "calibrations": [
+        {
+          "available": true,
+          "matmul_gflops": 57.7142,
+          "measured_at": "2026-11-12T03:12:43Z",
+          "random_gather_ns_per_access": 9.5562,
+          "triad_gbs": 9.5937
+        },
+        {
+          "available": true,
+          "matmul_gflops": 172.484,
+          "measured_at": "2026-11-12T03:15:45Z",
+          "random_gather_ns_per_access": 8.604,
+          "triad_gbs": 10.9989
+        },
+        {
+          "available": true,
+          "matmul_gflops": 119.3497,
+          "measured_at": "2026-11-12T03:22:29Z",
+          "random_gather_ns_per_access": 8.2069,
+          "triad_gbs": 10.8964
+        },
+        {
+          "available": true,
+          "matmul_gflops": 200.8309,
+          "measured_at": "2026-11-12T03:25:35Z",
+          "random_gather_ns_per_access": 11.0097,
+          "triad_gbs": 9.3081
+        },
+        {
+          "available": true,
+          "matmul_gflops": 209.8158,
+          "measured_at": "2026-11-12T03:48:42Z",
+          "random_gather_ns_per_access": 7.2396,
+          "triad_gbs": 13.1037
+        },
+        {
+          "available": true,
+          "matmul_gflops": 42.778,
+          "measured_at": "2026-11-12T04:10:04Z",
+          "random_gather_ns_per_access": 9.1792,
+          "triad_gbs": 9.6562
+        },
+        {
+          "available": true,
+          "matmul_gflops": 152.3066,
+          "measured_at": "2026-11-12T04:10:07Z",
+          "random_gather_ns_per_access": 9.1861,
+          "triad_gbs": 10.4815
+        },
+        {
+          "available": true,
+          "matmul_gflops": 181.7447,
+          "measured_at": "2026-11-12T04:10:45Z",
+          "random_gather_ns_per_access": 9.1654,
+          "triad_gbs": 12.1968
+        },
+        {
+          "available": true,
+          "matmul_gflops": 89.9739,
+          "measured_at": "2026-11-12T04:10:47Z",
+          "random_gather_ns_per_access": 8.4519,
+          "triad_gbs": 10.5623
+        },
+        {
+          "available": true,
+          "matmul_gflops": 273.5168,
+          "measured_at": "2026-11-12T04:11:14Z",
+          "random_gather_ns_per_access": 7.6746,
+          "triad_gbs": 12.1826
+        }
+      ],
+      "fingerprint": {
+        "cpu_cores": 32,
+        "cpu_freq_limits": {
+          "boost_disabled": false,
+          "driver": "amd-pstate-epp",
+          "hw_max_khz": 4981510,
+          "hw_min_khz": 570173,
+          "policy_max_khz": 4981510,
+          "policy_min_khz": 1740528
+        },
+        "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+        "dimm_config": null,
+        "engine_version": "0.16.0",
+        "governor": "powersave",
+        "hostname": "desktop",
+        "kernel": "7.0.0-42-generic",
+        "mem_total_bytes": 130400088064,
+        "package_power_limits": null,
+        "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
+        "python": "3.14.4"
+      },
+      "first_seen": "2026-11-12T03:12:43Z",
+      "last_seen": "2026-11-12T04:11:14Z",
+      "sections": [
+        "gpu_cdist",
+        "vector_ann",
+        "vector_matrix",
+        "graph",
+        "sql",
+        "beir",
+        "filters",
+        "production"
+      ]
+    },
     "90e73110d464": {
       "calibrations": [
         {

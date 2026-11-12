@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-08T14:09:19Z",
+  "generated_at": "2026-11-12T03:22:28Z",
   "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
   "python": "3.14.4",
   "gpu": [
@@ -12,52 +12,33 @@
       "vectors": 50000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 16986.81,
-      "cpu_mdist_s": 1.5,
-      "cuda_ms": 13.13,
-      "cuda_mdist_s": 1949.9,
-      "speedup": 1293.86
+      "cpu_ms": 603.87,
+      "cpu_mdist_s": 42.4
     },
     {
       "queries": 2048,
       "vectors": 50000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 68088.62,
-      "cpu_mdist_s": 1.5,
-      "cuda_ms": 42.94,
-      "cuda_mdist_s": 2384.6,
-      "speedup": 1585.61
+      "cpu_ms": 2590.19,
+      "cpu_mdist_s": 39.5
     },
     {
       "queries": 1024,
       "vectors": 200000,
       "dim": 128,
       "metric": "l2",
-      "cpu_ms": 136575.91,
-      "cpu_mdist_s": 1.5,
-      "cuda_ms": 92.63,
-      "cuda_mdist_s": 2210.9,
-      "speedup": 1474.4
+      "cpu_ms": 4439.95,
+      "cpu_mdist_s": 46.1
     },
     {
       "queries": 512,
       "vectors": 50000,
       "dim": 100,
       "metric": "cosine",
-      "cpu_ms": 37337.5,
-      "cpu_mdist_s": 0.7,
-      "cuda_ms": 11.94,
-      "cuda_mdist_s": 2143.4,
-      "speedup": 3126.21
+      "cpu_ms": 771.38,
+      "cpu_mdist_s": 33.2
     }
   ],
-  "dual_gpu": {
-    "queries": 8192,
-    "vectors": 20000,
-    "dim": 2048,
-    "single_ms": 341.79,
-    "dual_ms": 207.12,
-    "speedup": 1.65
-  }
+  "dual_gpu": null
 }

@@ -6,12 +6,12 @@
 
 | Algorithm | Engine | Status | Build (s) | Execution Latency (ms) | Result Size | Speedup vs NetworkX |
 |---|---|---|---|---|---|---|
-| pagerank | benostreamdb | ✅ Pass | 0.333s | 97.86 ms | 10000 | 0.77x |
-| pagerank | networkx | ✅ Pass | 0.081s | 74.91 ms | 10000 | 1.00x (baseline) |
-| pagerank | neo4j | ✅ Pass | 1.646s | 259.36 ms | 10000 | 3× slower |
-| connected_components | benostreamdb | ✅ Pass | 0.342s | 13.85 ms | 1 | 2× slower |
-| connected_components | networkx | ✅ Pass | 0.071s | 5.67 ms | 1 | 1.00x (baseline) |
-| connected_components | neo4j | ✅ Pass | 1.646s | 175.70 ms | 10000 | 31× slower |
-| shortest_path | benostreamdb | ✅ Pass | 0.295s | 0.60 ms | 3 | 0.60x |
-| shortest_path | networkx | ✅ Pass | 0.067s | 0.36 ms | 3 | 1.00x (baseline) |
-| shortest_path | neo4j | ✅ Pass | 1.646s | 74.77 ms | 1 | 207× slower |
+| pagerank | benostreamdb | ✅ Pass | 0.158s | 12.20 ms | 10000 | 10.65x |
+| pagerank | networkx | ✅ Pass | 0.084s | 129.91 ms | 10000 | 1.00x (baseline) |
+| pagerank | neo4j | ✅ Pass | 1.720s | 280.40 ms | 10000 | 2× slower |
+| connected_components | benostreamdb | ✅ Pass | 0.165s | 4.03 ms | 1 | 1.63x |
+| connected_components | networkx | ✅ Pass | 0.091s | 6.57 ms | 1 | 1.00x (baseline) |
+| connected_components | neo4j | ✅ Pass | 1.720s | 226.85 ms | 10000 | 35× slower |
+| shortest_path | benostreamdb | ✅ Pass | 0.165s | 0.04 ms | 3 | 9.29x |
+| shortest_path | networkx | ✅ Pass | 0.078s | 0.40 ms | 3 | 1.00x (baseline) |
+| shortest_path | neo4j | ✅ Pass | 1.720s | 75.71 ms | 1 | 187× slower |
