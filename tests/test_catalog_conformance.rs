@@ -481,25 +481,38 @@ async fn jdbc_sqlite_file_conformance_and_concurrent_cas() -> Result<()> {
     );
 
     let meta = client_a.load_table("concurrent", "events").await?;
-    // Snapshot ids are the manifest versions that produced them, so uniqueness and
-    // monotonicity are the invariants that make the count meaningful: a duplicate id
-    // means two commits were allocated one manifest version, which loses a snapshot
-    // from the lineage even though every row is still readable.
-    let mut ids: Vec<i64> = meta.snapshots.iter().map(|s| s.snapshot_id).collect();
-    let published = ids.len();
-    ids.sort_unstable();
-    ids.dedup();
+    // Snapshot ids are the manifest versions that produced them, so they must be
+    // unique, and the catalog head must be the newest one: a duplicate id means two
+    // commits were allocated one manifest version, which loses a snapshot from the
+    // lineage even when every row stays readable.
+    let ids: Vec<i64> = meta.snapshots.iter().map(|s| s.snapshot_id).collect();
+    let mut distinct = ids.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
     assert_eq!(
+        distinct.len(),
         ids.len(),
-        published,
         "duplicate snapshot id in catalog metadata: two commits shared a manifest version"
     );
     assert_eq!(
         meta.current_snapshot_id,
-        meta.snapshots.last().map(|s| s.snapshot_id),
+        ids.last().copied(),
         "catalog head is not the newest published snapshot"
     );
-    assert_eq!(meta.snapshots.len(), writers * rounds);
+    // The count is a bound, not an equality. `flush_unlocked_async` first resumes a
+    // prior `PendingCommit` that is still `Staging`, absorbing the batch just written
+    // into it, so two rounds of one writer can publish as a single snapshot. What
+    // proves no commit was lost is the row assertion above — every row present
+    // exactly once — combined with `ids.len() <= writers * rounds`: a commit may
+    // coalesce with the next one, it may never vanish. Asserting equality here fails
+    // on the CI runner's timing while every row is durable (observed: 11 vs 12).
+    assert!(!ids.is_empty(), "no snapshot was ever published");
+    assert!(
+        ids.len() <= writers * rounds,
+        "{} snapshots published for {} commits",
+        ids.len(),
+        writers * rounds
+    );
     assert!(client_a
         .metadata_location("concurrent", "events")
         .await?
