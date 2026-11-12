@@ -52,6 +52,12 @@ ONLY="${ONLY:-}"
 DRY_RUN="${DRY_RUN:-0}"
 KEEP_GOING="${KEEP_GOING:-1}"
 
+# The long-running services the containerised sections address by service name.
+# A fresh clone has none of them, so the sweep starts them itself: that is what
+# makes `sweep_full_row.sh` the only command someone needs after checking out the
+# repository. `up -d` is idempotent, so an already-running stack is left alone.
+ENGINE_SERVICES="${ENGINE_SERVICES:-pgvector opensearch qdrant milvus weaviate neo4j clickhouse trino}"
+
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 SWEEP_START="$(date +%s)"
 
@@ -122,8 +128,14 @@ step() {
     "$@" && return 0
     # Report which step failed. A bare "section FAILED" cost a full re-run to
     # diagnose, because every step in the section is silent on success.
+    #
+    # The non-zero return is load-bearing: `step … || break` guards are how a
+    # section notices that one dataset out of eight died. Returning 0 here made
+    # every such guard dead code, so a section could measure 6 of 8 datasets and
+    # still stamp itself with whatever it managed to write.
     echo "    step failed ($*)" >&2
     SECTION_FAILED=1
+    return 1
 }
 
 # Some harnesses hardcode output paths relative to the repo root, so they have to
@@ -135,6 +147,7 @@ step_in_root() {
     ( cd "$ROOT_DIR" && "$@" ) && return 0
     echo "    step failed in $ROOT_DIR ($*)" >&2
     SECTION_FAILED=1
+    return 1
 }
 
 section_done() {
@@ -204,6 +217,12 @@ ROW_ENGINES=(
     faiss
     hnswlib
     lancedb
+    # lancedb_sq belongs here as well as in §3: it is the one competitor whose
+    # refinement actually does something (it re-ranks from the scalar-quantized
+    # codes), and leaving it out of this loop while listing it in REFINE_ENGINES
+    # meant the Refine column was populated for four engines and empty for the
+    # fifth it was written for.
+    lancedb_sq
     pgvector
     qdrant
     weaviate
@@ -211,13 +230,48 @@ ROW_ENGINES=(
     opensearch
 )
 
-# --- [1/8] engine self-characterization, f32 and tq8 -------------------------
+# Engines that implement two-stage exact rescoring (retrieve k*factor, re-rank by
+# exact distance). These get extra operating points from the same run, because the
+# refined point is a *different* row of the report, not a different engine: it
+# trades query throughput for recall, and the trade-off is only visible when both
+# points are measured on the same machine in the same session.
+#
+# Milvus and Weaviate are deliberately absent: their quantization variants are not
+# reachable through the adapter yet (Milvus needs HNSW_SQ/HNSW_PQ + `refine`,
+# tracked as #125), and a `_rN` artifact that silently equals its unrefined twin
+# is worse than a missing column.
+REFINE_ENGINES=" benostreamdb benostreamdb_tq8 benostreamdb_sq lancedb lancedb_sq "
+REFINE_FACTORS="${REFINE_FACTORS:-2 4}"
+
+# --- start the services every containerised section talks to ----------------
+if [ "$DRY_RUN" != "1" ] && [ -n "$ENGINE_SERVICES" ]; then
+    echo
+    echo "=== services: $ENGINE_SERVICES"
+    docker compose -f "$HERE/docker-compose.bench.yml" --project-directory "$HERE" \
+        up -d $ENGINE_SERVICES \
+        || { echo "could not start the bench stack" >&2; exit 1; }
+    unhealthy=""
+    for _ in $(seq 1 72); do
+        unhealthy="$(docker compose -f "$HERE/docker-compose.bench.yml" \
+            --project-directory "$HERE" ps --format '{{.Service}} {{.Health}}' \
+            | awk '$2 != "" && $2 != "healthy" {print $1}' | tr '\n' ' ')"
+        [ -z "$unhealthy" ] && break
+        sleep 5
+    done
+    if [ -n "$unhealthy" ]; then
+        echo "    still starting after 6 min: $unhealthy" >&2
+    else
+        echo "    all services healthy"
+    fi
+fi
+
+# --- [1/9] engine self-characterization, f32 and tq8 -------------------------
 if section gpu_cdist results/gpu_cdist.json; then
     step "$PYTHON" benchmarks/gpu_cdist_bench.py
     section_done
 fi
 
-# --- [2/8] vector ANN, per dataset, full precision and tq8 -------------------
+# --- [2/9] vector ANN, per dataset, full precision and tq8 -------------------
 if section vector_ann "ann_benchmarks/results/*"; then
     for ds in "${VECTOR_DATASETS[@]}"; do
         for pair in "hnsw:" "hnsw_tq8:_tq8"; do
@@ -231,18 +285,25 @@ if section vector_ann "ann_benchmarks/results/*"; then
     section_done
 fi
 
-# --- [3/8] competitor matrix: enveloped CPU+GPU pass, one run per dataset ----
+# --- [3/9] competitor matrix: enveloped CPU+GPU pass, one run per dataset ----
 # Every engine, BenoStreamDB included, is constrained to the same --cpus/--memory
 # envelope here; this is the only pass in the sweep that is enveloped.
 if section vector_matrix "competitors/results/*.json"; then
+    # Build the manylinux wheel ONCE, before any measurement. Passing
+    # `--build-wheel` inside the dataset loop recompiled the crate from the working
+    # tree eight times, which both wasted the same three minutes eight times and
+    # coupled the measurement to whatever was on disk at that moment: a
+    # half-finished edit in the tree aborted two datasets mid-pass.
+    step env PATH="$ROOT_DIR/.venv/bin:$PATH" maturin build --release --zig \
+        --compatibility manylinux_2_28 -o dist
     for ds in "${VECTOR_DATASETS[@]}"; do
-        step benchmarks/competitors/docker_bench.sh --build-wheel --both \
+        step benchmarks/competitors/docker_bench.sh --both \
             --cpus "$CPUS" --mem "$MEM" --dataset "$ds" --limit 20000 --queries 500 || break
     done
     section_done
 fi
 
-# --- [4/8] the full competitor row, driven through the long-running stack ----
+# --- [4/9] the full competitor row, driven through the long-running stack ----
 # `docker compose ... run --rm bench` is the client; the engines themselves are the
 # long-running services (pgvector, weaviate, qdrant, opensearch, ...). This is the
 # section that produces the per-engine, per-dataset row in the report.
@@ -254,12 +315,20 @@ if section vector_row "competitors/results/*.json"; then
             step env ENGINE="$eng" DATASET="$ds" LIMIT=20000 QUERIES=500 \
                 docker compose -f "$HERE/docker-compose.bench.yml" \
                 --project-directory "$HERE" --profile run run --rm bench
+            case "$REFINE_ENGINES" in *" $eng "*)
+                for rf in $REFINE_FACTORS; do
+                    step env ENGINE="$eng" DATASET="$ds" LIMIT=20000 QUERIES=500 \
+                        REFINE_FACTOR="$rf" \
+                        docker compose -f "$HERE/docker-compose.bench.yml" \
+                        --project-directory "$HERE" --profile run run --rm bench
+                done
+            ;; esac
         done
     done
     section_done
 fi
 
-# --- [5/8] graph: synthetic plus the SNAP datasets the report quotes ---------
+# --- [5/9] graph: synthetic plus the SNAP datasets the report quotes ---------
 if section graph "graph/results/*"; then
     step "$PYTHON" benchmarks/graph/run.py --nodes 10000 --edges 50000 \
         --engines benostreamdb,networkx,neo4j \
@@ -276,7 +345,7 @@ if section graph "graph/results/*"; then
     section_done
 fi
 
-# --- [6/8] SQL: ClickBench 500k against DuckDB and DataFusion ----------------
+# --- [6/9] SQL: ClickBench 500k against DuckDB and DataFusion ----------------
 if section sql "sql/results/*"; then
     step "$PYTHON" benchmarks/sql/run.py --rows 500000 \
         --engines benostreamdb,duckdb,datafusion \
@@ -284,16 +353,30 @@ if section sql "sql/results/*"; then
     section_done
 fi
 
-# --- [7/8] BEIR lexical/hybrid ----------------------------------------------
+# --- [7/9] BEIR lexical/hybrid ----------------------------------------------
+# OpenSearch is the only server-backed participant, and it publishes no host
+# port: the compose network is the only route to it. Running the host-side
+# interpreter here (as this section used to) could therefore only ever measure
+# the two embedded engines, so §4 of the report silently omitted the one
+# competitor the stack exists to compare against. The container path
+# (`WORKLOAD=beir` in run_bench.sh) reaches `$ES_URL` and writes the same
+# competitor-schema JSON into the mounted `beir/results/`.
+BEIR_ENGINES="${BEIR_ENGINES:-benostreamdb,tantivy,opensearch}"
 if section beir "beir/results/*"; then
+    # OpenSearch has to be up before the runner starts; the long-running stack
+    # already provides it, so this only fails when the stack is not running.
+    step bash -c 'test -n "$(docker compose -f "$1" --project-directory "$2" ps -q opensearch)"' \
+        _ "$HERE/docker-compose.bench.yml" "$HERE"
     for ds in scifact nfcorpus arguana; do
-        step "$PYTHON" benchmarks/beir/run.py --dataset "$ds" \
-            --engines benostreamdb,tantivy --json-dir benchmarks/beir/results || break
+        step env WORKLOAD=beir BEIR_DATASET="$ds" BEIR_ENGINES="$BEIR_ENGINES" \
+            ENGINE=benostreamdb DEVICE=cpu \
+            docker compose -f "$HERE/docker-compose.bench.yml" \
+            --project-directory "$HERE" --profile run run --rm bench || break
     done
     section_done
 fi
 
-# --- [8/8] filters, production concurrency and maintenance -------------------
+# --- [8/9] filters, production concurrency and maintenance -------------------
 if section filters "results/production_filters.*"; then
     step "$PYTHON" benchmarks/filters/run.py --rows 200000
     section_done

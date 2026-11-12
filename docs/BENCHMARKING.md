@@ -134,16 +134,27 @@ results/hardware_profile.txt               # host + envelope + dataset
 
 ## 3.1 Running the whole sweep
 
-`docker_bench.sh` measures one dataset. The report is built from nine sections, and
-they are driven by one script:
+One command, no setup beyond the prerequisites in §2:
 
 ```bash
 benchmarks/competitors/sweep_full_row.sh
 ```
 
-It can be invoked from any directory (it anchors itself at the repo root, because
-several host harnesses write repo-relative paths), and it regenerates
-`benchmarks/results/BENCHMARK_REPORT.md` as its last step.
+That is the whole contract. The script:
+
+- anchors itself at the repo root, because several host harnesses write
+  repo-relative paths;
+- starts the long-running services (`pgvector opensearch qdrant milvus weaviate
+  neo4j clickhouse trino`) and waits for health — a fresh clone has none of them;
+- builds the manylinux wheel once, before it measures anything, so every container
+  installs the same binary and no section can be affected by an edit made mid-run;
+- measures the nine sections below and quarantines artifacts older than the sweep
+  before each one;
+- regenerates `benchmarks/results/BENCHMARK_REPORT.md` as its last step, and exits
+  non-zero if any section is missing from the output.
+
+`docker_bench.sh` is the per-dataset primitive underneath §3; it is not needed to
+reproduce the report.
 
 | # | Section | What it measures | Artifacts |
 |---|---|---|---|
@@ -153,7 +164,7 @@ several host harnesses write repo-relative paths), and it regenerates
 | 4 | `vector_row` | full row: 11 engines x 8 datasets through the compose stack | `competitors/results/*.json` |
 | 5 | `graph` | synthetic + `snap-web-google` + `snap-roadnet-ca` | `graph/results/*` |
 | 6 | `sql` | ClickBench 500k vs DuckDB/DataFusion | `sql/results/*` |
-| 7 | `beir` | scifact / nfcorpus / arguana vs Tantivy | `beir/results/*` |
+| 7 | `beir` | scifact / nfcorpus / arguana: BenoStreamDB vs Tantivy vs OpenSearch | `beir/results/*` |
 | 8 | `filters` | pathological predicates | `results/production_filters.*` |
 | 9 | `production` | concurrency sweep, maintenance, **skew (§7)**, **soak (§8)** | `results/production_*` |
 
@@ -164,6 +175,7 @@ several host harnesses write repo-relative paths), and it regenerates
 | `ONLY` | (all) | comma-separated section names, e.g. `ONLY=vector_row,graph` |
 | `CPUS` / `MEM` | `8` / `16g` | envelope for the containerised section only |
 | `SWEEP_PYTHON` | `.venv/bin/python` | interpreter that measures *and* summarizes |
+| `BEIR_ENGINES` | `benostreamdb,tantivy,opensearch` | engines for §7, run inside the runner container |
 | `DRY_RUN` | `0` | print the plan, run nothing |
 | `KEEP_GOING` | `1` | continue after a failing section |
 | `SOAK_REPORT` | set by the script | output path for §8; do not override |
@@ -199,6 +211,12 @@ commonly exports that, and the sweep would then run under an interpreter with no
 - `run_bench.sh` installs exactly one wheel. `dist/` can hold both a local
   `maturin build` and the manylinux build, and passing the glob to pip fails with
   `ResolutionImpossible` before any engine runs.
+- **OpenSearch has no host port.** It is only addressable as
+  `http://opensearch:9200` on the compose network, so the BEIR comparison must run
+  inside the `bench` runner (`WORKLOAD=beir`). Running `benchmarks/beir/run.py` on
+  the host still works for the two embedded engines (`benostreamdb`, `tantivy`),
+  but it cannot reach the server engine and will silently report a two-engine
+  table.
 
 The NeurIPS BigANN and MuSiQue envelopes are **not** sections of this sweep: they
 pin different hardware envelopes and are driven separately (§5.1, §5.2).
@@ -267,9 +285,25 @@ at `/opt/bench/data/clickbench.parquet`; the query is a group-by aggregate.
 
 ### 4.4 Lexical / hybrid (BEIR)
 
-The lexical suite lives in `benchmarks/beir/` and benchmarks BM25 vs Tantivy vs
-Hybrid RRF on BEIR datasets (`scifact`, `nfcorpus`, `arguana`). See
-[`../benchmarks/beir/`](https://github.com/benolabsai/benostreamdb/tree/main/benchmarks/beir).
+The lexical suite lives in `benchmarks/beir/` and compares BM25 across three
+engines on BEIR datasets (`scifact`, `nfcorpus`, `arguana`) under one container
+envelope: BenoStreamDB (embedded overlay index), Tantivy (embedded Rust IR), and
+OpenSearch (server-backed, the long-running compose service).
+
+```bash
+# what the sweep runs, once per dataset
+WORKLOAD=beir BEIR_DATASET=scifact \
+BEIR_ENGINES=benostreamdb,tantivy,opensearch DEVICE=cpu \
+  docker compose -f benchmarks/competitors/docker-compose.bench.yml \
+  --project-directory benchmarks/competitors --profile run run --rm bench
+```
+
+The runner writes `{engine}_{dataset}_lexical_bm25_{device}.json` into
+`benchmarks/beir/results/`, which is where `generate_summary.py` reads §4 from.
+
+`BEIR_MODE=hybrid` runs `run_hybrid.py` instead (dense + sparse fused with RRF);
+its participants are BenoStreamDB and LanceDB, and it is not part of the sweep.
+See [`../benchmarks/beir/`](https://github.com/benolabsai/benostreamdb/tree/main/benchmarks/beir).
 
 ---
 

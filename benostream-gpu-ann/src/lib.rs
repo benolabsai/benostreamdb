@@ -56,6 +56,18 @@ pub use ivf_fastscan::IvfFastScanIndex;
 pub use ivf_flat::{IvfFlatIndex, SearchResult};
 pub use metric::Metric;
 
+/// The one build seed used by every randomised step of index construction.
+///
+/// Index building used to draw from the OS entropy pool in several places
+/// (`LayerGenerator::generate` for HNSW levels, CAGRA's bridge selection, the
+/// k-means fallback here). The graph therefore differed on every build, and so
+/// did recall: the same configuration measured 0.9716-0.9784 on
+/// `glove-100-angular` across four builds of a 20k-row table, and one build
+/// landed three points below the other six. A build seed is a determinism
+/// control, not a quality knob — varying it only re-rolls noise — so it is a
+/// constant rather than a per-index setting.
+pub const INDEX_BUILD_SEED: u64 = 0x00C0_FFEE_1337;
+
 /// Indexing algorithm family.
 #[derive(Debug, Clone)]
 pub enum Algorithm {

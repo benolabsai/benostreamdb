@@ -3065,6 +3065,83 @@ impl HybridReader {
         }
     }
 
+    /// The distance metric the column's vector index was built with.
+    ///
+    /// [`Self::search_hnsw_ivf`] takes a `_metric` argument and ignores it: a
+    /// graph stores no vectors, only the distances computed at build time, so it
+    /// can only rank in that space. Any stage that re-ranks its output has to use
+    /// the same metric or it is sorting by a different notion of "close" than the
+    /// one that produced the candidates. Resolving it here — from the index
+    /// itself, through the same cached loader the search used — keeps the two
+    /// stages consistent even when the caller leaves `metric` at the request
+    /// default (`L2`), which is what the ANN-Benchmarks harness does.
+    ///
+    /// Falls back to the caller's metric when the column has no vector index
+    /// (brute-force path) or the index cannot be loaded; the brute-force search
+    /// that produced those candidates did use the caller's metric.
+    async fn index_metric_or(&self, column: &str, fallback: VectorMetric) -> VectorMetric {
+        let mut seen = std::collections::HashSet::new();
+        let idx_info = self
+            .config
+            .index_files
+            .iter()
+            .filter(|f| {
+                f.index_category == "vector"
+                    && f.column_name == column
+                    && self.config.is_index_valid(f)
+                    && !matches!(
+                        f.blob_type.as_deref(),
+                        Some(crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS)
+                            | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_MAPPING)
+                            | Some(crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_GRAPH)
+                            | Some("centroids")
+                            | Some("mapping")
+                            | Some("cluster_graph")
+                    )
+            })
+            .find(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())));
+
+        let Some(idx_info) = idx_info else {
+            return fallback;
+        };
+
+        let idx_path_str = self.resolve_index_path(&idx_info.file_path);
+        let cache_key = if idx_info.blob_offset.is_some() {
+            HnswIvfIndex::puffin_vector_cache_key(
+                self.cache_root(),
+                &idx_path_str,
+                &idx_info.column_name,
+                &idx_info.algorithm,
+            )
+        } else {
+            format!("{}/{}", self.cache_root(), idx_path_str)
+        };
+
+        let loaded = if idx_info.blob_offset.is_some() {
+            HnswIvfIndex::load_from_puffin(
+                self.store.clone(),
+                &idx_path_str,
+                &cache_key,
+                true,
+                &idx_info.column_name,
+            )
+            .await
+        } else {
+            HnswIvfIndex::load_async_with_cache_key(
+                self.store.clone(),
+                &idx_path_str,
+                &cache_key,
+                true,
+            )
+            .await
+        };
+
+        match loaded {
+            Ok(index) => index.metric(),
+            Err(_) => fallback,
+        }
+    }
+
     /// Rescore approximate vector search candidates by point-looking up their
     /// uncompressed Float32 representations from Parquet and computing exact SIMD distances.
     pub(crate) async fn rescore_candidates(
@@ -3082,6 +3159,18 @@ impl HybridReader {
             crate::core::index::VectorValue::Float32(v) => v,
             _ => return Ok(candidates),
         };
+
+        // The candidates were produced by the HNSW-IVF index, which ranks with the
+        // metric it was built with — `search_hnsw_ivf` deliberately ignores the
+        // `_metric` its caller passes, because a graph stores no vectors, only the
+        // distances computed at build time. Rescoring with the caller's metric
+        // therefore re-ranked the candidates in a *different* space: the request
+        // default is L2, so on a cosine index the refine path returned rows worse
+        // than the graph already had. Measured on `glove-100-angular` (20k rows,
+        // ef=200), recall@10 fell 0.988 -> 0.637 at refine×2 and 0.511 at refine×4,
+        // degrading further as the candidate list grew. Use the index's metric so
+        // the exact re-rank orders the neighbours the graph intended to order.
+        let metric = self.index_metric_or(column, metric).await;
 
         // Reconstruct row IDs in order (sorted bitmap row IDs minus deletes)
         let deleted = self.load_merged_deletes().await?;

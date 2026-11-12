@@ -285,6 +285,12 @@ services:
       # only the copy baked into bsdb-bench-runner:latest, so a fix to it (the
       # multi-wheel install below) silently does nothing until the image is rebuilt.
       - ./run_bench.sh:/opt/bench/run_bench.sh:ro
+      # Same reasoning again for the ANN-Benchmarks harness, which
+      # `Dockerfile.bench` installs as /opt/bench/ann_benchmarks.py: a record-schema
+      # fix in the repository must reach the container without an image rebuild.
+      # Not mounting it is how `refine_factor` ended up written in two different
+      # places by the two harnesses.
+      - ../ann_benchmarks/run.py:/opt/bench/ann_benchmarks.py:ro
       - ./results:/results
       - ./data:/opt/bench/data
       # BEIR corpus/queries/qrels (read-only) and the report output dir. The

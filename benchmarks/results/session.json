@@ -8,16 +8,22 @@
         "beir/results/benostreamdb_scifact_lexical_bm25_cpu.json",
         "beir/results/tantivy_arguana_lexical_bm25_cpu.json",
         "beir/results/tantivy_nfcorpus_lexical_bm25_cpu.json",
-        "beir/results/tantivy_scifact_lexical_bm25_cpu.json"
+        "beir/results/tantivy_scifact_lexical_bm25_cpu.json",
+        "beir/results/arguana_bm25_competitors_cpu.md",
+        "beir/results/nfcorpus_bm25_competitors_cpu.md",
+        "beir/results/opensearch_arguana_lexical_bm25_cpu.json",
+        "beir/results/opensearch_nfcorpus_lexical_bm25_cpu.json",
+        "beir/results/opensearch_scifact_lexical_bm25_cpu.json",
+        "beir/results/scifact_bm25_competitors_cpu.md"
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 179.3508,
-        "measured_at": "2026-11-12T12:51:43Z",
-        "random_gather_ns_per_access": 7.6225,
-        "triad_gbs": 11.5088
+        "matmul_gflops": 76.7307,
+        "measured_at": "2026-11-12T18:09:30Z",
+        "random_gather_ns_per_access": 7.6744,
+        "triad_gbs": 12.8113
       },
-      "captured_at": "2026-11-12T12:51:43Z",
+      "captured_at": "2026-11-12T18:09:30Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -28,12 +34,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 270.8825,
-        "measured_at": "2026-11-12T12:51:45Z",
-        "random_gather_ns_per_access": 7.3927,
-        "triad_gbs": 12.4515
+        "matmul_gflops": 183.6544,
+        "measured_at": "2026-11-12T18:09:32Z",
+        "random_gather_ns_per_access": 7.6488,
+        "triad_gbs": 12.215
       },
-      "captured_at": "2026-11-12T12:51:45Z",
+      "captured_at": "2026-11-12T18:09:32Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -43,12 +49,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 179.1701,
-        "measured_at": "2026-11-12T11:45:17Z",
-        "random_gather_ns_per_access": 7.4614,
-        "triad_gbs": 12.8069
+        "matmul_gflops": 223.3682,
+        "measured_at": "2026-11-12T16:45:16Z",
+        "random_gather_ns_per_access": 7.9441,
+        "triad_gbs": 12.2665
       },
-      "captured_at": "2026-11-12T11:45:17Z",
+      "captured_at": "2026-11-12T16:45:16Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -63,12 +69,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 120.6609,
-        "measured_at": "2026-11-12T12:51:04Z",
-        "random_gather_ns_per_access": 9.472,
-        "triad_gbs": 9.8694
+        "matmul_gflops": 76.6834,
+        "measured_at": "2026-11-12T18:08:33Z",
+        "random_gather_ns_per_access": 6.7182,
+        "triad_gbs": 15.4095
       },
-      "captured_at": "2026-11-12T12:51:04Z",
+      "captured_at": "2026-11-12T18:08:33Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -85,12 +91,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 71.5447,
-        "measured_at": "2026-11-12T12:54:37Z",
-        "random_gather_ns_per_access": 8.7926,
-        "triad_gbs": 11.3199
+        "matmul_gflops": 145.6015,
+        "measured_at": "2026-11-12T18:13:25Z",
+        "random_gather_ns_per_access": 8.3986,
+        "triad_gbs": 12.6105
       },
-      "captured_at": "2026-11-12T12:54:37Z",
+      "captured_at": "2026-11-12T18:13:25Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -100,12 +106,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 212.7088,
-        "measured_at": "2026-11-12T12:51:07Z",
-        "random_gather_ns_per_access": 8.3023,
-        "triad_gbs": 11.9933
+        "matmul_gflops": 189.7152,
+        "measured_at": "2026-11-12T18:08:35Z",
+        "random_gather_ns_per_access": 8.1805,
+        "triad_gbs": 12.681
       },
-      "captured_at": "2026-11-12T12:51:07Z",
+      "captured_at": "2026-11-12T18:08:35Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -146,12 +152,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 235.5062,
-        "measured_at": "2026-11-12T11:47:42Z",
-        "random_gather_ns_per_access": 6.9617,
-        "triad_gbs": 12.698
+        "matmul_gflops": 197.3141,
+        "measured_at": "2026-11-12T16:47:44Z",
+        "random_gather_ns_per_access": 7.5878,
+        "triad_gbs": 12.1131
       },
-      "captured_at": "2026-11-12T11:47:42Z",
+      "captured_at": "2026-11-12T16:47:44Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -296,12 +302,12 @@
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 79.5639,
-        "measured_at": "2026-11-12T12:21:13Z",
-        "random_gather_ns_per_access": 8.0774,
-        "triad_gbs": 12.9204
+        "matmul_gflops": 205.3791,
+        "measured_at": "2026-11-12T17:21:49Z",
+        "random_gather_ns_per_access": 8.3638,
+        "triad_gbs": 10.7801
       },
-      "captured_at": "2026-11-12T12:21:13Z",
+      "captured_at": "2026-11-12T17:21:49Z",
       "note": null,
       "session": "8c5598405a7d"
     },
@@ -394,16 +400,80 @@
         "competitors/results/opensearch_fashion-mnist-784-euclidean_cpu.json",
         "competitors/results/pgvector_fashion-mnist-784-euclidean_cpu.json",
         "competitors/results/qdrant_fashion-mnist-784-euclidean_cpu.json",
-        "competitors/results/weaviate_fashion-mnist-784-euclidean_cpu.json"
+        "competitors/results/weaviate_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_r2_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_r2_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_r2_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_r2_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_r2_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_r2_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_r2_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_r2_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_r4_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_r4_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_r4_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_r4_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_r4_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_r4_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_r4_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_r4_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_r2_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_r2_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_r2_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_r2_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_r2_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_sq_r2_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_r2_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_r2_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_r4_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_r4_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_r4_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_r4_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_r4_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_sq_r4_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_sq_r4_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_sq_r4_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_r2_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_r2_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_r2_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_r2_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_r2_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_tq8_r2_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_r2_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_r2_sift-128-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_r4_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_r4_gist-960-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_r4_glove-100-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_r4_glove-200-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_r4_lastfm-64-dot_cpu.json",
+        "competitors/results/benostreamdb_tq8_r4_mnist-784-euclidean_cpu.json",
+        "competitors/results/benostreamdb_tq8_r4_nytimes-256-angular_cpu.json",
+        "competitors/results/benostreamdb_tq8_r4_sift-128-euclidean_cpu.json",
+        "competitors/results/lancedb_r2_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_r2_gist-960-euclidean_cpu.json",
+        "competitors/results/lancedb_r2_glove-100-angular_cpu.json",
+        "competitors/results/lancedb_r2_glove-200-angular_cpu.json",
+        "competitors/results/lancedb_r2_lastfm-64-dot_cpu.json",
+        "competitors/results/lancedb_r2_mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_r2_nytimes-256-angular_cpu.json",
+        "competitors/results/lancedb_r2_sift-128-euclidean_cpu.json",
+        "competitors/results/lancedb_r4_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_r4_gist-960-euclidean_cpu.json",
+        "competitors/results/lancedb_r4_glove-100-angular_cpu.json",
+        "competitors/results/lancedb_r4_glove-200-angular_cpu.json",
+        "competitors/results/lancedb_r4_lastfm-64-dot_cpu.json",
+        "competitors/results/lancedb_r4_mnist-784-euclidean_cpu.json",
+        "competitors/results/lancedb_r4_nytimes-256-angular_cpu.json",
+        "competitors/results/lancedb_r4_sift-128-euclidean_cpu.json"
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 93.1149,
-        "measured_at": "2026-11-12T12:41:41Z",
-        "random_gather_ns_per_access": 7.8384,
-        "triad_gbs": 11.7489
+        "matmul_gflops": 74.0105,
+        "measured_at": "2026-11-12T17:59:26Z",
+        "random_gather_ns_per_access": 7.6089,
+        "triad_gbs": 12.7631
       },
-      "captured_at": "2026-11-12T12:41:41Z",
+      "captured_at": "2026-11-12T17:59:26Z",
       "note": null,
       "session": "8c5598405a7d"
     }
@@ -571,6 +641,125 @@
           "measured_at": "2026-11-12T12:54:37Z",
           "random_gather_ns_per_access": 8.7926,
           "triad_gbs": 11.3199
+        },
+        {
+          "available": true,
+          "matmul_gflops": 238.434,
+          "measured_at": "2026-11-12T13:09:39Z",
+          "random_gather_ns_per_access": 9.811,
+          "triad_gbs": 11.7234
+        },
+        {
+          "available": true,
+          "matmul_gflops": 260.8827,
+          "measured_at": "2026-11-12T13:12:16Z",
+          "random_gather_ns_per_access": 8.1081,
+          "triad_gbs": 13.0946
+        },
+        {
+          "available": true,
+          "matmul_gflops": 84.7689,
+          "measured_at": "2026-11-12T14:09:22Z",
+          "random_gather_ns_per_access": 7.8504,
+          "triad_gbs": 12.5235
+        },
+        {
+          "available": true,
+          "matmul_gflops": 248.1363,
+          "measured_at": "2026-11-12T14:12:03Z",
+          "random_gather_ns_per_access": 8.0122,
+          "triad_gbs": 11.9694
+        },
+        {
+          "available": true,
+          "matmul_gflops": 179.5693,
+          "measured_at": "2026-11-12T15:02:08Z",
+          "random_gather_ns_per_access": 7.8009,
+          "triad_gbs": 12.4089
+        },
+        {
+          "available": true,
+          "matmul_gflops": 219.0592,
+          "measured_at": "2026-11-12T15:04:34Z",
+          "random_gather_ns_per_access": 7.8811,
+          "triad_gbs": 12.4665
+        },
+        {
+          "available": true,
+          "matmul_gflops": 226.4188,
+          "measured_at": "2026-11-12T15:36:53Z",
+          "random_gather_ns_per_access": 7.6377,
+          "triad_gbs": 12.3774
+        },
+        {
+          "available": true,
+          "matmul_gflops": 215.572,
+          "measured_at": "2026-11-12T16:12:30Z",
+          "random_gather_ns_per_access": 7.3232,
+          "triad_gbs": 12.8267
+        },
+        {
+          "available": true,
+          "matmul_gflops": 223.3682,
+          "measured_at": "2026-11-12T16:45:16Z",
+          "random_gather_ns_per_access": 7.9441,
+          "triad_gbs": 12.2665
+        },
+        {
+          "available": true,
+          "matmul_gflops": 197.3141,
+          "measured_at": "2026-11-12T16:47:44Z",
+          "random_gather_ns_per_access": 7.5878,
+          "triad_gbs": 12.1131
+        },
+        {
+          "available": true,
+          "matmul_gflops": 205.3791,
+          "measured_at": "2026-11-12T17:21:49Z",
+          "random_gather_ns_per_access": 8.3638,
+          "triad_gbs": 10.7801
+        },
+        {
+          "available": true,
+          "matmul_gflops": 74.0105,
+          "measured_at": "2026-11-12T17:59:26Z",
+          "random_gather_ns_per_access": 7.6089,
+          "triad_gbs": 12.7631
+        },
+        {
+          "available": true,
+          "matmul_gflops": 76.6834,
+          "measured_at": "2026-11-12T18:08:33Z",
+          "random_gather_ns_per_access": 6.7182,
+          "triad_gbs": 15.4095
+        },
+        {
+          "available": true,
+          "matmul_gflops": 189.7152,
+          "measured_at": "2026-11-12T18:08:35Z",
+          "random_gather_ns_per_access": 8.1805,
+          "triad_gbs": 12.681
+        },
+        {
+          "available": true,
+          "matmul_gflops": 76.7307,
+          "measured_at": "2026-11-12T18:09:30Z",
+          "random_gather_ns_per_access": 7.6744,
+          "triad_gbs": 12.8113
+        },
+        {
+          "available": true,
+          "matmul_gflops": 183.6544,
+          "measured_at": "2026-11-12T18:09:32Z",
+          "random_gather_ns_per_access": 7.6488,
+          "triad_gbs": 12.215
+        },
+        {
+          "available": true,
+          "matmul_gflops": 145.6015,
+          "measured_at": "2026-11-12T18:13:25Z",
+          "random_gather_ns_per_access": 8.3986,
+          "triad_gbs": 12.6105
         }
       ],
       "fingerprint": {
@@ -595,7 +784,7 @@
         "python": "3.14.4"
       },
       "first_seen": "2026-11-12T03:12:43Z",
-      "last_seen": "2026-11-12T12:54:37Z",
+      "last_seen": "2026-11-12T18:13:25Z",
       "sections": [
         "gpu_cdist",
         "vector_ann",

@@ -5,7 +5,7 @@ use crate::backend::ComputeContext;
 use crate::ivf_flat::SearchResult;
 use crate::metric::Metric;
 use anyhow::Result;
-use rand::{thread_rng, Rng};
+use rand::{Rng, SeedableRng};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 
@@ -110,9 +110,16 @@ impl HnswIndex {
         }
     }
 
-    /// Sample a random maximum layer for a new node using exponential decay: -ln(unif) * mL
+    /// Sample a maximum layer for a new node using exponential decay: -ln(unif) * mL
+    ///
+    /// Derived from the shared [`crate::INDEX_BUILD_SEED`] and the node's own
+    /// insertion index rather than from OS entropy, so a given set of vectors
+    /// always produces the same levels — and therefore the same graph and the
+    /// same recall. Per-node substreams keep the draws independent without
+    /// making the result depend on call order.
     fn sample_layer(&self) -> usize {
-        let mut rng = thread_rng();
+        let mut rng =
+            rand::rngs::StdRng::seed_from_u64(crate::INDEX_BUILD_SEED ^ (self.nodes.len() as u64));
         let unif: f64 = rng.gen_range(1e-7..1.0);
         ((-unif.ln()) * self.ml).floor() as usize
     }

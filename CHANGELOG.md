@@ -1,13 +1,4 @@
-## [0.16.0] - 2026-11-11
-
-**Release classification: minor (`0.16.0`), not a patch.** The change set since
-`v0.15.1` is 14 commits across 201 files (+26,446/−7,594) and is *additive to the
-public API* on four surfaces — two new catalog backends (`memory`, `s3tables`),
-two new Python classes (`PyMemoryCatalog`, `PyS3TablesCatalog`), a new Trino table
-function (`system.keyword_search`), and new Spark DSv2 pushdown
-(`SupportsPushDownTopN`) — plus two new `CatalogType` variants on a public,
-non-`#[non_exhaustive]` enum. A patch release is only defensible if the release
-contains the correctness fixes alone, which it does not.
+## [0.16.0] - 2026-11-12
 
 ### Added
 
@@ -39,7 +30,6 @@ contains the correctness fixes alone, which it does not.
 - **`tests/test_iceberg_v3_conformance.rs`**: parses the Avro container header with
   a hand-written reader rather than `apache_avro`, so a wrong key name cannot pass
   by construction.
-
 - **`CatalogType::Memory` — in-process reference catalog** (`src/core/catalog/memory.rs`,
   `PyMemoryCatalog`): backed by `Arc<parking_lot::RwLock<MemoryCatalogState>>`, with
   two clients naming the same `memory://<name>` URI sharing one process-wide state.
@@ -132,6 +122,36 @@ contains the correctness fixes alone, which it does not.
 
 ### Fixed
 
+- **Index builds were not reproducible** (`benostream-gpu-ann/src/lib.rs`,
+  `src/core/index/hnsw_rs/hnsw.rs`, `src/core/index/ivf.rs`): `LayerGenerator`
+  drew each node's HNSW level from `rand::thread_rng()`, so every build produced
+  a different graph — and therefore a different recall for one fixed
+  configuration. Four builds of the same 20k-row `glove-100-angular` table
+  measured 0.9716-0.9784 at `refine_factor = 1`, with occasional wider tails.
+  Every randomised build step now uses one constant,
+  `benostream_gpu_ann::INDEX_BUILD_SEED` (`0x00C0_FFEE_1337`): the level sampler
+  in the core index and in the sub-crate's graph builder, the k-means centroid
+  seeding, and CAGRA's bridge selection. Two consecutive builds of the same
+  configuration now return bit-identical recall (0.9788 at refine 1, 0.9902 at
+  refine 4). The seed is a constant rather than a per-index setting: it is a
+  determinism control, not a quality parameter, and varying it only re-rolls
+  which graph a measurement happened to land on.
+- **Two-stage vector refinement re-ranked candidates in the wrong metric**
+  (`src/core/reader/scan.rs`): the HNSW-IVF graph ranks with the metric it was
+  built with — `search_hnsw_ivf` deliberately discards the `_metric` its caller
+  passes, because a graph stores no vectors, only the distances computed at build
+  time. The exact rescore used the *caller's* metric instead, which is the request
+  default (`L2`) unless the query names one, so on a cosine index stage 1 selected
+  candidates by cosine and stage 2 truncated them by squared L2 —
+  `refine_factor > 1` returned rows *worse* than the graph already had instead of
+  better, degrading further as the candidate list grew. `rescore_candidates` now
+  resolves the metric from the column's vector index (`index_metric_or`) and falls
+  back to the caller's metric only when the column has no index, i.e. on the
+  brute-force path. Measured on `glove-100-angular` (20k rows, `ef_search` 200,
+  500 queries): `hnsw` recall@10 was **0.988 → 0.637 → 0.511** at refine×2/×4
+  before and **0.989 → 0.989 → 0.989** after; `hnsw_tq8` goes **0.975 → 0.989** at
+  refine×2, recovering full-precision recall from the compressed index at 70% of
+  its unrefined query throughput.
 - **Manifest `content` metadata used numbers instead of the spec words**
   (`src/core/iceberg/writer.rs`). `apache/iceberg-rust` parses that key with a strict
   `FromStr` accepting only `"data"` / `"deletes"` and rejected every delete manifest

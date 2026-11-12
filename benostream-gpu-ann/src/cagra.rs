@@ -301,10 +301,15 @@ impl CagraIndex {
 
             // Cross-cluster bridge connections to prevent isolated subgraphs
             use rand::seq::SliceRandom;
-            let mut rng = rand::thread_rng();
+            use rand::SeedableRng;
             let all_indices: Vec<usize> = (0..n).collect();
 
             for i in 0..n {
+                // Deterministic per-node substream: the same vectors must produce
+                // the same bridges on every build, or the graph (and its recall)
+                // changes for no reproducible reason.
+                let mut rng =
+                    rand::rngs::StdRng::seed_from_u64(crate::INDEX_BUILD_SEED ^ (i as u64));
                 let needed = intermediate_degree
                     .saturating_sub(candidates[i].len())
                     .max(4);

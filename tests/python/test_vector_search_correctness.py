@@ -132,3 +132,74 @@ def test_recall_vs_sklearn_cosine(test_data, tmpdir):
         sk_sim = 1.0 - sk_dist
         assert np.isclose(sk_dist, hdb_dist, rtol=1e-4, atol=1e-4) or np.isclose(sk_sim, hdb_dist, rtol=1e-4, atol=1e-4), \
             f"Distance mismatch: sklearn dist={sk_dist}, sim={sk_sim}, bsdb={hdb_dist}"
+
+
+def test_refine_factor_ranks_in_the_index_metric(tmp_path):
+    """`refine_factor > 1` must never return rows worse than the unrefined search.
+
+    Regression test for the two-stage rescore ranking its candidates with the
+    caller's metric instead of the index's. `search_hnsw_ivf` deliberately ignores
+    the metric it is handed (a graph stores no vectors, only the distances from
+    build time), so the exact re-rank has to use the *index's* metric too.
+    Otherwise stage 1 selects the k*factor candidates by cosine and stage 2
+    truncates them by squared L2 — recall gets *worse* as the factor grows.
+
+    The fixture vectors are deliberately **not** unit-normalised. For unit vectors
+    squared L2 and cosine rank identically, so a unit-norm fixture passes even
+    when the rescore uses the wrong metric; the glove vectors that exposed this
+    have norms of 4-8, which is the regime where the two metrics disagree.
+    """
+    rng = np.random.default_rng(20261112)
+    n, dim, k, ef = 4000, 64, 10, 200
+    data = rng.standard_normal((n, dim)).astype(np.float32) * rng.uniform(
+        1.0, 10.0, (n, 1)
+    ).astype(np.float32)
+    queries = rng.standard_normal((20, dim)).astype(np.float32)
+
+    # Exact cosine ground truth over the same vectors the table holds.
+    dn = data / np.linalg.norm(data, axis=1, keepdims=True)
+    qn = queries / np.linalg.norm(queries, axis=1, keepdims=True)
+    truth = np.argsort(1.0 - qn @ dn.T, axis=1)[:, :k]
+
+    table = bsdb.Table(str(tmp_path / "refine_metric"))
+    table.add_index(
+        "embedding",
+        {"type": "hnsw", "complexity": 16, "quality": 200, "metric": "cosine"},
+    )
+    table.write(pd.DataFrame({"id": np.arange(n, dtype=np.int64), "embedding": data.tolist()}))
+    table.commit()
+    table.wait_for_background_tasks()
+
+    def run(refine_factor: int):
+        hits, mean_dist = 0.0, 0.0
+        for i, q in enumerate(queries):
+            vf = {
+                "column": "embedding",
+                "query": q.tolist(),
+                "k": k,
+                "ef_search": ef,
+                "refine_factor": refine_factor,
+            }
+            ids = np.asarray(
+                table.to_arrow(vector_filter=vf, columns=["id"]).column("id").to_pylist(),
+                dtype=np.int64,
+            )
+            hits += len(set(ids.tolist()) & set(truth[i].tolist())) / k
+            mean_dist += float((1.0 - dn[ids] @ qn[i]).mean())
+        return hits / len(queries), mean_dist / len(queries)
+
+    recall_plain, dist_plain = run(1)
+    # The index must actually be answering, or this test proves nothing.
+    assert recall_plain >= 0.9, f"unrefined recall {recall_plain} is not an indexed search"
+
+    for factor in (2, 4):
+        recall_refined, dist_refined = run(factor)
+        assert recall_refined >= recall_plain - 0.01, (
+            f"refine_factor={factor} lowered recall: {recall_plain:.4f} -> "
+            f"{recall_refined:.4f} (the rescore is ranking in a different metric "
+            f"than the index)"
+        )
+        assert dist_refined <= dist_plain + 0.01, (
+            f"refine_factor={factor} returned farther neighbours: mean exact cosine "
+            f"distance {dist_plain:.4f} -> {dist_refined:.4f}"
+        )

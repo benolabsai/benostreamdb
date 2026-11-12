@@ -229,16 +229,29 @@ COMPETITOR_CONFIG = [
 ]
 
 
+def _record_refine(record: dict) -> int:
+    """The refinement factor a record was measured at.
+
+    One field, one location: top-level `refine_factor`, written by both harnesses
+    (`run_competitor.py` and `ann_benchmarks/run.py`). The library config also
+    carries it for BenoStreamDB, but the report never reads that copy — accepting
+    two locations is what let the producers drift apart and turned refined rows
+    into silent duplicates of their unrefined siblings.
+    """
+    try:
+        rf = int(record.get("refine_factor") or 1)
+    except (TypeError, ValueError):
+        rf = 1
+    return rf if rf > 1 else 1
+
+
 def _refine_cell(record: dict) -> str:
     """`—` when refinement is off, `×N` when the point used two-stage rescoring.
 
     Separate from the label so the column is present for every engine: a refined
     row is a different operating point, not a different engine.
     """
-    try:
-        rf = int(record.get("refine_factor") or 1)
-    except (TypeError, ValueError):
-        rf = 1
+    rf = _record_refine(record)
     return f"×{rf}" if rf > 1 else "—"
 
 
@@ -1142,7 +1155,7 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
             r.get("engine"),
             r.get("dataset"),
             r.get("device"),
-            int(r.get("refine_factor") or 1),
+            _record_refine(r),
         )
         if key not in _best or (r.get("qps") or 0) > (_best[key].get("qps") or 0):
             _best[key] = r
@@ -1176,7 +1189,15 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
             sections.append(f"### Vector — `{ds}`")
             sections.append("")
             sections.append(
-                "| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
+                # The three sort keys are adjacent and in the order `_sort_key` applies
+                # them, so the sort is readable from the header alone: precision tier,
+                # then the recall pass, then traversal throughput. Everything after them
+                # is comparison data, not a key.
+                # "Index Precision" alone made the arrow read as ascending precision,
+                # which is the inverse of the key: the tier is 0 for f32 and 1 for any
+                # quantized representation, so uncompressed rows come first and the
+                # arrow is stating that compression tier, not numeric precision.
+                "| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
             )
             sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
             # Sort order:
@@ -1209,8 +1230,9 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
                 rec = float(r.get("recall_at_k") or 0)
                 rec_pass = "True" if rec > 0.95 else "False"
                 sections.append(
-                    f"| {_eng_label(eng, r.get('refine_factor'))} | {idx} | {_refine_cell(r)} | "
-                    f"{r.get('recall_at_k')} | {rec_pass} | {_index_qps(r)} | {_index_p50(r)} | {_index_p99(r)} | "
+                    f"| {_eng_label(eng, _record_refine(r))} | {idx} | {rec_pass} | {_index_qps(r)} | "
+                    f"{_refine_cell(r)} | {r.get('recall_at_k')} | "
+                    f"{_index_p50(r)} | {_index_p99(r)} | "
                     f"{_row_qps(r)} | {_row_p50(r)} | {_row_p99(r)} | "
                     f"{r.get('build_s')} | {r.get('index_mb')} |"
                 )

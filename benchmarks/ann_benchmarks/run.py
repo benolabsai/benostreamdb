@@ -369,6 +369,11 @@ def main() -> None:
         "workload": "vector_ann",
         "device": backend,
         "requested_device": args.device,
+        # Canonical refinement factor, in the same place `run_competitor.py` puts
+        # it. The library config below also carries it, but the report reads this
+        # one field for every engine: two producers writing two locations is how
+        # refined rows ended up indistinguishable from their unrefined siblings.
+        "refine_factor": int(args.refine_factor or 1),
         "n": int(n),
         "dim": int(dim),
         "index": {

@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-11-12 12:54:50 UTC
+- **Generated At**: 2026-11-12 19:07:21 UTC
 - **Engine version**: 0.16.0
 - **Platform**: Linux-7.0.0-42-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
@@ -35,11 +35,11 @@ Session `8c5598405a7d` — every stamped section below was measured on this host
 
 | Probe | First | Last |
 |---|---|---|
-| random gather (ns/access) | 9.5562 | 8.7926 (-8.0%) |
-| triad (GB/s) | 9.5937 | 11.3199 (+18.0%) |
-| matmul fp64 1024³ (GFLOPS) | 57.7142 | 71.5447 (+24.0%) |
+| random gather (ns/access) | 9.5562 | 8.3986 (-12.1%) |
+| triad (GB/s) | 9.5937 | 12.6105 (+31.4%) |
+| matmul fp64 1024³ (GFLOPS) | 57.7142 | 145.6015 (+152.3%) |
 
-Probes are cheap and machine-state sensitive, not engine benchmarks: they move when DIMM timings or CPU voltage/frequency limits change, which is how a future run's drift can be separated from a code change. 23 sample(s) taken across this sweep.
+Probes are cheap and machine-state sensitive, not engine benchmarks: they move when DIMM timings or CPU voltage/frequency limits change, which is how a future run's drift can be separated from a code change. 40 sample(s) taken across this sweep.
 
 ### Session integrity
 
@@ -90,17 +90,17 @@ BenoStreamDB provides native GPU acceleration (`bsdb.cdist`, CUDA/Triton) for hi
 
 ## 2. Graph Analytics Performance (BenoStreamDB vs NetworkX vs Neo4j + GDS)
 
-**Scale Benchmarks (Stanford SNAP 5M+ Edges) & Neo4j/cuGraph Scope:** Neo4j GDS is measured alongside BenoStreamDB and NetworkX on the synthetic graph (§2.1), where BenoStreamDB is **24.8× faster at PageRank execution** and **10.0× faster at graph construction**, and on every tested 5M+ edge SNAP dataset (`snap_roadnet_ca`, `snap_web_google`).
+**Scale Benchmarks (Stanford SNAP 5M+ Edges) & Neo4j/cuGraph Scope:** Neo4j GDS is measured alongside BenoStreamDB and NetworkX on the synthetic graph (§2.1), where BenoStreamDB is **22.4× faster at PageRank execution** and **10.7× faster at graph construction**, and on every tested 5M+ edge SNAP dataset (`snap_roadnet_ca`, `snap_web_google`).
 
-The Neo4j column is a JVM server ingesting the edge list over Bolt with batched `UNWIND ... MERGE` into a store carrying a uniqueness constraint on `:Node(id)`, then projecting once per dataset into GDS (BenoStreamDB vs Neo4j: `snap_roadnet_ca`: load 15.2 s vs 89.0 s, PageRank 3.1 s vs 33.5 s; `snap_web_google`: load 14.5 s vs 106 s, PageRank 1.7 s vs 13.7 s). These numbers reflect that ingestion path and configuration and should not be interpreted as representative of Neo4j's dedicated bulk-import tooling (`neo4j-admin database import`) or all deployment configurations.
+The Neo4j column is a JVM server ingesting the edge list over Bolt with batched `UNWIND ... MERGE` into a store carrying a uniqueness constraint on `:Node(id)`, then projecting once per dataset into GDS (BenoStreamDB vs Neo4j: `snap_roadnet_ca`: load 15.1 s vs 87.0 s, PageRank 3.1 s vs 31.5 s; `snap_web_google`: load 14.4 s vs 100 s, PageRank 1.9 s vs 14.0 s). These numbers reflect that ingestion path and configuration and should not be interpreted as representative of Neo4j's dedicated bulk-import tooling (`neo4j-admin database import`) or all deployment configurations.
 
-Clearing the previous dataset between runs is recorded as harness overhead and excluded from the load figures above: **42.1 s** in total across these datasets.
+Clearing the previous dataset between runs is recorded as harness overhead and excluded from the load figures above: **39.8 s** in total across these datasets.
 
 `shortest_path` is measured on the same directed graph for every embedded engine: PageRank and `shortest_path` follow edge direction, while `connected_components` is weakly connected. BenoStreamDB and NetworkX both run a bidirectional breadth-first search that stops when the two frontiers meet; Neo4j issues one GDS Dijkstra call and reports a single path row, so its result size is not comparable with the node-id lists the other two return.
 
 cuGraph is not present in these results. Where the tested configuration has previously hit GPU memory exhaustion on a multi-million-edge graph, that is an environment-specific outcome rather than a general limitation of cuGraph, whose memory requirements depend on graph representation, GPU capacity, allocation configuration, and construction strategy.
 
-BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-memory Compressed Sparse Row (CSR) graph in **14.5–15.2 s** across these datasets, with no external database server or JVM in the query path. These results demonstrate performance on the tested SNAP workloads rather than a universal ranking across graph database implementations.
+BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-memory Compressed Sparse Row (CSR) graph in **14.4–15.1 s** across these datasets, with no external database server or JVM in the query path. These results demonstrate performance on the tested SNAP workloads rather than a universal ranking across graph database implementations.
 
 ### Real-World Graph Scale — `snap_roadnet_ca`
 
@@ -110,15 +110,15 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 
 | Algorithm | Engine | Status | Build (s) | Execution (ms) | Result size | Speedup vs NetworkX |
 |---|---|---|---|---|---|---|
-| connected_components | benostreamdb | ✅ Pass | 15.105s | 689.27 ms | 2638 | 1.58x |
-| connected_components | networkx | ✅ Pass | 7.586s | 1087.69 ms | 2638 | 1.00x (baseline) |
-| connected_components | neo4j | ✅ Pass | 89.002s | 31887.24 ms | 1965206 | 29× slower |
-| pagerank | benostreamdb | ✅ Pass | 15.215s | 3107.34 ms | 1965206 | 1.30x |
-| pagerank | networkx | ✅ Pass | 9.082s | 4030.59 ms | 1965206 | 1.00x (baseline) |
-| pagerank | neo4j | ✅ Pass | 89.002s | 33488.85 ms | 1965206 | 8× slower |
-| shortest_path | benostreamdb | ✅ Pass | 16.493s | 0.08 ms | 13 | 4.96x |
-| shortest_path | networkx | ✅ Pass | 8.682s | 0.39 ms | 13 | 1.00x (baseline) |
-| shortest_path | neo4j | ✅ Pass | 89.002s | 26.99 ms | 1 | 69× slower |
+| connected_components | benostreamdb | ✅ Pass | 15.003s | 660.85 ms | 2638 | 1.49x |
+| connected_components | networkx | ✅ Pass | 7.502s | 987.01 ms | 2638 | 1.00x (baseline) |
+| connected_components | neo4j | ✅ Pass | 87.007s | 31716.89 ms | 1965206 | 32× slower |
+| pagerank | benostreamdb | ✅ Pass | 15.084s | 3098.10 ms | 1965206 | 1.21x |
+| pagerank | networkx | ✅ Pass | 8.802s | 3763.81 ms | 1965206 | 1.00x (baseline) |
+| pagerank | neo4j | ✅ Pass | 87.007s | 31525.01 ms | 1965206 | 8× slower |
+| shortest_path | benostreamdb | ✅ Pass | 15.001s | 0.07 ms | 13 | 5.19x |
+| shortest_path | networkx | ✅ Pass | 8.543s | 0.38 ms | 13 | 1.00x (baseline) |
+| shortest_path | neo4j | ✅ Pass | 87.007s | 14.19 ms | 1 | 37× slower |
 
 ### Real-World Graph Scale — `snap_web_google`
 
@@ -128,15 +128,15 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 
 | Algorithm | Engine | Status | Build (s) | Execution (ms) | Result size | Speedup vs NetworkX |
 |---|---|---|---|---|---|---|
-| connected_components | benostreamdb | ✅ Pass | 14.555s | 774.09 ms | 2746 | 1.53x |
-| connected_components | networkx | ✅ Pass | 8.344s | 1183.56 ms | 2746 | 1.00x (baseline) |
-| connected_components | neo4j | ✅ Pass | 106.414s | 14206.43 ms | 875713 | 12× slower |
-| pagerank | benostreamdb | ✅ Pass | 14.532s | 1680.61 ms | 875713 | 1.87x |
-| pagerank | networkx | ✅ Pass | 8.706s | 3135.56 ms | 875713 | 1.00x (baseline) |
-| pagerank | neo4j | ✅ Pass | 106.414s | 13660.52 ms | 875713 | 4× slower |
-| shortest_path | benostreamdb | ✅ Pass | 15.066s | 4.47 ms | 14 | 1.28x |
-| shortest_path | networkx | ✅ Pass | 8.520s | 5.71 ms | 14 | 1.00x (baseline) |
-| shortest_path | neo4j | ✅ Pass | 106.414s | 311.98 ms | 1 | 55× slower |
+| connected_components | benostreamdb | ✅ Pass | 14.288s | 775.43 ms | 2746 | 1.50x |
+| connected_components | networkx | ✅ Pass | 8.272s | 1166.31 ms | 2746 | 1.00x (baseline) |
+| connected_components | neo4j | ✅ Pass | 100.480s | 14148.93 ms | 875713 | 12× slower |
+| pagerank | benostreamdb | ✅ Pass | 14.393s | 1860.95 ms | 875713 | 1.74x |
+| pagerank | networkx | ✅ Pass | 8.905s | 3235.44 ms | 875713 | 1.00x (baseline) |
+| pagerank | neo4j | ✅ Pass | 100.480s | 14045.77 ms | 875713 | 4× slower |
+| shortest_path | benostreamdb | ✅ Pass | 14.587s | 1.98 ms | 14 | 2.89x |
+| shortest_path | networkx | ✅ Pass | 8.117s | 5.73 ms | 14 | 1.00x (baseline) |
+| shortest_path | neo4j | ✅ Pass | 100.480s | 258.91 ms | 1 | 45× slower |
 
 
 ## 3. SQL OLAP Performance (ClickBench Q0–Q9: BenoStreamDB vs DuckDB vs DataFusion)
@@ -153,24 +153,24 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 
 | Query | benostreamdb | duckdb | datafusion |
 |---| --- | --- | --- |
-| **Q0 (count)** | 2.1 ms | 0.5 ms | 0.5 ms |
-| **Q1 (filter count)** | 7.3 ms | 3.0 ms | 2.6 ms |
-| **Q2 (multi-agg)** | 10.3 ms | 3.4 ms | 3.6 ms |
-| **Q3 (avg int)** | 6.1 ms | 3.1 ms | 3.5 ms |
-| **Q4 (distinct user)** | 11.4 ms | 27.9 ms | 8.4 ms |
-| **Q5 (distinct phrase)** | 15.7 ms | 4.8 ms | 4.0 ms |
-| **Q6 (min/max date)** | 5.4 ms | 0.4 ms | 0.5 ms |
-| **Q7 (group by agg)** | 7.2 ms | 4.2 ms | 4.0 ms |
-| **Q8 (group by distinct)** | 19.8 ms | 35.9 ms | 13.5 ms |
-| **Q9 (string filter group)** | 24.7 ms | 38.5 ms | 15.1 ms |
+| **Q0 (count)** | 2.3 ms | 0.4 ms | 0.5 ms |
+| **Q1 (filter count)** | 7.5 ms | 3.0 ms | 2.7 ms |
+| **Q2 (multi-agg)** | 9.6 ms | 3.7 ms | 3.4 ms |
+| **Q3 (avg int)** | 6.2 ms | 4.2 ms | 3.4 ms |
+| **Q4 (distinct user)** | 11.3 ms | 27.7 ms | 9.7 ms |
+| **Q5 (distinct phrase)** | 14.6 ms | 5.1 ms | 4.4 ms |
+| **Q6 (min/max date)** | 4.9 ms | 0.5 ms | 0.5 ms |
+| **Q7 (group by agg)** | 5.8 ms | 3.4 ms | 3.8 ms |
+| **Q8 (group by distinct)** | 17.1 ms | 31.0 ms | 13.7 ms |
+| **Q9 (string filter group)** | 21.2 ms | 36.6 ms | 15.2 ms |
 
 ### Ingestion & Total Execution Time
 
 | Engine | Ingestion (s) | Total Warm SQL Time (ms) | Status |
 |---|---|---|---|
-| benostreamdb | 0.19s | 110.1 ms | ✅ Pass |
-| duckdb | Direct Parquet Scan | 121.7 ms | ✅ Pass |
-| datafusion | Direct Parquet Scan | 55.7 ms | ✅ Pass |
+| benostreamdb | 0.18s | 100.4 ms | ✅ Pass |
+| duckdb | Direct Parquet Scan | 115.6 ms | ✅ Pass |
+| datafusion | Direct Parquet Scan | 57.2 ms | ✅ Pass |
 
 
 ## 4. Lexical & Hybrid Search Performance (BEIR SciFact: BM25 vs Tantivy & Hybrid RRF)
@@ -179,12 +179,90 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 
 | Engine | Index Precision | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| tantivy | - | cpu | lexical_bm25 | arguana | 0.67 | 0.3226 | 0.2137 | 393.7 | 2.409 | 5.108 | 0.1 | 10.46 |
-| **benostreamdb** | - | cpu | lexical_bm25 | arguana | 0.655 | 0.3084 | 0.1994 | 53.2 | 18.239 | 34.32 | 0.511 | 4.08 |
-| tantivy | - | cpu | lexical_bm25 | nfcorpus | 0.1441 | 0.2992 | 0.5092 | 11214.7 | 0.048 | 0.21 | 0.066 | 6.23 |
-| **benostreamdb** | - | cpu | lexical_bm25 | nfcorpus | 0.1491 | 0.3069 | 0.5151 | 743.3 | 1.116 | 2.454 | 0.302 | 2.46 |
-| tantivy | - | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 3463.9 | 0.239 | 0.555 | 0.081 | 8.34 |
-| **benostreamdb** | - | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 341.0 | 2.824 | 4.621 | 0.38 | 3.31 |
+| tantivy | - | cpu | lexical_bm25 | arguana | 0.67 | 0.3226 | 0.2137 | 395.6 | 2.419 | 5.146 | 0.181 | 10.42 |
+| opensearch | - | cpu | lexical_bm25 | arguana | 0.7461 | 0.3557 | 0.233 | 123.2 | 7.052 | 24.215 | 0.916 | 7.9 |
+| **benostreamdb** | - | cpu | lexical_bm25 | arguana | 0.655 | 0.3084 | 0.1994 | 54.0 | 17.782 | 31.044 | 0.476 | 4.08 |
+| tantivy | - | cpu | lexical_bm25 | nfcorpus | 0.1452 | 0.2998 | 0.5094 | 10697.8 | 0.052 | 0.192 | 0.15 | 6.21 |
+| opensearch | - | cpu | lexical_bm25 | nfcorpus | 0.1532 | 0.3215 | 0.5187 | 1171.9 | 0.851 | 1.197 | 0.557 | 4.85 |
+| **benostreamdb** | - | cpu | lexical_bm25 | nfcorpus | 0.1491 | 0.3067 | 0.5151 | 655.5 | 1.335 | 2.362 | 0.297 | 2.46 |
+| tantivy | - | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 3429.5 | 0.233 | 0.585 | 0.183 | 8.35 |
+| opensearch | - | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 712.7 | 1.197 | 3.552 | 0.781 | 6.62 |
+| **benostreamdb** | - | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 325.6 | 2.964 | 4.625 | 0.382 | 3.31 |
+
+### Results from `arguana_bm25_competitors_cpu.md`
+
+# BEIR Lexical / BM25 Benchmark Results
+
+- **Dataset**: `arguana`
+- **Corpus Documents**: 8,674
+- **Evaluated Queries**: 1,406
+- **Top-K**: 10
+- **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
+
+| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
+|---|---|---|---|---|---|---|---|---|---|
+| **tantivy** | `cpu` | ✅ Pass | 0.18s | 10.4 MB | **395.6** | **2.42 ms** | 5.15 ms | 0.6700 | 0.3226 |
+| **opensearch** | `cpu` | ✅ Pass | 0.92s | 7.9 MB | **123.2** | **7.05 ms** | 24.22 ms | 0.7461 | 0.3557 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.48s | 4.1 MB | **54.0** | **17.78 ms** | 31.04 ms | 0.6550 | 0.3084 |
+
+### Differential Oracle & Result Agreement
+
+- **Top-10 Jaccard Overlap vs tantivy**: **65.8%**.
+- **Top-10 Jaccard Overlap vs opensearch**: **55.9%**.
+- High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
+
+### Results from `nfcorpus_bm25_competitors_cpu.md`
+
+# BEIR Lexical / BM25 Benchmark Results
+
+- **Dataset**: `nfcorpus`
+- **Corpus Documents**: 3,633
+- **Evaluated Queries**: 323
+- **Top-K**: 10
+- **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
+
+| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
+|---|---|---|---|---|---|---|---|---|---|
+| **tantivy** | `cpu` | ✅ Pass | 0.15s | 6.2 MB | **10697.8** | **0.05 ms** | 0.19 ms | 0.1452 | 0.2998 |
+| **opensearch** | `cpu` | ✅ Pass | 0.56s | 4.8 MB | **1171.9** | **0.85 ms** | 1.20 ms | 0.1532 | 0.3215 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.30s | 2.5 MB | **655.5** | **1.34 ms** | 2.36 ms | 0.1491 | 0.3067 |
+
+### Differential Oracle & Result Agreement
+
+- **Top-10 Jaccard Overlap vs tantivy**: **92.2%**.
+- **Top-10 Jaccard Overlap vs opensearch**: **61.9%**.
+- High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
+
+### Results from `scifact_bm25_competitors_cpu.md`
+
+# BEIR Lexical / BM25 Benchmark Results
+
+- **Dataset**: `scifact`
+- **Corpus Documents**: 5,183
+- **Evaluated Queries**: 300
+- **Top-K**: 10
+- **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
+
+| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
+|---|---|---|---|---|---|---|---|---|---|
+| **tantivy** | `cpu` | ✅ Pass | 0.18s | 8.3 MB | **3429.5** | **0.23 ms** | 0.58 ms | 0.7812 | 0.6517 |
+| **opensearch** | `cpu` | ✅ Pass | 0.78s | 6.6 MB | **712.7** | **1.20 ms** | 3.55 ms | 0.8196 | 0.6821 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.38s | 3.3 MB | **325.6** | **2.96 ms** | 4.63 ms | 0.7909 | 0.6617 |
+
+### Differential Oracle & Result Agreement
+
+- **Top-10 Jaccard Overlap vs tantivy**: **81.4%**.
+- **Top-10 Jaccard Overlap vs opensearch**: **53.1%**.
+- High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
 
 
 ## 5. Production Workload & Concurrency Performance
@@ -198,12 +276,12 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 
 | Concurrency (Threads) | Throughput (QPS) | Scaling Speedup | p50 Latency | p90 Latency | p99 Latency |
 |---|---|---|---|---|---|
-| **1** | **589.5** | **1.00x** | 1.63 ms | 1.84 ms | 2.43 ms |
-| **2** | **1092.3** | **1.85x** | 1.72 ms | 2.07 ms | 2.66 ms |
-| **4** | **1519.1** | **2.58x** | 2.49 ms | 3.05 ms | 3.83 ms |
-| **8** | **1412.7** | **2.40x** | 5.44 ms | 7.21 ms | 9.02 ms |
-| **16** | **1294.0** | **2.20x** | 11.14 ms | 15.99 ms | 19.86 ms |
-| **32** | **1292.6** | **2.19x** | 7.48 ms | 11.67 ms | 30.00 ms |
+| **1** | **473.2** | **1.00x** | 2.04 ms | 2.33 ms | 2.94 ms |
+| **2** | **898.2** | **1.90x** | 2.14 ms | 2.49 ms | 3.07 ms |
+| **4** | **1477.1** | **3.12x** | 2.58 ms | 3.09 ms | 4.09 ms |
+| **8** | **1432.5** | **3.03x** | 5.37 ms | 6.86 ms | 8.43 ms |
+| **16** | **1331.3** | **2.81x** | 10.77 ms | 15.11 ms | 20.37 ms |
+| **32** | **1231.4** | **2.60x** | 9.34 ms | 25.62 ms | 41.32 ms |
 
 ### Tail Latency Under Background Maintenance (Compaction)
 
@@ -212,10 +290,10 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 | engine | benostreamdb |
 | workload | maintenance_saturation |
 | concurrency | 8 |
-| baseline_p99_ms | 305.56 |
-| maintenance_p99_ms | 260.58 |
-| inflation_factor | 0.85 |
-| queries_during_compaction | 1135 |
+| baseline_p99_ms | 253.86 |
+| maintenance_p99_ms | 245.1 |
+| inflation_factor | 0.97 |
+| queries_during_compaction | 979 |
 
 ## 6. Pathological Filters & Differential Oracle Benchmark
 
@@ -225,20 +303,20 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 - **Competitor Oracle**: DuckDB (in-process analytical SQL)
 - **Dataset**: ClickBench schema with 200,000 rows (multi-column mixed types)
 - **Host**: x86_64 (Linux)
-- **Measured DataFusion Session & Planning Overhead**: **0.74 ms** per query
+- **Measured DataFusion Session & Planning Overhead**: **0.76 ms** per query
 
 | Filter Test Case | Selectivity | BenoStreamDB Total | Session / Plan Overhead | Pure Compute / Scan | DuckDB p50 | Differential Oracle Match | Status |
 |---|---|---|---|---|---|---|---|
-| **F1 (Ultra-Selective 0.01%)** | 0.0% | **8.47 ms** | 0.74 ms | **7.74 ms** | 1.70 ms | ✅ 100% Agreement | ✅ PASS |
-| **F2 (Moderate Filter 5%)** | 4.98% | **9.71 ms** | 0.74 ms | **8.97 ms** | 1.69 ms | ✅ 100% Agreement | ✅ PASS |
-| **F3 (Pathological Low-Selectivity 99.5%)** | 100.0% | **6.37 ms** | 0.74 ms | **5.63 ms** | 1.09 ms | ✅ 100% Agreement | ✅ PASS |
-| **F4 (High-Cardinality IN List 50 items)** | 15.82% | **3.58 ms** | 0.74 ms | **2.84 ms** | 1.76 ms | ✅ 100% Agreement | ✅ PASS |
-| **F5 (Compound Negation & Range)** | 8.33% | **8.09 ms** | 0.74 ms | **7.35 ms** | 1.57 ms | ✅ 100% Agreement | ✅ PASS |
-| **F6 (Prefix String Filter)** | 16.7% | **5.30 ms** | 0.74 ms | **4.56 ms** | 0.91 ms | ✅ 100% Agreement | ✅ PASS |
-| **F7 (Unanchored Substring Filter)** | 14.32% | **6.69 ms** | 0.74 ms | **5.95 ms** | 0.93 ms | ✅ 100% Agreement | ✅ PASS |
+| **F1 (Ultra-Selective 0.01%)** | 0.0% | **10.20 ms** | 0.76 ms | **9.44 ms** | 2.77 ms | ✅ 100% Agreement | ✅ PASS |
+| **F2 (Moderate Filter 5%)** | 4.98% | **9.42 ms** | 0.76 ms | **8.66 ms** | 2.10 ms | ✅ 100% Agreement | ✅ PASS |
+| **F3 (Pathological Low-Selectivity 99.5%)** | 100.0% | **7.00 ms** | 0.76 ms | **6.24 ms** | 0.93 ms | ✅ 100% Agreement | ✅ PASS |
+| **F4 (High-Cardinality IN List 50 items)** | 15.82% | **3.61 ms** | 0.76 ms | **2.85 ms** | 1.66 ms | ✅ 100% Agreement | ✅ PASS |
+| **F5 (Compound Negation & Range)** | 8.33% | **7.69 ms** | 0.76 ms | **6.93 ms** | 1.23 ms | ✅ 100% Agreement | ✅ PASS |
+| **F6 (Prefix String Filter)** | 16.7% | **5.31 ms** | 0.76 ms | **4.55 ms** | 1.00 ms | ✅ 100% Agreement | ✅ PASS |
+| **F7 (Unanchored Substring Filter)** | 14.32% | **6.86 ms** | 0.76 ms | **6.10 ms** | 0.84 ms | ✅ 100% Agreement | ✅ PASS |
 
 ### DataFusion Execution & Overhead Analysis
-1. **Per-Query Session Overhead (0.74 ms)**: In the current Python API (`table.sql()`), each query instantiates a new DataFusion `SessionContext` and registers all standard scalar/aggregate functions, vector operators, and graph UDFs from scratch before planning begins.
+1. **Per-Query Session Overhead (0.76 ms)**: In the current Python API (`table.sql()`), each query instantiates a new DataFusion `SessionContext` and registers all standard scalar/aggregate functions, vector operators, and graph UDFs from scratch before planning begins.
 2. **Morsel Execution vs Async Channels**: DuckDB executes queries synchronously using C++ morsel work-stealing, whereas DataFusion routes batches across 32 async Tokio channels (`RoundRobinBatch(32)`), introducing channel serialization overhead on sub-million row tables.
 3. **Differential Oracle Invariance**: Across all selective, low-selectivity (99.5%), high-cardinality `IN` lists (50 items), and string wildcards, BenoStreamDB achieves 100% mathematical equality against DuckDB with no pathological performance cliff.
 
@@ -254,14 +332,14 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 ### 1. Graph Degree Skew (Power-Law / Scale-Free Network)
 
 - **Dataset**: Scale-free network (20,000 nodes, 99,975 edges, max node degree = 667)
-- **Global PageRank (20 iterations)**: **22.88 ms**
+- **Global PageRank (20 iterations)**: **18.78 ms**
 
 | Degree Stratum | Avg Degree | 2-Hop Subgraph p50 | 2-Hop Subgraph p99 | Expanded Edges | Shortest Path p50 | Shortest Path p99 |
 |---|---|---|---|---|---|---|
-| **Low Degree (p25)** | 5.0 | **36.51 ms** | 47.11 ms | 239.0 | 0.04 ms | 5.07 ms |
-| **Median Degree (p50)** | 6.5 | **36.66 ms** | 44.00 ms | 347.0 | 0.05 ms | 0.16 ms |
-| **High Degree (p90)** | 10.6 | **37.09 ms** | 42.72 ms | 564.0 | 0.07 ms | 0.34 ms |
-| **Supernode Hub (p99+)** | 92.9 | **36.46 ms** | 40.61 ms | 5,676.0 | 0.08 ms | 0.24 ms |
+| **Low Degree (p25)** | 5.0 | **35.96 ms** | 46.14 ms | 239.0 | 0.04 ms | 3.90 ms |
+| **Median Degree (p50)** | 6.5 | **35.50 ms** | 39.09 ms | 347.0 | 0.04 ms | 0.07 ms |
+| **High Degree (p90)** | 10.6 | **37.16 ms** | 41.02 ms | 564.0 | 0.07 ms | 0.33 ms |
+| **Supernode Hub (p99+)** | 92.9 | **36.99 ms** | 41.58 ms | 5,676.0 | 0.09 ms | 0.27 ms |
 
 ### 2. Relational Filter Skew (Zipfian 80/20 Hot-Key Workload)
 
@@ -270,9 +348,9 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 
 | Query Pattern | Selectivity / Match Density | p50 Latency | p90 Latency | p99 Latency | Tail Inflation (p99/p50) | Status |
 |---|---|---|---|---|---|---|
-| **Hot-Key Point Filter** | Dense (Heavy Aggregation) | **6.47 ms** | - | 9.06 ms | 1.40x | ✅ PASS |
-| **Cold-Key Point Filter** | Sparse (Pruned Scans) | **5.89 ms** | - | 7.04 ms | 1.20x | ✅ PASS |
-| **Production Workload Mix (80/20)** | 80% Hot / 20% Cold | **6.35 ms** | 6.87 ms | **7.39 ms** | **1.16x** | ✅ PASS |
+| **Hot-Key Point Filter** | Dense (Heavy Aggregation) | **6.62 ms** | - | 8.54 ms | 1.29x | ✅ PASS |
+| **Cold-Key Point Filter** | Sparse (Pruned Scans) | **5.91 ms** | - | 6.69 ms | 1.13x | ✅ PASS |
+| **Production Workload Mix (80/20)** | 80% Hot / 20% Cold | **6.40 ms** | 7.02 ms | **8.05 ms** | **1.26x** | ✅ PASS |
 
 ### Skew Resilience Invariants Verified
 - **CSR Graph Supernode Traversal**: 2-hop neighborhood expansion on high-degree supernodes expands thousands of edges in low single-digit milliseconds without thrashing memory.
@@ -286,17 +364,17 @@ BenoStreamDB's embedded Rust engine parses the raw edge lists and builds an in-m
 
 | Field | Value |
 |---|---|
-| Started | 2026-11-12T12:52:22Z |
-| Finished | 2026-11-12T12:54:37Z |
+| Started | 2026-11-12T18:10:07Z |
+| Finished | 2026-11-12T18:13:25Z |
 | Soak duration | 60s |
 | Result | PASSED |
 
 ## Soak stats
 
 ```
-[soak-stats] test=mixed_workload_soak writes=350 duration_s=60 rows=20000 peak_rss_mb=581
-[soak-stats] test=maintenance_churn_soak rounds=49 duration_s=60 rows=1000 peak_rss_mb=580
-[soak-stats] test=multi_writer_soak writers=8 ops=2020 duration_s=60 rows=248748 peak_rss_mb=704
+[soak-stats] test=mixed_workload_soak writes=354 duration_s=60 rows=24000 peak_rss_mb=587
+[soak-stats] test=maintenance_churn_soak rounds=49 duration_s=60 rows=1000 peak_rss_mb=587
+[soak-stats] test=multi_writer_soak writers=8 ops=2277 duration_s=60 rows=241924 peak_rss_mb=752
 ```
 
 
@@ -327,171 +405,251 @@ Full-row retrieval hydrates the uncompressed `float32` payload directly from sto
 
 ### Vector — `fashion-mnist-784-euclidean`
 
-| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| faiss | f32 | — | 1.0 | True | 4568.7 | 0.214 | 0.332 | 4550.3 | 0.215 | 0.336 | 0.754 | 65.6 |
-| hnswlib | f32 | — | 1.0 | True | 4415.1 | 0.219 | 0.382 | 1986.5 | 0.498 | 0.631 | 1.461 | 65.69 |
-| weaviate | f32 | — | 1.0 | True | 903.8 | 1.095 | 1.533 | 626.4 | 1.563 | 1.986 | 5.019 | 62.72 |
-| **benostreamdb** | f32 | — | 0.9962 | True | 846.0 | 1.165 | 1.677 | 598.4 | 1.624 | 2.135 | 3.085 | 194.96 |
-| pgvector | f32 | — | 1.0 | True | 792.4 | 1.23 | 2.0 | 766.2 | 1.291 | 1.778 | 10.957 | 166.36 |
-| qdrant | f32 | — | 1.0 | True | 748.7 | 1.299 | 1.864 | 559.2 | 1.749 | 2.408 | 3.23 | 62.72 |
-| milvus | f32 | — | 1.0 | True | 555.0 | 1.645 | 2.314 | 455.7 | 2.154 | 3.087 | 9.603 | 62.72 |
-| opensearch | f32 | — | 1.0 | True | 496.8 | 1.975 | 2.536 | 354.7 | 2.795 | 3.647 | 6.365 | 153.73 |
-| lancedb | f32 | — | 1.0 | True | 324.3 | 2.811 | 3.532 | 315.3 | 3.048 | 4.51 | 2.806 | 128.71 |
-| faiss | sq | — | 0.9864 | True | 6445.3 | 0.152 | 0.229 | 6072.3 | 0.162 | 0.242 | 0.57 | 18.57 |
-| weaviate | sq | — | 1.0 | True | 881.4 | 1.117 | 1.51 | 594.5 | 1.649 | 2.26 | 5.216 | 15.68 |
-| qdrant | sq | — | 0.9936 | True | 870.6 | 1.132 | 1.51 | 629.4 | 1.565 | 2.098 | 4.401 | 15.68 |
-| **benostreamdb** | sq | — | 0.9962 | True | 622.1 | 1.588 | 2.027 | 467.0 | 2.106 | 2.681 | 4.879 | 147.93 |
-| milvus | sq | — | 0.9956 | True | 583.5 | 1.543 | 2.264 | 449.7 | 2.094 | 2.899 | 10.603 | 62.72 |
-| **benostreamdb** | tq8 | — | 0.9878 | True | 492.8 | 1.988 | 2.647 | 410.4 | 2.371 | 3.133 | 3.001 | 152.72 |
-| lancedb | sq | — | 1.0 | True | 372.8 | 2.571 | 3.088 | 344.0 | 2.788 | 4.376 | 1.976 | 81.67 |
+| faiss | f32 | True | 4353.2 | — | 1.0 | 0.219 | 0.403 | 4175.1 | 0.229 | 0.434 | 0.894 | 65.6 |
+| hnswlib | f32 | True | 4146.0 | — | 1.0 | 0.231 | 0.48 | 1989.3 | 0.496 | 0.652 | 1.561 | 65.69 |
+| weaviate | f32 | True | 825.4 | — | 1.0 | 1.196 | 1.653 | 539.5 | 1.812 | 2.535 | 5.142 | 62.72 |
+| **benostreamdb** | f32 | True | 814.8 | — | 0.9976 | 1.211 | 1.604 | 563.0 | 1.725 | 2.302 | 2.7 | 194.96 |
+| pgvector | f32 | True | 800.1 | — | 1.0 | 1.219 | 1.928 | 711.9 | 1.369 | 2.22 | 11.419 | 166.35 |
+| **benostreamdb+refine×4** | f32 | True | 788.4 | ×4 | 0.9976 | 1.248 | 1.763 | 371.5 | 2.642 | 3.334 | 2.799 | 194.96 |
+| **benostreamdb+refine×2** | f32 | True | 779.7 | ×2 | 0.9976 | 1.258 | 1.817 | 392.6 | 2.495 | 3.162 | 2.827 | 194.96 |
+| qdrant | f32 | True | 717.8 | — | 1.0 | 1.368 | 1.904 | 515.1 | 1.913 | 2.5 | 2.935 | 62.72 |
+| milvus | f32 | True | 506.0 | — | 1.0 | 1.762 | 3.111 | 423.5 | 2.329 | 3.083 | 10.608 | 62.72 |
+| opensearch | f32 | True | 448.4 | — | 1.0 | 2.185 | 2.927 | 322.2 | 3.041 | 4.007 | 6.421 | 153.74 |
+| lancedb | f32 | True | 300.4 | — | 1.0 | 3.069 | 3.653 | 286.5 | 3.367 | 5.154 | 2.935 | 128.71 |
+| lancedb+refine×2 | f32 | True | 241.6 | ×2 | 1.0 | 3.853 | 4.97 | 248.1 | 3.914 | 5.6 | 2.842 | 128.71 |
+| lancedb+refine×4 | f32 | True | 241.0 | ×4 | 1.0 | 3.93 | 4.77 | 236.2 | 4.116 | 5.814 | 2.909 | 128.71 |
+| faiss | sq | True | 5838.7 | — | 0.9864 | 0.167 | 0.264 | 5567.4 | 0.177 | 0.249 | 0.577 | 18.57 |
+| qdrant | sq | True | 891.6 | — | 0.9922 | 1.075 | 1.568 | 617.2 | 1.603 | 2.13 | 3.006 | 15.68 |
+| weaviate | sq | True | 832.8 | — | 1.0 | 1.18 | 1.663 | 557.8 | 1.738 | 2.767 | 4.14 | 15.68 |
+| **benostreamdb** | sq | True | 592.7 | — | 0.9974 | 1.666 | 2.131 | 427.1 | 2.308 | 3.022 | 5.192 | 147.93 |
+| **benostreamdb+refine×2** | sq | True | 587.7 | ×2 | 0.9976 | 1.68 | 2.187 | 293.4 | 3.388 | 4.749 | 5.447 | 147.93 |
+| milvus | sq | True | 583.1 | — | 0.9956 | 1.534 | 2.348 | 434.3 | 2.17 | 3.188 | 9.647 | 62.72 |
+| **benostreamdb+refine×4** | sq | True | 554.0 | ×4 | 0.9976 | 1.787 | 2.265 | 285.7 | 3.465 | 4.225 | 4.912 | 147.93 |
+| **benostreamdb** | tq8 | True | 482.4 | — | 0.988 | 2.033 | 2.748 | 387.0 | 2.555 | 3.225 | 2.736 | 152.72 |
+| **benostreamdb+refine×4** | tq8 | True | 458.5 | ×4 | 0.9976 | 2.146 | 2.878 | 257.8 | 3.855 | 4.955 | 3.233 | 152.72 |
+| **benostreamdb+refine×2** | tq8 | True | 428.3 | ×2 | 0.9976 | 2.313 | 3.003 | 306.7 | 3.218 | 4.06 | 2.582 | 152.72 |
+| lancedb | sq | True | 360.7 | — | 1.0 | 2.613 | 3.51 | 332.0 | 2.899 | 4.456 | 2.038 | 81.67 |
+| lancedb+refine×2 | sq | True | 283.5 | ×2 | 1.0 | 3.424 | 4.307 | 276.4 | 3.516 | 5.02 | 2.037 | 81.67 |
+| lancedb+refine×4 | sq | True | 255.0 | ×4 | 1.0 | 3.728 | 5.127 | 260.5 | 3.715 | 5.424 | 2.05 | 81.67 |
 
 ### Vector — `gist-960-euclidean`
 
-| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| faiss | f32 | — | 0.9916 | True | 2252.6 | 0.445 | 0.675 | 2267.8 | 0.437 | 0.707 | 1.518 | 79.68 |
-| hnswlib | f32 | — | 0.9916 | True | 1980.5 | 0.497 | 0.85 | 1116.1 | 0.876 | 1.531 | 3.304 | 79.77 |
-| weaviate | f32 | — | 0.9918 | True | 689.3 | 1.429 | 2.114 | 460.2 | 2.151 | 2.836 | 6.611 | 76.8 |
-| **benostreamdb** | f32 | — | 0.9752 | True | 668.9 | 1.473 | 2.195 | 471.1 | 2.056 | 3.494 | 3.181 | 237.25 |
-| qdrant | f32 | — | 0.997 | True | 500.5 | 1.951 | 2.664 | 349.9 | 2.81 | 4.106 | 4.345 | 76.8 |
-| milvus | f32 | — | 0.9944 | True | 474.6 | 1.959 | 2.576 | 386.2 | 2.56 | 3.384 | 11.596 | 76.8 |
-| pgvector | f32 | — | 0.9988 | True | 332.5 | 3.062 | 3.891 | 293.0 | 3.41 | 5.313 | 26.17 | 247.3 |
-| lancedb | f32 | — | 0.9984 | True | 266.5 | 3.472 | 4.584 | 255.9 | 3.76 | 5.794 | 4.557 | 156.75 |
-| opensearch | f32 | — | 0.9958 | True | 186.5 | 5.358 | 6.649 | 136.3 | 7.176 | 8.887 | 16.876 | 352.93 |
-| faiss | sq | — | 0.9812 | True | 3543.5 | 0.288 | 0.421 | 3362.1 | 0.302 | 0.393 | 0.889 | 22.09 |
-| qdrant | sq | — | 0.9538 | True | 674.7 | 1.447 | 2.049 | 444.3 | 2.231 | 2.788 | 4.32 | 19.2 |
-| weaviate | sq | — | 0.9902 | True | 668.4 | 1.495 | 2.051 | 468.2 | 2.115 | 2.922 | 6.457 | 19.2 |
-| **benostreamdb** | sq | — | 0.9672 | True | 506.8 | 1.942 | 2.611 | 421.3 | 2.359 | 3.026 | 6.093 | 179.68 |
-| **benostreamdb** | tq8 | — | 0.9518 | True | 498.8 | 1.968 | 2.719 | 406.1 | 2.438 | 3.164 | 3.467 | 180.94 |
-| lancedb | sq | — | 0.965 | True | 359.6 | 2.673 | 3.068 | 325.0 | 2.985 | 4.525 | 2.553 | 99.15 |
-| milvus | sq | — | 0.8568 | False | 556.7 | 1.65 | 2.164 | 421.8 | 2.251 | 6.311 | 10.42 | 76.8 |
+| faiss | f32 | True | 2579.9 | — | 0.9916 | 0.387 | 0.625 | 2308.9 | 0.419 | 0.815 | 1.496 | 79.68 |
+| hnswlib | f32 | True | 2073.5 | — | 0.9912 | 0.488 | 0.749 | 1238.3 | 0.815 | 1.114 | 3.112 | 79.77 |
+| **benostreamdb+refine×4** | f32 | True | 829.1 | ×4 | 0.9776 | 1.179 | 1.603 | 359.3 | 2.736 | 3.413 | 3.416 | 237.25 |
+| **benostreamdb+refine×2** | f32 | True | 789.8 | ×2 | 0.9776 | 1.254 | 1.741 | 396.0 | 2.47 | 3.311 | 3.42 | 237.25 |
+| **benostreamdb** | f32 | True | 718.9 | — | 0.9776 | 1.376 | 1.877 | 490.9 | 1.999 | 2.988 | 4.005 | 237.25 |
+| weaviate | f32 | True | 585.0 | — | 0.9916 | 1.684 | 2.563 | 434.5 | 2.252 | 3.222 | 6.567 | 76.8 |
+| qdrant | f32 | True | 476.1 | — | 0.9972 | 2.074 | 2.984 | 335.2 | 2.925 | 4.412 | 4.17 | 76.8 |
+| milvus | f32 | True | 468.4 | — | 0.9948 | 1.969 | 2.689 | 402.0 | 2.454 | 3.371 | 14.69 | 76.8 |
+| pgvector | f32 | True | 335.1 | — | 0.999 | 3.042 | 3.987 | 305.3 | 3.325 | 4.087 | 24.867 | 247.28 |
+| lancedb | f32 | True | 267.4 | — | 0.9982 | 3.48 | 4.449 | 257.7 | 3.777 | 5.57 | 4.51 | 156.74 |
+| lancedb+refine×2 | f32 | True | 223.0 | ×2 | 0.9972 | 4.184 | 5.32 | 213.3 | 4.474 | 7.385 | 4.423 | 156.75 |
+| lancedb+refine×4 | f32 | True | 217.9 | ×4 | 0.9986 | 4.308 | 5.285 | 213.8 | 4.569 | 6.498 | 4.769 | 156.75 |
+| opensearch | f32 | True | 204.5 | — | 0.995 | 4.873 | 6.501 | 145.8 | 6.849 | 7.949 | 17.406 | 599.29 |
+| faiss | sq | True | 3307.2 | — | 0.9812 | 0.305 | 0.429 | 3259.7 | 0.308 | 0.448 | 0.907 | 22.09 |
+| qdrant | sq | True | 637.1 | — | 0.9598 | 1.51 | 2.405 | 358.5 | 2.772 | 3.602 | 4.27 | 19.2 |
+| weaviate | sq | True | 602.9 | — | 0.991 | 1.642 | 2.404 | 409.8 | 2.445 | 3.395 | 6.776 | 19.2 |
+| **benostreamdb+refine×4** | sq | True | 523.6 | ×4 | 0.9776 | 1.894 | 2.563 | 271.5 | 3.585 | 5.11 | 5.224 | 179.67 |
+| **benostreamdb+refine×2** | sq | True | 491.2 | ×2 | 0.9776 | 2.003 | 2.716 | 290.5 | 3.4 | 4.346 | 5.506 | 179.67 |
+| **benostreamdb** | sq | True | 486.1 | — | 0.968 | 2.029 | 2.745 | 372.8 | 2.612 | 3.772 | 5.465 | 179.67 |
+| **benostreamdb+refine×4** | tq8 | True | 477.0 | ×4 | 0.9778 | 2.073 | 2.862 | 259.4 | 3.801 | 4.931 | 3.02 | 180.93 |
+| **benostreamdb** | tq8 | True | 463.9 | — | 0.9558 | 2.12 | 2.896 | 411.6 | 2.387 | 3.136 | 3.247 | 180.93 |
+| **benostreamdb+refine×2** | tq8 | True | 449.7 | ×2 | 0.9778 | 2.198 | 2.969 | 291.7 | 3.382 | 4.461 | 3.006 | 180.93 |
+| lancedb | sq | True | 334.6 | — | 0.9654 | 2.827 | 3.563 | 299.0 | 3.195 | 4.946 | 2.479 | 99.15 |
+| lancedb+refine×2 | sq | True | 264.1 | ×2 | 0.998 | 3.628 | 5.04 | 244.6 | 3.881 | 6.679 | 3.076 | 99.15 |
+| lancedb+refine×4 | sq | True | 219.7 | ×4 | 0.9986 | 4.323 | 6.064 | 215.3 | 4.461 | 6.979 | 2.652 | 99.14 |
+| milvus | sq | False | 534.6 | — | 0.8568 | 1.69 | 2.53 | 388.2 | 2.436 | 6.133 | 10.852 | 76.8 |
 
 ### Vector — `glove-100-angular`
 
-| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| faiss | f32 | — | 0.9826 | True | 6381.8 | 0.151 | 0.287 | 6737.3 | 0.148 | 0.203 | 0.413 | 10.88 |
-| hnswlib | f32 | — | 0.9752 | True | 3467.5 | 0.129 | 0.285 | 5812.5 | 0.171 | 0.264 | 0.616 | 10.97 |
-| **benostreamdb** | f32 | — | 0.9894 | True | 1830.3 | 0.534 | 0.754 | 1017.2 | 0.911 | 1.278 | 1.395 | 30.52 |
-| qdrant | f32 | — | 1.0 | True | 844.3 | 1.001 | 1.848 | 859.4 | 1.142 | 1.551 | 0.795 | 8.0 |
-| weaviate | f32 | — | 0.9756 | True | 771.2 | 1.119 | 1.776 | 808.3 | 1.231 | 1.562 | 4.227 | 8.0 |
-| pgvector | f32 | — | 0.9852 | True | 623.0 | 1.495 | 2.318 | 663.3 | 1.509 | 2.064 | 6.279 | 24.85 |
-| milvus | f32 | — | 0.984 | True | 508.2 | 1.642 | 2.139 | 486.8 | 2.017 | 2.694 | 8.95 | 8.0 |
-| lancedb | f32 | — | 0.9768 | True | 335.6 | 2.661 | 3.578 | 363.5 | 2.732 | 3.349 | 0.84 | 19.27 |
-| opensearch | f32 | — | 0.9952 | True | 257.2 | 3.685 | 5.161 | 239.7 | 4.127 | 5.552 | 8.46 | 47.05 |
-| faiss | sq | — | 0.9704 | True | 1560.8 | 0.492 | 0.813 | 1992.1 | 0.513 | 0.655 | 1.924 | 4.88 |
-| **benostreamdb** | sq | — | 0.9778 | True | 1433.9 | 0.691 | 0.843 | 882.5 | 1.072 | 1.318 | 1.818 | 24.51 |
-| **benostreamdb** | tq8 | — | 0.9768 | True | 1315.1 | 0.752 | 0.92 | 730.9 | 1.127 | 1.464 | 1.261 | 25.07 |
-| weaviate | sq | — | 0.975 | True | 872.1 | 1.135 | 1.716 | 774.2 | 1.28 | 1.632 | 4.297 | 2.0 |
-| qdrant | sq | — | 1.0 | True | 830.6 | 1.011 | 1.624 | 826.1 | 1.197 | 1.697 | 0.831 | 2.0 |
-| lancedb | sq | — | 0.9502 | True | 341.8 | 2.647 | 3.28 | 355.0 | 2.794 | 3.527 | 0.771 | 13.27 |
-| milvus | sq | — | 0.7656 | False | 583.2 | 1.494 | 2.317 | 512.4 | 1.87 | 2.791 | 8.939 | 8.0 |
+| hnswlib | f32 | True | 3335.8 | — | 0.9758 | 0.139 | 0.332 | 5182.7 | 0.187 | 0.291 | 0.605 | 10.97 |
+| faiss | f32 | True | 3153.0 | — | 0.9826 | 0.156 | 0.336 | 6086.1 | 0.159 | 0.234 | 0.431 | 10.88 |
+| **benostreamdb+refine×2** | f32 | True | 1875.7 | ×2 | 0.9906 | 0.526 | 0.684 | 585.9 | 1.526 | 2.328 | 1.511 | 30.51 |
+| **benostreamdb** | f32 | True | 1788.9 | — | 0.9906 | 0.548 | 0.813 | 876.3 | 0.886 | 1.2 | 1.372 | 30.51 |
+| **benostreamdb+refine×4** | f32 | True | 1720.9 | ×4 | 0.9906 | 0.56 | 0.904 | 470.0 | 1.853 | 2.579 | 1.404 | 30.51 |
+| qdrant | f32 | True | 819.0 | — | 1.0 | 1.024 | 1.548 | 829.1 | 1.177 | 1.871 | 0.928 | 8.0 |
+| weaviate | f32 | True | 635.4 | — | 0.9748 | 1.397 | 2.027 | 685.3 | 1.423 | 2.046 | 4.339 | 8.0 |
+| pgvector | f32 | True | 558.1 | — | 0.9848 | 1.624 | 2.609 | 622.4 | 1.621 | 2.075 | 6.545 | 24.85 |
+| milvus | f32 | True | 470.6 | — | 0.9836 | 1.752 | 2.547 | 418.6 | 2.325 | 3.55 | 8.823 | 8.0 |
+| lancedb | f32 | True | 318.9 | — | 0.977 | 2.84 | 3.819 | 340.4 | 2.89 | 3.634 | 0.902 | 19.27 |
+| lancedb+refine×4 | f32 | True | 262.6 | ×4 | 0.976 | 3.652 | 5.055 | 266.3 | 3.725 | 4.8 | 0.861 | 19.27 |
+| lancedb+refine×2 | f32 | True | 258.3 | ×2 | 0.9786 | 3.557 | 4.732 | 278.4 | 3.532 | 4.62 | 0.862 | 19.27 |
+| opensearch | f32 | True | 193.0 | — | 0.992 | 5.131 | 8.156 | 206.3 | 5.095 | 7.732 | 12.249 | 94.94 |
+| faiss | sq | True | 2127.7 | — | 0.9704 | 0.478 | 0.743 | 2138.4 | 0.479 | 0.586 | 1.931 | 4.88 |
+| **benostreamdb** | sq | True | 1398.0 | — | 0.9788 | 0.702 | 0.924 | 845.5 | 1.094 | 1.431 | 2.103 | 24.51 |
+| **benostreamdb+refine×4** | sq | True | 1377.8 | ×4 | 0.9902 | 0.717 | 0.928 | 423.1 | 2.094 | 2.803 | 1.83 | 24.51 |
+| **benostreamdb+refine×2** | sq | True | 1376.2 | ×2 | 0.9902 | 0.711 | 0.928 | 499.4 | 1.746 | 2.469 | 2.152 | 24.51 |
+| **benostreamdb** | tq8 | True | 1225.0 | — | 0.9766 | 0.8 | 1.237 | 676.8 | 1.231 | 1.989 | 1.251 | 25.07 |
+| **benostreamdb+refine×4** | tq8 | True | 1221.0 | ×4 | 0.9892 | 0.79 | 1.323 | 408.2 | 2.19 | 3.203 | 1.516 | 25.07 |
+| **benostreamdb+refine×2** | tq8 | True | 1218.2 | ×2 | 0.9892 | 0.802 | 1.18 | 480.6 | 1.838 | 2.436 | 1.232 | 25.07 |
+| qdrant | sq | True | 797.9 | — | 1.0 | 1.058 | 1.622 | 812.3 | 1.212 | 1.714 | 1.295 | 2.0 |
+| weaviate | sq | True | 748.9 | — | 0.9752 | 1.122 | 1.844 | 706.4 | 1.363 | 2.229 | 4.361 | 2.0 |
+| lancedb | sq | True | 365.3 | — | 0.953 | 2.627 | 3.191 | 354.4 | 2.794 | 3.3 | 0.787 | 13.27 |
+| lancedb+refine×2 | sq | True | 251.6 | ×2 | 0.9772 | 3.642 | 4.703 | 274.6 | 3.595 | 4.405 | 0.855 | 13.27 |
+| lancedb+refine×4 | sq | True | 236.1 | ×4 | 0.9766 | 3.974 | 6.225 | 252.6 | 3.92 | 4.925 | 0.792 | 13.28 |
+| milvus | sq | False | 603.6 | — | 0.7656 | 1.432 | 2.067 | 499.5 | 1.922 | 2.942 | 8.452 | 8.0 |
 
 ### Vector — `glove-200-angular`
 
-| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | f32 | — | 0.9598 | True | 1498.0 | 0.646 | 0.949 | 732.5 | 1.07 | 1.477 | 5.116 | 54.56 |
-| qdrant | f32 | — | 1.0 | True | 730.0 | 1.169 | 1.812 | 645.0 | 1.534 | 2.077 | 1.147 | 16.0 |
-| pgvector | f32 | — | 0.9646 | True | 522.1 | 1.804 | 2.203 | 520.6 | 1.905 | 2.742 | 8.075 | 42.27 |
-| milvus | f32 | — | 0.9556 | True | 467.7 | 1.78 | 2.547 | 456.1 | 2.131 | 2.93 | 10.33 | 16.0 |
-| opensearch | f32 | — | 0.982 | True | 120.6 | 8.115 | 10.804 | 113.2 | 8.78 | 11.404 | 12.706 | 179.48 |
-| hnswlib | f32 | — | 0.9464 | False | 2870.2 | 0.184 | 0.394 | 3491.1 | 0.277 | 0.398 | 0.853 | 18.97 |
-| faiss | f32 | — | 0.9494 | False | 2683.9 | 0.209 | 0.379 | 4610.8 | 0.212 | 0.3 | 0.594 | 18.88 |
-| weaviate | f32 | — | 0.9452 | False | 666.7 | 1.333 | 2.054 | 667.0 | 1.491 | 1.91 | 4.538 | 16.0 |
-| lancedb | f32 | — | 0.9448 | False | 335.6 | 2.822 | 3.677 | 330.0 | 3.006 | 3.78 | 1.162 | 35.25 |
-| **benostreamdb** | tq8 | — | 0.953 | True | 837.7 | 1.175 | 1.828 | 535.6 | 1.595 | 2.219 | 4.029 | 43.67 |
-| qdrant | sq | — | 1.0 | True | 705.3 | 1.213 | 1.777 | 625.3 | 1.572 | 2.153 | 1.195 | 4.0 |
-| faiss | sq | — | 0.9402 | False | 2851.6 | 0.191 | 0.403 | 5313.5 | 0.191 | 0.233 | 0.653 | 6.89 |
-| **benostreamdb** | sq | — | 0.835 | False | 1008.0 | 0.978 | 1.412 | 615.8 | 1.352 | 1.806 | 9.547 | 42.57 |
-| weaviate | sq | — | 0.9452 | False | 628.2 | 1.422 | 1.935 | 630.4 | 1.576 | 2.019 | 4.672 | 4.0 |
-| milvus | sq | — | 0.7352 | False | 569.4 | 1.403 | 2.085 | 515.0 | 1.86 | 2.643 | 8.646 | 16.0 |
-| lancedb | sq | — | 0.9202 | False | 330.8 | 2.755 | 3.585 | 337.3 | 2.918 | 3.616 | 1.036 | 23.26 |
+| **benostreamdb+refine×4** | f32 | True | 1347.7 | ×4 | 0.9578 | 0.73 | 1.094 | 388.9 | 2.251 | 2.988 | 5.567 | 54.56 |
+| **benostreamdb+refine×2** | f32 | True | 1300.5 | ×2 | 0.9578 | 0.755 | 1.147 | 456.2 | 1.89 | 2.628 | 5.81 | 54.56 |
+| **benostreamdb** | f32 | True | 1286.9 | — | 0.9578 | 0.781 | 1.079 | 651.1 | 1.224 | 1.926 | 6.349 | 54.56 |
+| qdrant | f32 | True | 763.9 | — | 1.0 | 1.246 | 1.917 | 614.3 | 1.576 | 2.439 | 1.142 | 16.0 |
+| pgvector | f32 | True | 541.9 | — | 0.9646 | 1.828 | 2.915 | 507.8 | 1.959 | 2.643 | 8.38 | 42.27 |
+| milvus | f32 | True | 431.0 | — | 0.9576 | 1.978 | 2.932 | 402.2 | 2.416 | 4.355 | 10.399 | 16.0 |
+| opensearch | f32 | True | 115.2 | — | 0.9834 | 8.657 | 11.748 | 103.1 | 9.641 | 13.051 | 13.046 | 178.24 |
+| hnswlib | f32 | False | 4178.7 | — | 0.947 | 0.221 | 0.421 | 2998.3 | 0.315 | 0.528 | 0.863 | 18.97 |
+| faiss | f32 | False | 2504.8 | — | 0.9494 | 0.228 | 0.425 | 3749.7 | 0.244 | 0.47 | 0.591 | 18.88 |
+| weaviate | f32 | False | 571.7 | — | 0.9454 | 1.57 | 2.271 | 590.7 | 1.688 | 2.273 | 4.574 | 16.0 |
+| lancedb | f32 | False | 319.6 | — | 0.9472 | 2.938 | 4.251 | 315.1 | 3.086 | 4.283 | 1.23 | 35.25 |
+| lancedb+refine×2 | f32 | False | 244.5 | ×2 | 0.9394 | 3.738 | 4.739 | 262.3 | 3.76 | 4.726 | 1.219 | 35.25 |
+| lancedb+refine×4 | f32 | False | 237.0 | ×4 | 0.9452 | 3.876 | 5.367 | 245.2 | 4.022 | 5.102 | 1.188 | 35.25 |
+| **benostreamdb+refine×4** | sq | True | 1004.0 | ×4 | 0.9574 | 0.997 | 1.397 | 378.6 | 2.356 | 3.018 | 11.264 | 42.56 |
+| **benostreamdb** | sq | True | 933.5 | — | 0.9514 | 1.048 | 1.584 | 606.7 | 1.5 | 2.077 | 11.153 | 42.56 |
+| **benostreamdb+refine×2** | sq | True | 917.0 | ×2 | 0.9574 | 1.073 | 1.858 | 409.2 | 2.145 | 2.824 | 11.479 | 42.56 |
+| **benostreamdb** | tq8 | True | 844.0 | — | 0.9512 | 1.169 | 1.697 | 541.4 | 1.579 | 2.191 | 4.678 | 43.68 |
+| **benostreamdb+refine×4** | tq8 | True | 836.0 | ×4 | 0.958 | 1.184 | 1.658 | 346.5 | 2.594 | 3.442 | 4.62 | 43.68 |
+| **benostreamdb+refine×2** | tq8 | True | 790.6 | ×2 | 0.958 | 1.259 | 1.931 | 412.2 | 2.3 | 3.118 | 4.589 | 43.68 |
+| qdrant | sq | True | 741.5 | — | 1.0 | 1.166 | 1.734 | 700.4 | 1.399 | 1.811 | 1.169 | 4.0 |
+| faiss | sq | False | 2904.5 | — | 0.9402 | 0.187 | 0.316 | 5378.9 | 0.188 | 0.225 | 0.667 | 6.89 |
+| weaviate | sq | False | 661.1 | — | 0.947 | 1.341 | 2.244 | 619.8 | 1.595 | 2.087 | 4.601 | 4.0 |
+| milvus | sq | False | 553.8 | — | 0.7352 | 1.419 | 2.925 | 526.7 | 1.819 | 2.645 | 8.529 | 16.0 |
+| lancedb | sq | False | 354.0 | — | 0.9236 | 2.692 | 3.495 | 351.5 | 2.807 | 3.365 | 1.044 | 23.26 |
+| lancedb+refine×2 | sq | False | 271.1 | ×2 | 0.9482 | 3.488 | 4.211 | 276.1 | 3.591 | 4.441 | 1.096 | 23.26 |
+| lancedb+refine×4 | sq | False | 250.9 | ×4 | 0.945 | 3.711 | 4.355 | 259.9 | 3.771 | 5.275 | 1.042 | 23.26 |
 
 ### Vector — `lastfm-64-dot`
 
-| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| hnswlib | f32 | — | 0.9908 | True | 17661.5 | 0.055 | 0.083 | 11526.4 | 0.086 | 0.11 | 0.272 | 8.17 |
-| faiss | f32 | — | 0.9964 | True | 4516.5 | 0.07 | 0.143 | 13484.6 | 0.072 | 0.099 | 0.203 | 8.08 |
-| **benostreamdb** | f32 | — | 0.97 | True | 2050.1 | 0.482 | 0.632 | 960.2 | 0.843 | 1.165 | 4.593 | 22.08 |
-| pgvector | f32 | — | 0.996 | True | 1033.8 | 0.794 | 1.444 | 1206.6 | 0.819 | 1.082 | 6.131 | 18.51 |
-| weaviate | f32 | — | 0.9912 | True | 1028.3 | 0.784 | 1.412 | 1201.3 | 0.804 | 1.245 | 3.831 | 5.2 |
-| qdrant | f32 | — | 1.0 | True | 888.0 | 0.949 | 1.383 | 947.0 | 1.033 | 1.404 | 0.693 | 5.2 |
-| opensearch | f32 | — | 0.9724 | True | 773.7 | 1.278 | 1.59 | 662.8 | 1.498 | 1.885 | 3.842 | 32.26 |
-| milvus | f32 | — | 0.997 | True | 628.9 | 1.405 | 1.83 | 578.1 | 1.685 | 2.169 | 8.68 | 5.2 |
-| lancedb | f32 | — | 0.9982 | True | 369.8 | 2.42 | 3.214 | 405.0 | 2.429 | 2.967 | 0.569 | 13.6 |
-| faiss | sq | — | 0.9826 | True | 3919.3 | 0.108 | 0.201 | 9361.3 | 0.106 | 0.131 | 0.462 | 4.18 |
-| **benostreamdb** | sq | — | 0.962 | True | 1765.8 | 0.558 | 0.738 | 895.2 | 0.917 | 1.211 | 5.459 | 18.17 |
-| **benostreamdb** | tq8 | — | 0.9564 | True | 1359.8 | 0.726 | 1.001 | 772.7 | 1.085 | 1.414 | 2.618 | 19.43 |
-| weaviate | sq | — | 0.991 | True | 1074.3 | 0.822 | 1.426 | 1160.0 | 0.847 | 1.104 | 3.872 | 1.3 |
-| qdrant | sq | — | 1.0 | True | 879.1 | 0.938 | 1.514 | 957.8 | 1.011 | 1.366 | 0.66 | 1.3 |
-| milvus | sq | — | 0.8608 | False | 592.9 | 1.338 | 2.123 | 593.2 | 1.634 | 2.279 | 8.648 | 5.2 |
-| lancedb | sq | — | 0.9152 | False | 366.6 | 2.445 | 3.081 | 393.5 | 2.513 | 3.168 | 0.618 | 7.88 |
+| hnswlib | f32 | True | 13240.9 | — | 0.9908 | 0.066 | 0.163 | 11487.5 | 0.086 | 0.108 | 0.253 | 8.17 |
+| faiss | f32 | True | 4417.6 | — | 0.9964 | 0.071 | 0.119 | 14022.0 | 0.07 | 0.087 | 0.21 | 8.08 |
+| **benostreamdb+refine×4** | f32 | True | 1925.2 | ×4 | 0.9722 | 0.509 | 0.726 | 516.8 | 1.726 | 2.455 | 5.199 | 22.08 |
+| **benostreamdb** | f32 | True | 1890.0 | — | 0.9722 | 0.517 | 0.749 | 1062.4 | 0.885 | 1.389 | 5.14 | 22.08 |
+| **benostreamdb+refine×2** | f32 | True | 1767.5 | ×2 | 0.9726 | 0.555 | 0.769 | 580.4 | 1.491 | 1.942 | 5.395 | 22.08 |
+| qdrant | f32 | True | 1003.3 | — | 1.0 | 0.968 | 1.408 | 943.5 | 1.039 | 1.355 | 0.68 | 5.2 |
+| pgvector | f32 | True | 961.2 | — | 0.996 | 0.871 | 1.411 | 1133.3 | 0.878 | 1.147 | 6.868 | 18.51 |
+| weaviate | f32 | True | 958.4 | — | 0.9912 | 0.866 | 1.448 | 1048.7 | 0.925 | 1.444 | 3.89 | 5.2 |
+| opensearch | f32 | True | 669.8 | — | 0.9732 | 1.327 | 1.669 | 607.6 | 1.627 | 2.022 | 3.799 | 32.25 |
+| milvus | f32 | True | 576.3 | — | 0.996 | 1.547 | 2.221 | 483.8 | 2.02 | 3.075 | 8.546 | 5.2 |
+| lancedb | f32 | True | 349.5 | — | 0.999 | 2.568 | 3.228 | 370.4 | 2.643 | 3.732 | 0.568 | 13.6 |
+| lancedb+refine×2 | f32 | True | 291.7 | ×2 | 0.9996 | 3.12 | 3.92 | 309.1 | 3.23 | 3.939 | 0.604 | 13.6 |
+| lancedb+refine×4 | f32 | True | 270.1 | ×4 | 0.9996 | 3.399 | 4.463 | 293.0 | 3.396 | 4.104 | 0.594 | 13.6 |
+| faiss | sq | True | 3776.9 | — | 0.9826 | 0.107 | 0.184 | 9226.9 | 0.107 | 0.128 | 0.443 | 4.18 |
+| **benostreamdb+refine×4** | sq | True | 1730.5 | ×4 | 0.973 | 0.57 | 0.801 | 513.4 | 1.722 | 2.319 | 6.04 | 18.18 |
+| **benostreamdb** | sq | True | 1702.9 | — | 0.9642 | 0.57 | 0.861 | 979.2 | 0.966 | 1.45 | 5.991 | 18.18 |
+| **benostreamdb+refine×2** | sq | True | 1700.7 | ×2 | 0.9726 | 0.578 | 0.811 | 584.8 | 1.489 | 2.324 | 5.938 | 18.18 |
+| **benostreamdb** | tq8 | True | 1278.7 | — | 0.957 | 0.768 | 1.098 | 713.9 | 1.191 | 1.594 | 3.271 | 19.44 |
+| **benostreamdb+refine×4** | tq8 | True | 1269.2 | ×4 | 0.9722 | 0.77 | 1.134 | 453.3 | 2.138 | 2.987 | 3.05 | 19.44 |
+| **benostreamdb+refine×2** | tq8 | True | 1259.6 | ×2 | 0.9722 | 0.784 | 1.201 | 510.1 | 1.728 | 2.465 | 3.144 | 19.44 |
+| weaviate | sq | True | 1181.9 | — | 0.9908 | 0.827 | 1.29 | 1137.2 | 0.867 | 1.064 | 3.999 | 1.3 |
+| qdrant | sq | True | 888.8 | — | 1.0 | 0.92 | 1.369 | 933.1 | 1.053 | 1.402 | 0.704 | 1.3 |
+| lancedb+refine×2 | sq | True | 279.7 | ×2 | 0.9558 | 3.283 | 4.338 | 302.7 | 3.284 | 3.921 | 0.597 | 7.91 |
+| milvus | sq | False | 576.2 | — | 0.8608 | 1.393 | 2.041 | 558.0 | 1.72 | 2.494 | 8.915 | 5.2 |
+| lancedb | sq | False | 366.6 | — | 0.9364 | 2.463 | 3.032 | 375.8 | 2.619 | 3.458 | 0.657 | 7.91 |
+| lancedb+refine×4 | sq | False | 282.3 | ×4 | 0.9426 | 3.406 | 4.408 | 294.3 | 3.367 | 4.223 | 0.605 | 7.89 |
 
 ### Vector — `mnist-784-euclidean`
 
-| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| faiss | f32 | — | 0.9998 | True | 3728.6 | 0.267 | 0.449 | 3647.6 | 0.276 | 0.456 | 0.966 | 65.6 |
-| hnswlib | f32 | — | 1.0 | True | 3436.0 | 0.292 | 0.514 | 1764.6 | 0.57 | 0.743 | 1.938 | 65.69 |
-| weaviate | f32 | — | 1.0 | True | 824.0 | 1.197 | 1.679 | 573.9 | 1.717 | 2.227 | 5.348 | 62.72 |
-| pgvector | f32 | — | 1.0 | True | 747.8 | 1.329 | 2.008 | 697.3 | 1.435 | 2.091 | 12.455 | 166.36 |
-| **benostreamdb** | f32 | — | 0.988 | True | 683.2 | 1.436 | 2.044 | 528.6 | 1.835 | 2.533 | 2.731 | 194.93 |
-| qdrant | f32 | — | 1.0 | True | 625.0 | 1.551 | 2.245 | 303.5 | 1.884 | 42.63 | 2.859 | 62.72 |
-| milvus | f32 | — | 0.9996 | True | 534.3 | 1.691 | 2.613 | 445.0 | 2.237 | 2.934 | 10.377 | 62.72 |
-| opensearch | f32 | — | 1.0 | True | 397.7 | 2.518 | 3.385 | 298.8 | 3.347 | 4.318 | 6.569 | 137.34 |
-| lancedb | f32 | — | 0.9996 | True | 315.6 | 2.939 | 3.639 | 302.1 | 3.204 | 4.577 | 2.977 | 128.83 |
-| faiss | sq | — | 0.9916 | True | 5139.3 | 0.193 | 0.317 | 5060.5 | 0.197 | 0.298 | 0.741 | 18.57 |
-| qdrant | sq | — | 0.9936 | True | 852.1 | 1.143 | 1.615 | 348.6 | 1.519 | 42.285 | 2.735 | 15.68 |
-| weaviate | sq | — | 0.9998 | True | 792.9 | 1.24 | 1.831 | 573.9 | 1.703 | 2.377 | 5.35 | 15.68 |
-| milvus | sq | — | 0.9844 | True | 593.1 | 1.517 | 2.279 | 457.1 | 2.029 | 4.932 | 9.955 | 62.72 |
-| **benostreamdb** | sq | — | 0.9872 | True | 519.1 | 1.901 | 2.382 | 388.5 | 2.549 | 3.458 | 4.745 | 147.91 |
-| **benostreamdb** | tq8 | — | 0.9808 | True | 454.0 | 2.167 | 2.755 | 339.7 | 2.922 | 3.91 | 2.623 | 152.7 |
-| lancedb | sq | — | 0.9994 | True | 376.7 | 2.538 | 3.056 | 338.2 | 2.842 | 4.072 | 2.073 | 81.79 |
+| faiss | f32 | True | 3213.5 | — | 0.9998 | 0.311 | 0.475 | 3163.1 | 0.318 | 0.478 | 1.134 | 65.6 |
+| hnswlib | f32 | True | 2905.5 | — | 1.0 | 0.341 | 0.63 | 1471.8 | 0.672 | 1.007 | 2.069 | 65.69 |
+| **benostreamdb+refine×2** | f32 | True | 735.3 | ×2 | 0.9894 | 1.316 | 1.964 | 382.1 | 2.561 | 3.506 | 2.483 | 194.93 |
+| weaviate | f32 | True | 718.3 | — | 1.0 | 1.348 | 2.118 | 514.0 | 1.917 | 2.614 | 5.407 | 62.72 |
+| **benostreamdb+refine×4** | f32 | True | 700.4 | ×4 | 0.9894 | 1.4 | 1.84 | 327.6 | 3.009 | 3.882 | 2.646 | 194.93 |
+| **benostreamdb** | f32 | True | 664.4 | — | 0.9894 | 1.47 | 2.25 | 482.4 | 2.006 | 3.405 | 2.585 | 194.93 |
+| pgvector | f32 | True | 645.5 | — | 1.0 | 1.56 | 2.452 | 610.5 | 1.624 | 2.493 | 13.044 | 166.35 |
+| qdrant | f32 | True | 580.0 | — | 1.0 | 1.681 | 2.544 | 280.0 | 2.18 | 42.728 | 2.95 | 62.72 |
+| milvus | f32 | True | 505.3 | — | 0.9996 | 1.799 | 2.698 | 393.0 | 2.497 | 3.316 | 10.432 | 62.72 |
+| opensearch | f32 | True | 349.8 | — | 0.9996 | 2.829 | 3.825 | 278.6 | 3.551 | 4.609 | 11.434 | 137.31 |
+| lancedb | f32 | True | 291.9 | — | 1.0 | 3.137 | 4.055 | 286.0 | 3.373 | 5.446 | 3.11 | 128.82 |
+| lancedb+refine×2 | f32 | True | 247.3 | ×2 | 1.0 | 3.785 | 4.848 | 248.0 | 3.932 | 5.432 | 3.044 | 128.83 |
+| lancedb+refine×4 | f32 | True | 224.2 | ×4 | 1.0 | 4.173 | 5.751 | 226.2 | 4.308 | 6.176 | 3.19 | 128.83 |
+| faiss | sq | True | 4284.6 | — | 0.9916 | 0.24 | 0.349 | 4451.5 | 0.231 | 0.301 | 0.741 | 18.57 |
+| weaviate | sq | True | 808.0 | — | 0.9998 | 1.188 | 2.072 | 545.6 | 1.815 | 2.378 | 5.471 | 15.68 |
+| qdrant | sq | True | 799.7 | — | 0.9936 | 1.226 | 1.719 | 331.3 | 1.664 | 42.757 | 2.871 | 15.68 |
+| milvus | sq | True | 562.1 | — | 0.9844 | 1.596 | 2.296 | 429.5 | 2.136 | 6.471 | 10.364 | 62.72 |
+| **benostreamdb** | sq | True | 534.3 | — | 0.9894 | 1.845 | 2.361 | 411.9 | 2.41 | 2.979 | 5.0 | 147.9 |
+| **benostreamdb+refine×2** | sq | True | 517.0 | ×2 | 0.9894 | 1.908 | 2.451 | 313.8 | 3.14 | 4.049 | 4.666 | 147.9 |
+| **benostreamdb+refine×4** | sq | True | 484.8 | ×4 | 0.9894 | 2.031 | 2.761 | 262.6 | 3.764 | 4.57 | 4.592 | 147.9 |
+| **benostreamdb** | tq8 | True | 437.5 | — | 0.9822 | 2.246 | 2.948 | 346.5 | 2.848 | 3.536 | 2.572 | 152.69 |
+| **benostreamdb+refine×2** | tq8 | True | 423.8 | ×2 | 0.9892 | 2.346 | 3.027 | 277.1 | 3.593 | 4.668 | 2.65 | 152.69 |
+| **benostreamdb+refine×4** | tq8 | True | 420.9 | ×4 | 0.9892 | 2.332 | 3.146 | 238.4 | 4.131 | 5.288 | 2.663 | 152.69 |
+| lancedb | sq | True | 354.5 | — | 0.9998 | 2.702 | 3.305 | 329.3 | 2.898 | 4.449 | 1.982 | 81.79 |
+| lancedb+refine×2 | sq | True | 276.6 | ×2 | 0.9994 | 3.498 | 4.472 | 238.5 | 4.025 | 6.666 | 2.053 | 81.79 |
+| lancedb+refine×4 | sq | True | 239.6 | ×4 | 0.9998 | 3.974 | 5.272 | 209.9 | 4.515 | 8.4 | 2.274 | 81.79 |
 
 ### Vector — `nytimes-256-angular`
 
-| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | f32 | — | 0.9842 | True | 1276.5 | 0.764 | 1.164 | 662.5 | 1.302 | 1.918 | 1.829 | 68.03 |
-| qdrant | f32 | — | 0.9986 | True | 765.2 | 1.116 | 1.627 | 604.2 | 1.634 | 2.241 | 1.335 | 20.48 |
-| opensearch | f32 | — | 0.978 | True | 105.7 | 9.438 | 12.152 | 93.9 | 10.63 | 13.406 | 14.964 | 219.38 |
-| faiss | f32 | — | 0.924 | False | 3482.8 | 0.272 | 0.453 | 3444.9 | 0.277 | 0.428 | 0.702 | 23.36 |
-| hnswlib | f32 | — | 0.9252 | False | 2481.0 | 0.239 | 0.439 | 2473.6 | 0.385 | 0.645 | 1.122 | 23.45 |
-| weaviate | f32 | — | 0.9264 | False | 647.7 | 1.428 | 2.196 | 612.7 | 1.615 | 2.016 | 4.839 | 20.48 |
-| milvus | f32 | — | 0.9472 | False | 473.4 | 1.925 | 2.456 | 427.5 | 2.303 | 2.921 | 11.538 | 20.48 |
-| pgvector | f32 | — | 0.9458 | False | 466.0 | 2.135 | 2.707 | 450.4 | 2.21 | 2.928 | 10.186 | 50.92 |
-| lancedb | f32 | — | 0.9224 | False | 336.7 | 2.793 | 3.818 | 324.0 | 3.039 | 3.953 | 1.358 | 44.25 |
-| **benostreamdb** | sq | — | 0.978 | True | 846.0 | 1.166 | 1.476 | 542.0 | 1.534 | 1.849 | 2.608 | 52.68 |
-| **benostreamdb** | tq8 | — | 0.9754 | True | 811.9 | 1.221 | 1.526 | 572.7 | 1.602 | 2.024 | 1.394 | 52.68 |
-| qdrant | sq | — | 0.998 | True | 691.1 | 1.261 | 1.919 | 647.1 | 1.509 | 2.138 | 1.486 | 5.12 |
-| faiss | sq | — | 0.9262 | False | 2633.1 | 0.225 | 0.351 | 4456.6 | 0.227 | 0.267 | 0.805 | 8.01 |
-| weaviate | sq | — | 0.9258 | False | 627.5 | 1.394 | 2.307 | 600.8 | 1.651 | 2.12 | 4.941 | 5.12 |
-| milvus | sq | — | 0.6862 | False | 556.0 | 1.373 | 2.019 | 531.4 | 1.804 | 2.655 | 9.344 | 20.48 |
-| lancedb | sq | — | 0.9162 | False | 304.4 | 2.944 | 4.105 | 307.3 | 3.151 | 4.514 | 1.206 | 28.85 |
+| **benostreamdb+refine×2** | f32 | True | 1198.5 | ×2 | 0.9854 | 0.815 | 1.185 | 461.0 | 2.035 | 2.711 | 1.643 | 68.03 |
+| **benostreamdb+refine×4** | f32 | True | 1185.7 | ×4 | 0.9854 | 0.828 | 1.12 | 408.7 | 2.29 | 3.318 | 1.54 | 68.03 |
+| **benostreamdb** | f32 | True | 1090.1 | — | 0.9854 | 0.9 | 1.609 | 643.7 | 1.401 | 1.845 | 1.593 | 68.03 |
+| qdrant | f32 | True | 611.7 | — | 0.9986 | 1.424 | 2.279 | 528.0 | 1.868 | 2.461 | 1.421 | 20.48 |
+| opensearch | f32 | True | 93.0 | — | 0.978 | 10.484 | 14.859 | 86.3 | 11.484 | 14.858 | 15.74 | 214.62 |
+| faiss | f32 | False | 3065.4 | — | 0.924 | 0.319 | 0.447 | 3118.4 | 0.319 | 0.42 | 0.694 | 23.36 |
+| hnswlib | f32 | False | 2952.1 | — | 0.9236 | 0.337 | 0.483 | 2318.2 | 0.423 | 0.575 | 1.133 | 23.45 |
+| weaviate | f32 | False | 599.0 | — | 0.9252 | 1.636 | 2.765 | 526.8 | 1.858 | 2.64 | 4.919 | 20.48 |
+| pgvector | f32 | False | 443.9 | — | 0.9468 | 2.253 | 2.722 | 453.0 | 2.207 | 2.627 | 10.271 | 50.92 |
+| milvus | f32 | False | 392.6 | — | 0.9442 | 2.191 | 3.031 | 373.9 | 2.622 | 3.677 | 12.698 | 20.48 |
+| lancedb | f32 | False | 279.4 | — | 0.9274 | 3.123 | 4.654 | 297.6 | 3.324 | 4.233 | 1.402 | 44.25 |
+| lancedb+refine×2 | f32 | False | 244.9 | ×2 | 0.9314 | 3.743 | 4.666 | 256.8 | 3.842 | 4.939 | 1.475 | 44.25 |
+| lancedb+refine×4 | f32 | False | 234.7 | ×4 | 0.9232 | 3.911 | 5.169 | 254.4 | 3.859 | 5.116 | 1.445 | 44.25 |
+| **benostreamdb+refine×4** | sq | True | 857.6 | ×4 | 0.9854 | 1.157 | 1.421 | 375.8 | 2.508 | 3.009 | 2.881 | 52.68 |
+| **benostreamdb** | tq8 | True | 832.2 | — | 0.9756 | 1.188 | 1.502 | 512.9 | 1.641 | 2.067 | 1.391 | 52.67 |
+| **benostreamdb+refine×4** | tq8 | True | 820.0 | ×4 | 0.9854 | 1.192 | 1.579 | 365.0 | 2.571 | 3.215 | 1.478 | 52.67 |
+| **benostreamdb** | sq | True | 792.5 | — | 0.9788 | 1.238 | 1.597 | 560.3 | 1.63 | 2.144 | 2.923 | 52.68 |
+| **benostreamdb+refine×2** | tq8 | True | 759.0 | ×2 | 0.9854 | 1.307 | 1.773 | 388.0 | 2.252 | 3.319 | 1.423 | 52.67 |
+| **benostreamdb+refine×2** | sq | True | 756.1 | ×2 | 0.9854 | 1.284 | 2.084 | 405.8 | 2.308 | 2.953 | 2.851 | 52.68 |
+| qdrant | sq | True | 645.6 | — | 0.999 | 1.326 | 2.1 | 552.2 | 1.788 | 2.369 | 1.352 | 5.12 |
+| faiss | sq | False | 4362.2 | — | 0.9262 | 0.225 | 0.331 | 4488.8 | 0.225 | 0.263 | 0.812 | 8.01 |
+| milvus | sq | False | 630.7 | — | 0.6862 | 1.399 | 1.916 | 515.9 | 1.855 | 2.385 | 8.58 | 20.48 |
+| weaviate | sq | False | 559.6 | — | 0.9246 | 1.605 | 2.502 | 554.3 | 1.785 | 2.357 | 4.996 | 5.12 |
+| lancedb | sq | False | 328.6 | — | 0.9186 | 2.756 | 3.497 | 329.7 | 2.97 | 3.907 | 1.164 | 28.86 |
+| lancedb+refine×2 | sq | False | 270.7 | ×2 | 0.926 | 3.558 | 4.668 | 268.9 | 3.677 | 4.626 | 1.199 | 28.85 |
+| lancedb+refine×4 | sq | False | 248.8 | ×4 | 0.927 | 3.743 | 4.366 | 257.8 | 3.807 | 4.907 | 1.149 | 28.85 |
 
 ### Vector — `sift-128-euclidean`
 
-| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| hnswlib | f32 | — | 1.0 | True | 11448.3 | 0.085 | 0.172 | 6863.4 | 0.142 | 0.208 | 0.406 | 13.21 |
-| faiss | f32 | — | 1.0 | True | 8854.5 | 0.11 | 0.184 | 8878.0 | 0.112 | 0.156 | 0.309 | 13.12 |
-| **benostreamdb** | f32 | — | 0.9968 | True | 2092.1 | 0.465 | 0.683 | 1104.4 | 0.835 | 1.13 | 1.167 | 37.25 |
-| pgvector | f32 | — | 0.9998 | True | 1045.2 | 0.965 | 1.294 | 975.2 | 1.021 | 1.456 | 4.371 | 29.2 |
-| qdrant | f32 | — | 1.0 | True | 938.5 | 1.029 | 1.632 | 631.9 | 1.141 | 2.445 | 0.886 | 10.24 |
-| weaviate | f32 | — | 1.0 | True | 919.1 | 1.068 | 1.519 | 899.2 | 1.102 | 1.495 | 3.977 | 10.24 |
-| opensearch | f32 | — | 0.9998 | True | 641.6 | 1.553 | 2.014 | 595.7 | 1.679 | 2.13 | 3.607 | 28.39 |
-| milvus | f32 | — | 1.0 | True | 588.2 | 1.51 | 2.203 | 523.7 | 1.86 | 2.559 | 8.14 | 10.24 |
-| lancedb | f32 | — | 1.0 | True | 384.6 | 2.487 | 3.127 | 376.1 | 2.629 | 3.221 | 0.742 | 23.86 |
-| faiss | sq | — | 0.9916 | True | 10092.8 | 0.098 | 0.16 | 10274.6 | 0.099 | 0.118 | 0.322 | 5.44 |
-| **benostreamdb** | sq | — | 0.9908 | True | 1479.1 | 0.668 | 0.818 | 910.5 | 1.026 | 1.305 | 1.406 | 29.58 |
-| **benostreamdb** | tq8 | — | 0.9816 | True | 1412.8 | 0.703 | 0.858 | 889.8 | 1.061 | 1.423 | 1.037 | 29.57 |
-| qdrant | sq | — | 1.0 | True | 968.2 | 1.008 | 1.366 | 645.8 | 1.099 | 2.368 | 0.925 | 2.56 |
-| weaviate | sq | — | 1.0 | True | 949.4 | 1.045 | 1.696 | 839.9 | 1.178 | 1.691 | 4.049 | 2.56 |
-| lancedb | sq | — | 0.9884 | True | 392.9 | 2.418 | 3.227 | 374.5 | 2.588 | 3.731 | 0.688 | 16.17 |
-| milvus | sq | — | 0.9324 | False | 628.3 | 1.369 | 2.329 | 517.8 | 1.822 | 3.188 | 8.5 | 10.24 |
+| hnswlib | f32 | True | 9619.1 | — | 1.0 | 0.098 | 0.214 | 6777.9 | 0.145 | 0.223 | 0.428 | 13.21 |
+| faiss | f32 | True | 8978.6 | — | 1.0 | 0.11 | 0.183 | 8921.1 | 0.111 | 0.152 | 0.324 | 13.12 |
+| **benostreamdb+refine×4** | f32 | True | 1965.4 | ×4 | 0.997 | 0.497 | 0.739 | 521.7 | 1.801 | 2.753 | 1.026 | 37.24 |
+| **benostreamdb+refine×2** | f32 | True | 1888.8 | ×2 | 0.997 | 0.503 | 0.849 | 602.5 | 1.539 | 2.25 | 1.061 | 37.24 |
+| **benostreamdb** | f32 | True | 1839.9 | — | 0.997 | 0.528 | 0.7 | 978.2 | 0.948 | 1.353 | 1.042 | 37.24 |
+| pgvector | f32 | True | 954.6 | — | 1.0 | 1.051 | 1.492 | 1017.1 | 0.975 | 1.329 | 4.409 | 29.2 |
+| qdrant | f32 | True | 915.4 | — | 1.0 | 1.063 | 1.58 | 639.1 | 1.128 | 4.678 | 0.88 | 10.24 |
+| weaviate | f32 | True | 910.0 | — | 1.0 | 1.083 | 1.524 | 779.1 | 1.259 | 1.785 | 4.045 | 10.24 |
+| opensearch | f32 | True | 600.1 | — | 1.0 | 1.655 | 2.342 | 549.4 | 1.811 | 2.332 | 3.621 | 28.39 |
+| milvus | f32 | True | 552.8 | — | 1.0 | 1.579 | 2.579 | 455.8 | 2.166 | 2.887 | 8.449 | 10.24 |
+| lancedb | f32 | True | 345.6 | — | 1.0 | 2.728 | 3.601 | 358.5 | 2.753 | 3.561 | 0.729 | 23.86 |
+| lancedb+refine×2 | f32 | True | 283.9 | ×2 | 1.0 | 3.381 | 4.877 | 292.0 | 3.393 | 4.373 | 0.818 | 23.86 |
+| lancedb+refine×4 | f32 | True | 271.3 | ×4 | 1.0 | 3.54 | 4.979 | 274.2 | 3.613 | 4.414 | 0.778 | 23.85 |
+| faiss | sq | True | 9838.8 | — | 0.9916 | 0.101 | 0.167 | 9934.0 | 0.101 | 0.129 | 0.328 | 5.44 |
+| **benostreamdb** | tq8 | True | 1408.4 | — | 0.9816 | 0.697 | 0.894 | 796.6 | 1.18 | 1.456 | 1.01 | 29.56 |
+| **benostreamdb+refine×4** | tq8 | True | 1392.3 | ×4 | 0.997 | 0.709 | 0.878 | 483.2 | 1.975 | 2.616 | 1.022 | 29.56 |
+| **benostreamdb** | sq | True | 1366.3 | — | 0.9906 | 0.712 | 0.995 | 856.2 | 1.104 | 1.352 | 1.463 | 29.56 |
+| **benostreamdb+refine×2** | sq | True | 1333.0 | ×2 | 0.997 | 0.742 | 1.02 | 524.3 | 1.815 | 2.329 | 1.36 | 29.56 |
+| **benostreamdb+refine×4** | sq | True | 1318.3 | ×4 | 0.997 | 0.736 | 0.995 | 479.8 | 2.006 | 2.519 | 1.293 | 29.56 |
+| **benostreamdb+refine×2** | tq8 | True | 1295.8 | ×2 | 0.997 | 0.749 | 1.119 | 545.5 | 1.739 | 2.258 | 1.031 | 29.56 |
+| weaviate | sq | True | 971.2 | — | 1.0 | 1.008 | 1.56 | 856.3 | 1.147 | 1.646 | 4.011 | 2.56 |
+| qdrant | sq | True | 869.9 | — | 1.0 | 1.112 | 1.797 | 607.8 | 1.2 | 3.974 | 0.839 | 2.56 |
+| lancedb | sq | True | 387.4 | — | 0.9884 | 2.476 | 2.977 | 376.1 | 2.639 | 3.231 | 0.681 | 16.18 |
+| lancedb+refine×2 | sq | True | 300.0 | ×2 | 1.0 | 3.224 | 3.971 | 311.7 | 3.186 | 3.92 | 0.685 | 16.18 |
+| lancedb+refine×4 | sq | True | 283.3 | ×4 | 1.0 | 3.421 | 4.172 | 276.0 | 3.552 | 5.268 | 0.699 | 16.19 |
+| milvus | sq | False | 653.6 | — | 0.9324 | 1.366 | 1.877 | 566.8 | 1.688 | 2.421 | 8.401 | 10.24 |
 
 ## 10. Competitor Configurations (frame of reference)
 

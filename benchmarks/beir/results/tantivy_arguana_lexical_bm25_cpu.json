@@ -6,24 +6,21 @@
   "backend": "cpu",
   "queries": 1406,
   "k": 10,
-  "build_s": 0.1,
-  "index_mb": 10.46,
+  "build_s": 0.181,
+  "index_mb": 10.42,
   "recall_at_k": 0.67,
   "ndcg_at_k": 0.3226,
   "mrr_at_k": 0.2137,
-  "qps": 393.7,
-  "p50_ms": 2.409,
-  "p99_ms": 5.108,
+  "qps": 395.6,
+  "p50_ms": 2.419,
+  "p99_ms": 5.146,
   "env": {
     "cpu_model": "x86_64",
     "cores": 32,
     "ram_gb": 121.4,
-    "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.43",
-    "python": "3.14.4",
-    "containerized": false,
-    "gpus": [
-      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB",
-      "NVIDIA GeForce RTX 5070 Ti, 16303 MiB"
-    ]
+    "os": "Linux-7.0.0-42-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
   }
 }

@@ -294,9 +294,11 @@ pub fn simple_kmeans_with_seed(
     }
     let dim = vectors[0].len();
 
-    // Default to a deterministic seed (0x00C0_FFEE_1337) if none is provided,
-    // ensuring reproducibility across platforms, cores, and CI runs.
-    let seed_val = seed.unwrap_or(0x00C0_FFEE_1337);
+    // Default to the shared deterministic build seed if none is provided, so the
+    // centroids — and therefore the index and its recall — are reproducible
+    // across platforms, cores, and CI runs. One constant, defined in
+    // `benostream-gpu-ann`, is used by every randomised step of index building.
+    let seed_val = seed.unwrap_or(benostream_gpu_ann::INDEX_BUILD_SEED);
 
     // Gated dispatch: route eligible configurations to high-throughput e-means
     if crate::core::index::e_means::is_emeans_eligible(n, k, dim) {
