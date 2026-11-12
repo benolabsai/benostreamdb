@@ -1003,7 +1003,19 @@ impl Table {
         use std::sync::atomic::Ordering;
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let mut force_direct = false;
+        // Always read the durable head here, never `load_latest`'s cached version.
+        //
+        // The epoch pair only proves that no `Staging → ManifestCommitted`
+        // transition happened *between* the two loads. It says nothing about the
+        // manifest read itself: `LATEST_VERSION_CACHE` is process-wide, so after a
+        // flush publishes v(N+1) and bumps the epoch, a reader that starts
+        // afterwards can sample a stable epoch and still be served cached v(N),
+        // while the write buffer has already been drained. The row exists in
+        // neither half of the result and silently vanishes
+        // (`pillar9_concurrent_reader_vs_flush_linearizability_stress`:
+        // "committed id=113 vanished mid-flush"). A plan-time manifest read is
+        // once per scan, so the LIST it costs is not worth a stale read.
+        let mut force_direct = true;
 
         for attempt in 0..8usize {
             let epoch1 = self.buffer_epoch.load(Ordering::SeqCst);

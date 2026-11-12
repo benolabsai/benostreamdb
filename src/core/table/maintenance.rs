@@ -549,7 +549,30 @@ impl Table {
                         }
                     };
 
-                    if meta.snapshots.iter().any(|s| s.snapshot_id == snapshot_id) {
+                    // A snapshot id is the originating manifest's version, so finding
+                    // it here should mean *this* commit is already durable — the
+                    // idempotent replay of a publish that succeeded and then lost its
+                    // acknowledgement. It can also, wrongly, mean that two distinct
+                    // commits claimed the same manifest version. Those two cases are
+                    // only distinguishable by the manifest list each produced, and
+                    // conflating them silently drops one commit from the lineage,
+                    // leaving a table whose rows are all present but whose audit trail
+                    // is one snapshot short. Compare before trusting the id.
+                    let duplicate_list = meta
+                        .snapshots
+                        .iter()
+                        .find(|s| s.snapshot_id == snapshot_id)
+                        .map(|s| s.manifest_list.clone());
+                    if let Some(existing_list) = duplicate_list {
+                        if existing_list != manifest_list_abs {
+                            anyhow::bail!(
+                                "Snapshot id {} collision: metadata records manifest list '{}' but this commit produced '{}'. \
+                                 Two distinct commits were allocated the same manifest version.",
+                                snapshot_id,
+                                existing_list,
+                                manifest_list_abs
+                            );
+                        }
                         if meta.format_version >= 3 {
                             if let Some(next_id) = v3_next_row_id {
                                 if next_id > meta.next_row_id.unwrap_or(0) {
@@ -675,6 +698,19 @@ impl Table {
                 .iter()
                 .find(|s| s.snapshot_id == snapshot.snapshot_id)
             {
+                // Same rule as `publish_metadata_step_async`: an id hit is only a
+                // completed commit if it names the same manifest list. A different
+                // list means two commits were allocated one manifest version, and
+                // reporting success would drop this commit from the lineage.
+                if existing.manifest_list != snapshot.manifest_list {
+                    anyhow::bail!(
+                        "Snapshot id {} collision in catalog: snapshot records manifest list '{}' but this commit produced '{}'. \
+                         Two distinct commits were allocated the same manifest version.",
+                        snapshot.snapshot_id,
+                        existing.manifest_list,
+                        snapshot.manifest_list
+                    );
+                }
                 return Ok((metadata_location, existing.clone()));
             }
 
@@ -746,6 +782,15 @@ impl Table {
                         .iter()
                         .find(|s| s.snapshot_id == snapshot.snapshot_id)
                     {
+                        if existing.manifest_list != snapshot.manifest_list {
+                            anyhow::bail!(
+                                "Snapshot id {} collision in catalog: snapshot records manifest list '{}' but this commit produced '{}'. \
+                                 Two distinct commits were allocated the same manifest version.",
+                                snapshot.snapshot_id,
+                                existing.manifest_list,
+                                snapshot.manifest_list
+                            );
+                        }
                         return Ok((metadata_location, existing.clone()));
                     }
 

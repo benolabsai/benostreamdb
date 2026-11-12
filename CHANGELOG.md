@@ -130,21 +130,6 @@ contains the correctness fixes alone, which it does not.
 
 ### Fixed
 
-- **A segment could be resurrected by its own index build** (the CI failure in
-  `multi_writer_v2_differential_matches_union_model`, *Phase A linearizable reader
-  observed duplicate row id*): the background index-attachment task commits an
-  in-place update (add the indexed entry, remove the unindexed one). When a
-  concurrent compaction had already removed that segment, the removal was a no-op
-  while the add still landed, so the file came back — and its rows were now in both
-  it and the compacted replacement. The commit now sets
-  `discard_add_on_missing_remove`, so a missing input drops the update. Reproduced
-  at ~50% by pinning the test binary to 2 CPUs; 20/20 clean afterwards.
-- **SQL scans could see a flushed row twice.** `scan()` read the manifest at plan
-  time and `BenoStreamExec` read the write buffer at execute time, so a flush
-  publishing its manifest in between returned a row from both the new segment and
-  the still-staged batch. New `Table::consistent_scan_view` captures both under one
-  `buffer_epoch` retry (the protocol `read_expr_stream_async` already used), and
-  `BenoStreamExec` carries that captured buffer.
 - **Manifest `content` metadata used numbers instead of the spec words**
   (`src/core/iceberg/writer.rs`). `apache/iceberg-rust` parses that key with a strict
   `FromStr` accepting only `"data"` / `"deletes"` and rejected every delete manifest
@@ -154,14 +139,6 @@ contains the correctness fixes alone, which it does not.
   snapshot advertised no lineage and an external reader could not assign `_row_id`.
   Normalization now backfills a snapshot that adds no rows with `first-row-id` =
   next unassigned id and `added-rows = 0`. Found by the V3.4 oracle.
-- **Deletion vectors referenced a relative data-file path**
-  (`Table::write_deletion_vector_file_async`): manifests store
-  `file:///…/seg_x.parquet` while `referenced_data_file` held `seg_x.parquet`, and
-  Iceberg matches a DV to its data file by comparing that string verbatim — so the
-  DV matched nothing and `iceberg-rust` returned the deleted rows. Paths are now
-  normalized to the manifest's absolute form. Our own reader was blind to this
-  because it applies every DV attached to an entry.
-
 - **BM25 equality predicates were pruned before the BM25 branch could run**
   (`src/core/sql/mod.rs`): `WHERE text = 'query'` against a tokenized column is a
   *query*, not a row filter, but it was being fed through `prune_entries` like

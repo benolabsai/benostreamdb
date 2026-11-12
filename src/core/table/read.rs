@@ -614,7 +614,15 @@ impl Table {
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let need_mem_index = vector_filters.is_some();
-        let mut force_direct = false;
+        // Read the durable head, not `load_latest`'s cached version. The epoch pair
+        // below only detects a `Staging → ManifestCommitted` transition that happens
+        // *between* the two loads; it cannot detect that the manifest read itself was
+        // served from the process-wide `LATEST_VERSION_CACHE`. Once a flush has
+        // published v(N+1), bumped the epoch and drained the write buffer, a reader
+        // starting afterwards samples a stable epoch, is handed cached v(N), and
+        // finds the committed row in neither half of the result — it vanishes
+        // (`pillar9_concurrent_reader_vs_flush_linearizability_stress`).
+        let mut force_direct = true;
         let (manifest, all_entries, version, staging_snap, active_snap) = {
             let mut resolved = None;
             for attempt in 0..8usize {

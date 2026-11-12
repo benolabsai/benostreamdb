@@ -149,8 +149,8 @@ musique_parity() {
         -v "$SCRATCH:/work/scratch" \
         -v "$WHEELS:/wheels:ro" \
         -e TMPDIR=/work/scratch/tmp \
+        -e BENCH_SCRIPT=run_musique_parity.py \
         "$MUSIQUE_IMAGE" \
-        python3 /opt/bench/run_musique_parity.py \
         --data-dir /data/musique \
         --scratch-dir /work/scratch/musique_parity \
         --corpus-json /opt/bench/musique_corpus.json \
