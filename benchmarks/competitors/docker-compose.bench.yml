@@ -38,6 +38,9 @@ x-bench-env: &bench-env
   M: "${M:-16}"
   EF_CONSTRUCTION: "${EF_CONSTRUCTION:-200}"
   EF_SEARCH: "${EF_SEARCH:-200}"
+  # Two-stage exact rescore: 1 = off. The engine treats `refine_factor` as absent
+  # when it is 1, so passing 1 through is a no-op by design.
+  REFINE_FACTOR: "${REFINE_FACTOR:-1}"
   ENGINE: "${ENGINE:-faiss}"
   DEVICE: "${DEVICE:-cpu}"
   WORKLOAD: "${WORKLOAD:-vector}"

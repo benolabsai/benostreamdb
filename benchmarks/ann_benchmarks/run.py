@@ -181,6 +181,15 @@ def main() -> None:
     ap.add_argument("--m", type=int, default=16, help="HNSW M (complexity)")
     ap.add_argument("--ef-construction", type=int, default=200, help="HNSW ef_construction (quality)")
     ap.add_argument("--ef-search", type=int, default=200, help="HNSW ef_search (query beam width)")
+    ap.add_argument(
+        "--refine-factor",
+        type=int,
+        default=1,
+        help=(
+            "two-stage exact rescore: request k*factor candidates from the graph and "
+            "re-rank them from the Parquet f32 payload (1 = off)"
+        ),
+    )
     ap.add_argument("--metric", default=None, help="distance metric (default: from the dataset)")
     ap.add_argument("--cores", type=int, default=0, help="constrain the engine to N cores (0 = leave default)")
     ap.add_argument("--ram-gb", type=float, default=0.0, help="constrain the engine to N GB RAM (0 = leave default)")
@@ -312,7 +321,14 @@ def main() -> None:
             "query": query_list,
             "k": k,
             "ef_search": args.ef_search,
+            "refine_factor": args.refine_factor,
         }
+        if args.refine_factor > 1:
+            # Two-stage exact rescoring: ask the graph for k*factor candidates, then
+            # re-rank them by exact distance from the uncompressed f32 payload in
+            # Parquet. The engine's `effective_refine` is `refine_factor.unwrap_or(1)`,
+            # so 1 means "off" and this key must be absent, not 1.
+            vf["refine_factor"] = args.refine_factor
         t1 = time.perf_counter()
         # Project only `id`: the harness uses nothing else, and fetching the
         # embedding column would read the whole (multi-hundred-MB) row group.
@@ -360,6 +376,7 @@ def main() -> None:
             "m": args.m,
             "ef_construction": args.ef_construction,
             "ef_search": args.ef_search,
+            "refine_factor": args.refine_factor,
             "metric": metric,
         },
         "queries": q,
@@ -399,6 +416,7 @@ def main() -> None:
             f.write(f"| M (complexity) | {args.m} |\n")
             f.write(f"| ef_construction (quality) | {args.ef_construction} |\n")
             f.write(f"| ef_search | {args.ef_search} |\n")
+            f.write(f"| refine_factor | {args.refine_factor} |\n")
             if args.cores > 0 or args.ram_gb > 0:
                 f.write(f"| Cores | {args.cores or 'default'} |\n")
                 f.write(f"| RAM (GB) | {args.ram_gb or 'default'} |\n")

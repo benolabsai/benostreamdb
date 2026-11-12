@@ -132,6 +132,79 @@ results/hardware_profile.txt               # host + envelope + dataset
 
 ---
 
+## 3.1 Running the whole sweep
+
+`docker_bench.sh` measures one dataset. The report is built from nine sections, and
+they are driven by one script:
+
+```bash
+benchmarks/competitors/sweep_full_row.sh
+```
+
+It can be invoked from any directory (it anchors itself at the repo root, because
+several host harnesses write repo-relative paths), and it regenerates
+`benchmarks/results/BENCHMARK_REPORT.md` as its last step.
+
+| # | Section | What it measures | Artifacts |
+|---|---|---|---|
+| 1 | `gpu_cdist` | GPU distance kernels | `results/gpu_cdist.json` |
+| 2 | `vector_ann` | BenoStreamDB self-characterization, `hnsw` + `hnsw_tq8`, 8 datasets | `ann_benchmarks/results/*` |
+| 3 | `vector_matrix` | competitor matrix, CPU+GPU pass, enveloped | `competitors/results/*.json` |
+| 4 | `vector_row` | full row: 11 engines x 8 datasets through the compose stack | `competitors/results/*.json` |
+| 5 | `graph` | synthetic + `snap-web-google` + `snap-roadnet-ca` | `graph/results/*` |
+| 6 | `sql` | ClickBench 500k vs DuckDB/DataFusion | `sql/results/*` |
+| 7 | `beir` | scifact / nfcorpus / arguana vs Tantivy | `beir/results/*` |
+| 8 | `filters` | pathological predicates | `results/production_filters.*` |
+| 9 | `production` | concurrency sweep, maintenance, **skew (§7)**, **soak (§8)** | `results/production_*` |
+
+### Knobs (environment variables)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ONLY` | (all) | comma-separated section names, e.g. `ONLY=vector_row,graph` |
+| `CPUS` / `MEM` | `8` / `16g` | envelope for the containerised section only |
+| `SWEEP_PYTHON` | `.venv/bin/python` | interpreter that measures *and* summarizes |
+| `DRY_RUN` | `0` | print the plan, run nothing |
+| `KEEP_GOING` | `1` | continue after a failing section |
+| `SOAK_REPORT` | set by the script | output path for §8; do not override |
+
+`SWEEP_PYTHON` is deliberately not called `PYTHON`: a conda or pyenv install
+commonly exports that, and the sweep would then run under an interpreter with no
+`benostreamdb` wheel while still passing its first sections.
+
+### What the sweep enforces
+
+1. Artifacts older than the sweep are quarantined per section to
+   `results/stale/<stamp>-<section>/`, so no section mixes two runs.
+2. A section that exits 0 without writing a fresh artifact is a **failure**, never a
+   stamp — otherwise the previous run's files are attributed to this session.
+3. Each successful section is stamped through `session_provenance.stamp`, and
+   `generate_summary.py` refuses to build a report whose sections span sessions.
+4. `generate_summary.py` **exits 1** and names every section that rendered
+   `*No … results found*`. A sweep that silently drops a section now fails at the
+   end of the run that caused it.
+
+### Per-engine notes
+
+- The `bsdb-bench-runner` image is **CPU-only**, so `vector_matrix --both` writes
+  `_cpu` artifacts for both passes; there are no `_gpu` files unless the GPU overlay
+  (`docker-compose.bench.gpu.yml`) is in use.
+- **Milvus** builds its index explicitly: `create_collection(index_params=…)` leaves
+  an `AUTOINDEX`, and AUTOINDEX ignores the HNSW `ef` parameter entirely, which
+  silently caps recall. The adapter drops the auto index and creates HNSW after
+  ingest (`describe_index` should report `index_type: HNSW`).
+- **Weaviate** pins the beam width at collection level (`dynamic_ef_min ==
+  dynamic_ef_max`); `weaviate-client` 4.24.1's `near_vector` has **no** `ef`
+  argument, so a per-query ef is silently ignored.
+- `run_bench.sh` installs exactly one wheel. `dist/` can hold both a local
+  `maturin build` and the manylinux build, and passing the glob to pip fails with
+  `ResolutionImpossible` before any engine runs.
+
+The NeurIPS BigANN and MuSiQue envelopes are **not** sections of this sweep: they
+pin different hardware envelopes and are driven separately (§5.1, §5.2).
+
+---
+
 ## 4. Workload families
 
 The same runner image and envelope are reused; `--workload` selects the family.

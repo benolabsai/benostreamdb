@@ -6,60 +6,60 @@
     "nodes": 20000,
     "edges": 99975,
     "max_degree": 667,
-    "pagerank_ms": 19.96,
+    "pagerank_ms": 22.88,
     "strata": [
       {
         "stratum": "Low Degree (p25)",
         "avg_degree": 5.0,
-        "subgraph_p50_ms": 36.95,
-        "subgraph_p90_ms": 39.63,
-        "subgraph_p99_ms": 47.24,
+        "subgraph_p50_ms": 36.51,
+        "subgraph_p90_ms": 39.31,
+        "subgraph_p99_ms": 47.11,
         "avg_subgraph_edges": 239.0,
         "shortest_path_p50_ms": 0.04,
-        "shortest_path_p99_ms": 4.8
+        "shortest_path_p99_ms": 5.07
       },
       {
         "stratum": "Median Degree (p50)",
         "avg_degree": 6.5,
-        "subgraph_p50_ms": 37.04,
-        "subgraph_p90_ms": 40.67,
-        "subgraph_p99_ms": 46.03,
+        "subgraph_p50_ms": 36.66,
+        "subgraph_p90_ms": 40.75,
+        "subgraph_p99_ms": 44.0,
         "avg_subgraph_edges": 347.0,
         "shortest_path_p50_ms": 0.05,
-        "shortest_path_p99_ms": 0.1
+        "shortest_path_p99_ms": 0.16
       },
       {
         "stratum": "High Degree (p90)",
         "avg_degree": 10.6,
-        "subgraph_p50_ms": 37.96,
-        "subgraph_p90_ms": 42.12,
-        "subgraph_p99_ms": 47.49,
+        "subgraph_p50_ms": 37.09,
+        "subgraph_p90_ms": 38.66,
+        "subgraph_p99_ms": 42.72,
         "avg_subgraph_edges": 564.0,
         "shortest_path_p50_ms": 0.07,
-        "shortest_path_p99_ms": 0.38
+        "shortest_path_p99_ms": 0.34
       },
       {
         "stratum": "Supernode Hub (p99+)",
         "avg_degree": 92.9,
-        "subgraph_p50_ms": 38.43,
-        "subgraph_p90_ms": 40.15,
-        "subgraph_p99_ms": 41.21,
+        "subgraph_p50_ms": 36.46,
+        "subgraph_p90_ms": 38.93,
+        "subgraph_p99_ms": 40.61,
         "avg_subgraph_edges": 5676.0,
-        "shortest_path_p50_ms": 0.09,
-        "shortest_path_p99_ms": 0.26
+        "shortest_path_p50_ms": 0.08,
+        "shortest_path_p99_ms": 0.24
       }
     ]
   },
   "relational": {
     "rows": 200000,
     "hot_key_mass_pct": 75.1,
-    "hot_p50_ms": 6.87,
-    "hot_p99_ms": 9.77,
-    "cold_p50_ms": 6.46,
-    "cold_p99_ms": 8.35,
-    "mixed_p50_ms": 6.7,
-    "mixed_p90_ms": 7.67,
-    "mixed_p99_ms": 8.74,
-    "tail_inflation_factor": 1.3
+    "hot_p50_ms": 6.47,
+    "hot_p99_ms": 9.06,
+    "cold_p50_ms": 5.89,
+    "cold_p99_ms": 7.04,
+    "mixed_p50_ms": 6.35,
+    "mixed_p90_ms": 6.87,
+    "mixed_p99_ms": 7.39,
+    "tail_inflation_factor": 1.16
   }
 }

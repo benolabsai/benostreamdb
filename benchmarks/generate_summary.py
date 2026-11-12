@@ -229,18 +229,42 @@ COMPETITOR_CONFIG = [
 ]
 
 
-def _eng_label(engine) -> str:
+def _refine_cell(record: dict) -> str:
+    """`—` when refinement is off, `×N` when the point used two-stage rescoring.
+
+    Separate from the label so the column is present for every engine: a refined
+    row is a different operating point, not a different engine.
+    """
+    try:
+        rf = int(record.get("refine_factor") or 1)
+    except (TypeError, ValueError):
+        rf = 1
+    return f"×{rf}" if rf > 1 else "—"
+
+
+def _eng_label(engine, refine_factor=None) -> str:
     """Bold BenoStreamDB rows so they stand out in every table.
 
     The vector quantization suffix (`_tq8`/`_pq`/`_sq`) is dropped from the
     engine name because the Index Precision column already carries it, so the
     quantized variants read as plain `benostreamdb` and `lancedb`.
+
+    A refined measurement is labelled distinctly: `refine_factor` is recorded in
+    the artifact, and without it a refined row would be indistinguishable from its
+    unrefined sibling (same engine, same dataset, same device) — and would be
+    dropped outright by the duplicate collapse below.
     """
     name = str(engine)
     for suffix in ("_tq8", "_pq", "_sq", "_flat"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
             break
+    try:
+        rf = int(refine_factor or 1)
+    except (TypeError, ValueError):
+        rf = 1
+    if rf > 1:
+        name = f"{name}+refine×{rf}"
     return f"**{name}**" if name.startswith("benostreamdb") else name
 
 
@@ -1110,7 +1134,16 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
     # the best run.
     _best: dict = {}
     for r in vector:
-        key = (r.get("engine"), r.get("dataset"), r.get("device"))
+        # `refine_factor` belongs in the key: two-stage exact rescoring produces a
+        # second measurement of the same engine/dataset/device that trades throughput
+        # for recall, so collapsing on the first three fields would silently keep the
+        # faster unrefined row and drop the refined one.
+        key = (
+            r.get("engine"),
+            r.get("dataset"),
+            r.get("device"),
+            int(r.get("refine_factor") or 1),
+        )
         if key not in _best or (r.get("qps") or 0) > (_best[key].get("qps") or 0):
             _best[key] = r
     vector = list(_best.values())
@@ -1143,9 +1176,9 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
             sections.append(f"### Vector — `{ds}`")
             sections.append("")
             sections.append(
-                "| Engine | Index Precision | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
+                "| Engine | Index Precision | Refine | Recall@k | Recall > 0.95 | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
             )
-            sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+            sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
             # Sort order:
             # 1. Index Precision: f32 first (tier 0), compressed second (tier 1)
             # 2. Recall > 0.95: True first (tier 0), False second (tier 1)
@@ -1176,7 +1209,7 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
                 rec = float(r.get("recall_at_k") or 0)
                 rec_pass = "True" if rec > 0.95 else "False"
                 sections.append(
-                    f"| {_eng_label(eng)} | {idx} | "
+                    f"| {_eng_label(eng, r.get('refine_factor'))} | {idx} | {_refine_cell(r)} | "
                     f"{r.get('recall_at_k')} | {rec_pass} | {_index_qps(r)} | {_index_p50(r)} | {_index_p99(r)} | "
                     f"{_row_qps(r)} | {_row_p50(r)} | {_row_p99(r)} | "
                     f"{r.get('build_s')} | {r.get('index_mb')} |"

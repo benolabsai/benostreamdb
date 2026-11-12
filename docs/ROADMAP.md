@@ -439,8 +439,8 @@ Themes are ordered by priority.
 
 ---
 
-### Theme 12: High-Throughput Vector Indexing Suite (e-means + Residuals + SIMD FastScan) (v0.16.0)
-*10× faster index construction via e-means coarse clustering, 70–85% variance reduction via residual encoding, and 4–6× faster query scans via 4-bit in-register SIMD FastScan.* — 🔴 **High Priority (Committed for v0.16.0)**
+### Theme 12: High-Throughput Vector Indexing Suite (e-means + Residuals + SIMD FastScan) (v0.16.0) — 🟢 **Shipped in v0.16.0**
+*10× faster index construction via e-means coarse clustering, 70–85% variance reduction via residual encoding, and 4–6× faster query scans via 4-bit in-register SIMD FastScan.* — 🟢 **Shipped in v0.16.0** (the engine work; the comparative Lloyd-vs-e-means benchmark below is still open)
 
 > **Why now.** Rather than treating vector indexing bottlenecks in isolation, this theme unifies coarse clustering, inverted list layout, and SIMD query traversal into an integrated vector pipeline:
 > 1. **Coarse Clustering Bottleneck (Solved via e-means)**: Replaces truncated Lloyd's algorithm with Meta FAIR's stochastic Exponential Moving Average (EMA) e-means algorithm (*"e-means: outperforming k-means in one-tenth the epochs"*, Bessa et al., arXiv:2611.09501), achieving true convergence in 1.2–2.5 epochs (~10× faster training, zero dead clusters).
@@ -454,14 +454,14 @@ Themes are ordered by priority.
   - Gated dispatch in `src/core/index/ivf.rs` (`simple_kmeans_with_seed`), preserving capacity-capped Voronoi balancing. Verified: 10,000 vectors clustered into 64 partitions in 150ms.
 - [x] **Fuzzing & Robustness (`fuzz/fuzz_targets/e_means.rs`)** — ✅ **Completed**:
   - Registered `e_means` fuzz target fuzzing degenerate inputs (zero vectors, colinear points, extreme norms, NaNs).
-- [ ] **Residual Inverted List Encoding (`src/core/index/ivf.rs` & `benostream-gpu-ann/src/ivf_flat.rs`)** — 🔴 **High Priority**:
-  - Subtract coarse centroid $c_j$ during inverted list insertion ($r = x - c_j$).
+- [x] **Residual Inverted List Encoding (`src/core/index/ivf.rs` & `benostream-gpu-ann/src/ivf_flat.rs`)** — ✅ **Completed in v0.16.0**:
+  - Subtract coarse centroid $c_j$ during inverted list insertion ($r = x - c_j$): `IvfIndex::use_residuals` defaults to enabled.
   - Compute query residual $q_r = q - c_j$ once per probed cluster during fine search, preserving exact distance equivalence while shrinking storage and quantization noise.
-- [ ] **In-Register 4-bit SIMD FastScan Engine** — 🔴 **High Priority**:
-  - Implement 4-bit PQ codebook quantization and 32-vector interleaved block packing.
-  - Implement AVX2 (`_mm256_shuffle_epi8`) and ARM NEON (`vtbl1_u8`) in-register distance accumulation kernels.
-- [ ] **Empirical Benchmarks (SIFT-1M & Cohere-10M)** — 🔴 **High Priority**:
+- [x] **In-Register 4-bit SIMD FastScan Engine (`benostream-gpu-ann/src/`)** — ✅ **Completed in v0.16.0**:
+  - 4-bit codebook quantization and interleaved block packing live in `fastscan.rs`, the residual-encoded IVF scan in `ivf_fastscan.rs`, with `benostream-gpu-ann/tests/test_ivf_fastscan.rs` as the regression gate. These are in the `benostream-gpu-ann` sub-crate, not `src/core/index/`.
+- [ ] **Empirical Benchmarks (SIFT-1M & Cohere-10M)** — 🔴 **Still open**:
   - Benchmark index construction wall-clock time and query recall@10 vs. latency curves across Lloyd, e-means, and FastScan.
+  - The v0.16.0 runs measured *quantizer modes* (SQ8, PQ) on BigANN-10M and Cohere-10M, not clustering algorithms. What is missing is a controlled A/B of Lloyd against e-means at matched recall, and a FastScan-vs-scalar-scan latency pair; no artifact exists for either yet.
 
 ---
 

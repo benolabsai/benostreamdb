@@ -726,6 +726,11 @@ def search_pass(table, args, queries, gt_indices, ef_search: int, n_probe: int, 
         "threads": args.threads,
         "ef_search": ef_search,
         "n_probe": n_probe,
+        # Recorded so a refined point is distinguishable from an unrefined one in the
+        # artifact: the engine treats a missing/1 factor as "off", and until now no
+        # record carried the field at all, so `grep refine results/**/*.json` found
+        # nothing even when `--refine-factor` had been passed.
+        "refine_factor": getattr(args, "refine_factor", None),
         "recall_at_k": round(recall, 4) if recall is not None else None,
         "pure_qps": round(q / max(wall, 0.001), 1),
         "p50_ms": round(float(np.percentile(latencies, 50)) * 1000, 2),

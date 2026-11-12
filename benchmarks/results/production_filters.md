@@ -8,13 +8,13 @@
 
 | Filter Test Case | Selectivity | BenoStreamDB Total | Session / Plan Overhead | Pure Compute / Scan | DuckDB p50 | Differential Oracle Match | Status |
 |---|---|---|---|---|---|---|---|
-| **F1 (Ultra-Selective 0.01%)** | 0.0% | **8.50 ms** | 0.74 ms | **7.76 ms** | 1.55 ms | ✅ 100% Agreement | ✅ PASS |
-| **F2 (Moderate Filter 5%)** | 4.98% | **10.17 ms** | 0.74 ms | **9.42 ms** | 2.18 ms | ✅ 100% Agreement | ✅ PASS |
-| **F3 (Pathological Low-Selectivity 99.5%)** | 100.0% | **8.13 ms** | 0.74 ms | **7.38 ms** | 0.96 ms | ✅ 100% Agreement | ✅ PASS |
-| **F4 (High-Cardinality IN List 50 items)** | 15.82% | **3.51 ms** | 0.74 ms | **2.76 ms** | 1.75 ms | ✅ 100% Agreement | ✅ PASS |
-| **F5 (Compound Negation & Range)** | 8.33% | **7.75 ms** | 0.74 ms | **7.01 ms** | 1.30 ms | ✅ 100% Agreement | ✅ PASS |
-| **F6 (Prefix String Filter)** | 16.7% | **5.25 ms** | 0.74 ms | **4.51 ms** | 0.84 ms | ✅ 100% Agreement | ✅ PASS |
-| **F7 (Unanchored Substring Filter)** | 14.32% | **6.02 ms** | 0.74 ms | **5.28 ms** | 0.94 ms | ✅ 100% Agreement | ✅ PASS |
+| **F1 (Ultra-Selective 0.01%)** | 0.0% | **8.47 ms** | 0.74 ms | **7.74 ms** | 1.70 ms | ✅ 100% Agreement | ✅ PASS |
+| **F2 (Moderate Filter 5%)** | 4.98% | **9.71 ms** | 0.74 ms | **8.97 ms** | 1.69 ms | ✅ 100% Agreement | ✅ PASS |
+| **F3 (Pathological Low-Selectivity 99.5%)** | 100.0% | **6.37 ms** | 0.74 ms | **5.63 ms** | 1.09 ms | ✅ 100% Agreement | ✅ PASS |
+| **F4 (High-Cardinality IN List 50 items)** | 15.82% | **3.58 ms** | 0.74 ms | **2.84 ms** | 1.76 ms | ✅ 100% Agreement | ✅ PASS |
+| **F5 (Compound Negation & Range)** | 8.33% | **8.09 ms** | 0.74 ms | **7.35 ms** | 1.57 ms | ✅ 100% Agreement | ✅ PASS |
+| **F6 (Prefix String Filter)** | 16.7% | **5.30 ms** | 0.74 ms | **4.56 ms** | 0.91 ms | ✅ 100% Agreement | ✅ PASS |
+| **F7 (Unanchored Substring Filter)** | 14.32% | **6.69 ms** | 0.74 ms | **5.95 ms** | 0.93 ms | ✅ 100% Agreement | ✅ PASS |
 
 ### DataFusion Execution & Overhead Analysis
 1. **Per-Query Session Overhead (0.74 ms)**: In the current Python API (`table.sql()`), each query instantiates a new DataFusion `SessionContext` and registers all standard scalar/aggregate functions, vector operators, and graph UDFs from scratch before planning begins.

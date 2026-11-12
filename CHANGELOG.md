@@ -11,11 +11,13 @@ contains the correctness fixes alone, which it does not.
 
 ### Added
 
-- **`e-means` coarse quantizer + SIMD residual fastscan** (`benostream-gpu-ann`,
+- **`e-means` coarse quantizer + SIMD residual fastscan** (`benostream-gpu-ann/src/e_means.rs`,
   `src/core/index/e_means.rs`): a k-means-family coarse quantizer with Meta scaling
-  laws and attribution, residual-encoded IVF postings, and a SIMD fastscan over
-  them (`fastscan.rs`, `ivf_fastscan.rs`). New `fuzz/fuzz_targets/e_means.rs` target
-  and `tests/test_ivf_fastscan.rs`. Merged from `feature/e-means`.
+  laws and attribution, plus residual-encoded IVF postings (`IvfIndex::use_residuals`
+  in `src/core/index/ivf.rs`). The SIMD fastscan lives in the sub-crate —
+  `benostream-gpu-ann/src/fastscan.rs` and `benostream-gpu-ann/src/ivf_fastscan.rs` —
+  with `benostream-gpu-ann/tests/test_ivf_fastscan.rs` as its gate, and a new
+  `fuzz/fuzz_targets/e_means.rs` target. Merged from `feature/e-means`.
 - **Iceberg V3 deletion vectors, end to end** (`V3.2`/`V3.3`): `DELETION_VECTOR_TYPE`
   is the spec identifier `deletion-vector-v1`; `encode_deletion_vector_v1` /
   `decode_deletion_vector_v1` implement the exact envelope (4B BE length, magic

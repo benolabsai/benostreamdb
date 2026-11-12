@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1127,7 +1127,10 @@ dependencies = [
  "async-stream",
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-glue",
+ "aws-sigv4",
+ "aws-smithy-runtime-api",
  "axum 0.7.9",
  "base64 0.22.1",
  "benostream-gpu-ann",
@@ -1196,6 +1199,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
+ "urlencoding",
  "uuid",
  "volo-thrift",
  "zstd 0.13.3",
@@ -1215,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb-search"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "arrow",

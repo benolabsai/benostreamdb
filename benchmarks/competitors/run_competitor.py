@@ -792,14 +792,22 @@ class MilvusAdapter(VectorAdapter):
                 metric_type=metric,
                 params={"M": int(params["m"]), "efConstruction": int(params["ef_construction"])},
             )
+        # `create_collection(index_params=...)` does not stick: the live collection
+        # reported `index_type: AUTOINDEX`, and AUTOINDEX never reads the HNSW `ef`
+        # search parameter. That is why recall was byte-identical (0.6796 on
+        # nytimes-256) for ef=200, ef=800, and after an explicit flush, while QPS
+        # moved only with noise. Create the collection, drop the auto index, then
+        # declare the intended index after the data is in.
         client.create_collection(
             collection_name=name,
             dimension=int(train.shape[1]),
             metric_type=metric,
             auto_id=False,
             consistency_level="Strong",
-            index_params=index_params,
         )
+        client.release_collection(name)
+        for auto_index in client.list_indexes(name):
+            client.drop_index(name, index_name=auto_index)
         batch = 512
         for start in range(0, len(train), batch):
             end = min(start + batch, len(train))
@@ -807,6 +815,24 @@ class MilvusAdapter(VectorAdapter):
                 collection_name=name,
                 data=[{"id": int(i), "vector": train[i].tolist()} for i in range(start, end)],
             )
+        # Seal the growing segments before loading. Without an explicit flush the
+        # newest inserts still live in an unsealed growing segment, which
+        # `load_collection` does not make searchable: queries silently return fewer
+        # than k neighbours. That asymmetry is why only some datasets lost recall
+        # (nytimes-256 0.68 vs qdrant 0.998) while others looked healthy — the loss
+        # tracks how much of the insert stream Milvus happened to auto-seal.
+        client.flush(name)
+        client.create_index(name, index_params=index_params)
+        # Wait for the index build to finish; searching a half-built index returns
+        # whatever is already indexed.
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            names = client.list_indexes(name)
+            if names:
+                info = client.describe_index(name, names[0])
+                if str(info.get("state", "")).lower() == "finished":
+                    break
+            time.sleep(0.2)
         client.load_collection(name)
         # `load_collection` acknowledges the request; it is not a barrier. Searching
         # before every segment is queryable returns fewer than `k` neighbours, which
@@ -901,6 +927,14 @@ class WeaviateAdapter(VectorAdapter):
         quantizer = None
         if self.index_type in ("hnsw_sq", "sq"):
             quantizer = Configure.VectorIndex.Quantizer.sq(training_limit=100000)
+        # weaviate-client 4.24.1's `near_vector` has no `ef` argument (verified by
+        # introspecting the bound method), so the previous `near_vector(..., ef=...)`
+        # always raised TypeError and fell through to the fallback that sends no ef at
+        # all — every query then used Weaviate's dynamic ef (min 100 / max 500), which
+        # is why recall was insensitive to EF_SEARCH. Pin the beam width at the
+        # collection instead: min == max makes the ef the harness asks for the ef that
+        # is actually used.
+        ef_target = max(int(os.environ.get("EF_SEARCH", "200")), 1)
         client.collections.create(
             name=name,
             vectorizer_config=Configure.Vectorizer.none(),
@@ -908,6 +942,8 @@ class WeaviateAdapter(VectorAdapter):
                 distance_metric=dist,
                 ef_construction=int(params["ef_construction"]),
                 max_connections=int(params["m"]),
+                dynamic_ef_min=ef_target,
+                dynamic_ef_max=ef_target,
                 quantizer=quantizer,
             ),
             properties=[Property(name="rid", data_type=DataType.INT)],
