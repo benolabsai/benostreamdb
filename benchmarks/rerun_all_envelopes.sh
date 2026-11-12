@@ -133,13 +133,23 @@ musique_parity() {
     # f32 index + BGE cross-encoder is the published headline row; 1000 questions
     # and k=5 match MUSIQUE_PARITY.md. If the Zilliz sample manifest is present it
     # is passed through so the question slice is identical to the published run.
+    # The Zilliz sample manifest ships in the repo (benchmarks/zilliz_manifest.json)
+    # and is reachable in-container at /opt/bench, so parity is the default rather
+    # than something that silently degrades to the dev set when an environment
+    # variable is forgotten. A manifest outside those two mounts is an error, not a
+    # fallback: it would measure a different question slice and read as parity.
+    MUSIQUE_MANIFEST="${MUSIQUE_MANIFEST:-$BENCH_DIR/zilliz_manifest.json}"
     local manifest_args=()
-    if [ -n "${MUSIQUE_MANIFEST:-}" ] && [ -f "${MUSIQUE_MANIFEST}" ]; then
-        manifest_args=(--sample-manifest "/data/musique/$(basename "$MUSIQUE_MANIFEST")"
-                       --manifest-dataset musique)
+    if [ -f "$MUSIQUE_MANIFEST" ]; then
+        case "$MUSIQUE_MANIFEST" in
+            "$BENCH_DIR"/*) manifest_args=(--sample-manifest "/opt/bench/${MUSIQUE_MANIFEST#"$BENCH_DIR"/}") ;;
+            "$BSDB_DATA_ROOT"/musique/*) manifest_args=(--sample-manifest "/data/musique/${MUSIQUE_MANIFEST#"$BSDB_DATA_ROOT"/musique/}") ;;
+            *) echo "$MUSIQUE_MANIFEST is not under \$BENCH_DIR or \$BSDB_DATA_ROOT/musique, so the container cannot see it" >&2; exit 1 ;;
+        esac
+        manifest_args+=(--manifest-dataset musique)
     else
-        echo "note: MUSIQUE_MANIFEST unset — running the first 1000 questions of the"
-        echo "      dev set instead of the Zilliz manifest slice (not byte-identical)."
+        echo "note: no sample manifest at $MUSIQUE_MANIFEST — running the first 1000"
+        echo "      questions of the dev set instead (not byte-identical to parity)."
         manifest_args=(--max-questions 1000)
     fi
     # The reranker and embedder are pulled from the Hugging Face hub at load time.
