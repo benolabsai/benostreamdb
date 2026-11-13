@@ -1781,11 +1781,12 @@ async fn mock_nessie_entries(
 
 async fn mock_nessie_content(
     State(st): State<Arc<MockNessieState>>,
-    AxumPath(ref_str): AxumPath<String>,
-    AxumQuery(params): AxumQuery<HashMap<String, String>>,
+    AxumPath((ref_str, key_path)): AxumPath<(String, String)>,
 ) -> impl IntoResponse {
     let (name, _) = split_nessie_ref(&ref_str);
-    let key = params.get("key").cloned().unwrap_or_default();
+    // Nessie API v2 addresses one keyed content as `/contents/{keyElements}`; a
+    // multi-element key arrives slash-separated and is dotted back together here.
+    let key = key_path.split('/').collect::<Vec<_>>().join(".");
     if let Some((meta_loc, id)) = st.contents.lock().get(&(name.to_string(), key)).cloned() {
         (
             StatusCode::OK,
@@ -1873,7 +1874,10 @@ async fn nessie_rest_v2_mock_conformance() -> Result<()> {
             get(mock_nessie_get_ref).delete(mock_nessie_drop_branch),
         )
         .route("/api/v2/trees/:ref_str/entries", get(mock_nessie_entries))
-        .route("/api/v2/trees/:ref_str/content", get(mock_nessie_content))
+        .route(
+            "/api/v2/trees/:ref_str/contents/*key_path",
+            get(mock_nessie_content),
+        )
         .route(
             "/api/v2/trees/:ref_str/history/commit",
             post(mock_nessie_commit),
