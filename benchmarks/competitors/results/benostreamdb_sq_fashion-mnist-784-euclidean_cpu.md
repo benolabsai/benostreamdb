@@ -15,11 +15,11 @@
 | Cores | 8 |
 | RAM (GB) | 16.0 |
 | recall@10 | 0.9974 |
-| QPS | 445.6 |
-| Build time | 5.1s |
+| QPS | 383.7 |
+| Build time | 5.0s |
 | Index size | 147.9 MB |
-| p50 latency | 2.21 ms |
-| p99 latency | 2.81 ms |
-| Pure Index QPS | 536.2 |
-| Pure Index p50 latency | 1.83 ms |
-| Pure Index p99 latency | 2.50 ms |
+| p50 latency | 2.58 ms |
+| p99 latency | 3.34 ms |
+| Pure Index QPS | 537.2 |
+| Pure Index p50 latency | 1.85 ms |
+| Pure Index p99 latency | 2.38 ms |

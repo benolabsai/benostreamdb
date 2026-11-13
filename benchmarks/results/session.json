@@ -488,16 +488,48 @@
         "competitors/results/lancedb_sq_r4_mnist-784-euclidean_cpu.json",
         "competitors/results/lancedb_sq_r4_nytimes-256-angular_cpu.json",
         "competitors/results/lancedb_sq_r4_sift-128-euclidean_cpu.json",
-        "competitors/results/lancedb_sq_sift-128-euclidean_cpu.json"
+        "competitors/results/lancedb_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/faiss_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/faiss_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/faiss_sq_glove-100-angular_cpu.json",
+        "competitors/results/faiss_sq_glove-200-angular_cpu.json",
+        "competitors/results/faiss_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/faiss_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/faiss_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/faiss_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/milvus_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/milvus_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/milvus_sq_glove-100-angular_cpu.json",
+        "competitors/results/milvus_sq_glove-200-angular_cpu.json",
+        "competitors/results/milvus_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/milvus_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/milvus_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/milvus_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/qdrant_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/qdrant_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/qdrant_sq_glove-100-angular_cpu.json",
+        "competitors/results/qdrant_sq_glove-200-angular_cpu.json",
+        "competitors/results/qdrant_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/qdrant_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/qdrant_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/qdrant_sq_sift-128-euclidean_cpu.json",
+        "competitors/results/weaviate_sq_fashion-mnist-784-euclidean_cpu.json",
+        "competitors/results/weaviate_sq_gist-960-euclidean_cpu.json",
+        "competitors/results/weaviate_sq_glove-100-angular_cpu.json",
+        "competitors/results/weaviate_sq_glove-200-angular_cpu.json",
+        "competitors/results/weaviate_sq_lastfm-64-dot_cpu.json",
+        "competitors/results/weaviate_sq_mnist-784-euclidean_cpu.json",
+        "competitors/results/weaviate_sq_nytimes-256-angular_cpu.json",
+        "competitors/results/weaviate_sq_sift-128-euclidean_cpu.json"
       ],
       "calibration": {
         "available": true,
-        "matmul_gflops": 220.385,
-        "measured_at": "2026-11-12T21:42:34Z",
-        "random_gather_ns_per_access": 7.3676,
-        "triad_gbs": 12.5423
+        "matmul_gflops": 79.5714,
+        "measured_at": "2026-11-13T00:36:36Z",
+        "random_gather_ns_per_access": 7.4271,
+        "triad_gbs": 12.6328
       },
-      "captured_at": "2026-11-12T21:42:34Z",
+      "captured_at": "2026-11-13T00:36:36Z",
       "note": null,
       "session": "8c5598405a7d"
     }
@@ -847,6 +879,13 @@
           "measured_at": "2026-11-12T21:56:50Z",
           "random_gather_ns_per_access": 8.7167,
           "triad_gbs": 12.6183
+        },
+        {
+          "available": true,
+          "matmul_gflops": 79.5714,
+          "measured_at": "2026-11-13T00:36:36Z",
+          "random_gather_ns_per_access": 7.4271,
+          "triad_gbs": 12.6328
         }
       ],
       "fingerprint": {
@@ -871,7 +910,7 @@
         "python": "3.14.4"
       },
       "first_seen": "2026-11-12T03:12:43Z",
-      "last_seen": "2026-11-12T21:56:50Z",
+      "last_seen": "2026-11-13T00:36:36Z",
       "sections": [
         "gpu_cdist",
         "vector_ann",
