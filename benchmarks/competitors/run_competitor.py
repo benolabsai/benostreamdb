@@ -755,13 +755,14 @@ class QdrantAdapter(VectorAdapter):
 
 
 class MilvusAdapter(VectorAdapter):
-    """Milvus (dense collection + HNSW / IVF_SQ8) via pymilvus."""
+    """Milvus (dense collection + HNSW / HNSW_SQ) via pymilvus."""
 
     def __init__(self, index_type: str = "hnsw") -> None:
-        name = "milvus_sq" if index_type == "ivf_sq8" else "milvus"
+        quantized = index_type in ("hnsw_sq", "ivf_sq8")
+        name = "milvus_sq" if quantized else "milvus"
         super().__init__(name=name, module="pymilvus", server_side=True)
         self.index_type = index_type
-        self.index_precision = "sq" if index_type == "ivf_sq8" else "f32"
+        self.index_precision = "sq" if quantized else "f32"
         self._nlist = 0
 
     def build(self, train, params, ctx):
@@ -788,17 +789,24 @@ class MilvusAdapter(VectorAdapter):
         # in here, not added via a later `create_index` call. `Strong` (rather than
         # the default `Bounded`) keeps the build-then-search sequence deterministic.
         index_params = IndexParams()
-        if self.index_type == "ivf_sq8":
-            # IVF_SQ8: inverted-file clustering + 8-bit scalar quantization. nlist
-            # scales with the corpus size (~4·sqrt(n)); nprobe is derived from
-            # ef_search at query time.
-            self._nlist = min(16384, max(4, int(4 * (int(train.shape[0]) ** 0.5))))
+        if self.index_type in ("hnsw_sq", "ivf_sq8"):
+            # HNSW_SQ: graph traversal over 8-bit scalar-quantized vectors. Chosen
+            # over IVF_SQ8 because IVF partitions on L2 centroids, which is a poor
+            # router for a dot-product metric: on lastfm-64-dot IVF_SQ8 with
+            # metric_type=IP returned 0.8608 recall while the same collection served
+            # by HNSW (f32) returned 0.9954, and the loss was the routing, not the
+            # quantization -- a true top-IP neighbour lands in a cluster whose L2
+            # centroid is far away, so a small nprobe excludes it. A graph keeps the
+            # metric in the traversal, so only the quantizer's error remains.
             index_params.add_index(
                 field_name="vector",
-                index_type="IVF_SQ8",
-                index_name="bsdb_ivf_sq8",
+                index_type="HNSW_SQ",
+                index_name="bsdb_hnsw_sq",
                 metric_type=metric,
-                params={"nlist": self._nlist},
+                params={
+                    "M": int(params["m"]),
+                    "efConstruction": int(params["ef_construction"]),
+                },
             )
         else:
             index_params.add_index(
@@ -873,6 +881,8 @@ class MilvusAdapter(VectorAdapter):
         if self.index_type == "ivf_sq8":
             nprobe = min(self._nlist, max(1, int(ef_search) // 10))
             return {"metric_type": mtype, "params": {"nprobe": nprobe}}
+        # HNSW and HNSW_SQ both search with `ef`, so the quantized variant is
+        # compared at the same traversal budget as the f32 one.
         return {"metric_type": mtype, "params": {"ef": int(ef_search)}}
 
     def search(self, handle, queries, k, ef_search, metric):
@@ -1034,7 +1044,10 @@ def vector_adapters() -> dict[str, VectorAdapter]:
         "qdrant": QdrantAdapter("flat"),
         "qdrant_sq": QdrantAdapter("hnsw_sq"),
         "milvus": MilvusAdapter(),
-        "milvus_sq": MilvusAdapter("ivf_sq8"),
+        # HNSW_SQ, not IVF_SQ8: see the note in `MilvusAdapter.build`. IVF routing
+        # measured the L2 centroid layout rather than the quantization on the
+        # dot-product dataset.
+        "milvus_sq": MilvusAdapter("hnsw_sq"),
         "weaviate": WeaviateAdapter("flat"),
         "weaviate_sq": WeaviateAdapter("hnsw_sq"),
     }

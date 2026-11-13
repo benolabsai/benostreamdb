@@ -167,7 +167,8 @@ def fmt_ms_as_sec(ms: float | None) -> str:
 # can be read against HOW each engine was set up and WHERE it was measured.
 COMPETITOR_CONFIG = [
     ("vector", "benostreamdb",
-     "Native HNSW (uncompressed f32) & TurboQuant (tq8 8-bit polar lattice)",
+     "Native HNSW (uncompressed f32); scalar quantization (`sq`, uniform 8-bit); "
+     "TurboQuant (`tq8`, 8-bit polar lattice, power-of-two widths only — no padding)",
      "embedded (in-process Rust)"),
     ("vector", "faiss",
      "IndexHNSWFlat (uncompressed f32) & IndexHNSWSQ (8-bit scalar quantization QT_8bit)",
@@ -191,6 +192,11 @@ COMPETITOR_CONFIG = [
     ("vector", "weaviate",
      "collection HNSW: uncompressed f32 & SQ (8-bit scalar quantization); distance cosine/dot/l2-squared",
      "client → server (Weaviate)"),
+    ("vector", "milvus",
+     "collection HNSW (uncompressed f32) & HNSW_SQ (8-bit scalar quantization), M/ef_construction, "
+     "ef = ef_search, metric_type IP/COSINE/L2. Not IVF_SQ8: IVF partitions on L2 centroids, which "
+     "routed badly under a dot-product metric and reported 0.8608 where HNSW_SQ reports 0.9854 on lastfm",
+     "client → server (Milvus)"),
     ("graph", "benostreamdb",
      "CSR graph, in-process Rust (PageRank 30 iters / connected components / shortest path)",
      "embedded (in-process Rust)"),
@@ -243,18 +249,6 @@ def _record_refine(record: dict) -> int:
     except (TypeError, ValueError):
         rf = 1
     return rf if rf > 1 else 1
-
-
-def _refine_cell(record: dict) -> str:
-    """`True` when the point used second-stage rescoring, `False` otherwise.
-
-    A boolean rather than the factor: the measurement is "did exact f32 rescoring
-    recover the quantized index's recall loss", and every variant saturates at
-    ×2, so separate `×2` and `×4` rows implied a tuning curve the data does not
-    contain. It also removes the misreading that a flat ×1/×2/×4 sequence on an
-    uncompressed index is a broken feature, when it is the only correct result.
-    """
-    return "True" if _record_refine(record) > 1 else "False"
 
 
 def _eng_label(engine) -> str:
@@ -1059,37 +1053,35 @@ def generate_summary(
     )
     sections.append("")
     sections.append(
-        "**`2nd-stage refine` is a boolean, not a tuning curve.** `True` means the query "
-        "asked the graph for `2k` candidates and re-ranked them by exact f32 distance read "
-        "from the column's Parquet; `False` means the index answered directly. The second "
-        "stage exists because quantization is lossy: an `sq`/`tq8` index ranks by codes, so "
-        "its top-k can exclude vectors whose true distance would have qualified. Rescoring "
-        "the `2k` candidates against the uncompressed payload recovers most of that — `tq8` "
-        "on glove-100 moves 0.9766 → 0.9892 and `sq` 0.9788 → 0.9902, both within 0.1 pt of "
-        "the unquantized index — and costs the extra gather-and-distance pass, so `Index "
-        "QPS` and `Row QPS` drop by roughly a quarter. That is the whole trade: one factor, "
-        "because every variant saturates at ×2 and ×4 only buys a slower query."
+        "**Second-stage exact refinement is measured, and each engine appears once per index "
+        "precision at its better configuration.** Quantization is lossy: an `sq`/`tq8` index "
+        "ranks by codes, so its top-k can exclude vectors whose true distance would have "
+        "qualified. Where that is possible, the harness also measures a pass that retrieves "
+        "`2k` candidates and re-ranks them by the exact f32 distance read from the column's "
+        "Parquet. Rescoring recovers most of the loss at the cost of the extra "
+        "gather-and-distance pass: on sift `tq8` moves 0.9816 → 0.997 and on glove-100 `sq` "
+        "0.9788 → 0.9902, each within 0.1 pt of the unquantized index, for roughly a quarter "
+        "less throughput. Those are the rows the table carries; the unrefined measurement of "
+        "the same configuration stays in the artifacts. One factor is measured, not a curve: "
+        "every variant saturates at ×2, so ×4 buys only a slower query."
     )
     sections.append("")
     sections.append(
-        "**Only quantized indexes are refined, and only BenoStreamDB's, so `True` appears on "
-        "its `sq` and `tq8` rows.** An uncompressed index has nothing to recover: stage 1 "
-        "already ranks those same f32 vectors in the very metric the rescore would use, so "
-        "re-ranking the same candidate set cannot reorder the true top-k. Measuring it "
-        "produced a duplicate row at one to two thirds of the throughput, so it is not "
-        "measured at all — on an f32 row `False` means the index answered directly, which is "
-        "the only configuration that can help. The invariants are enforced rather than "
-        "trusted: `benchmarks/verify_results.py` fails the run on a quantized row whose "
-        "refined recall drops, on a refined row with no unrefined sibling, on `Row QPS` "
-        "exceeding `Index QPS`, on engines measured at different `n`/`dim`/`queries`/`k` for "
-        "one dataset, on artifacts from two hosts, and on an f32 row whose refine changes "
-        "anything at all — that last one can only mean stage 1 and the rescore disagree "
-        "about the metric. Two engines are not refined here: Milvus and Weaviate because "
-        "their adapters cannot reach refinement yet (#125), and LanceDB because its "
-        "`refine_factor` re-ranks the candidate set with L2 regardless of the index distance "
-        "type — on `lastfm-64-dot` that ranks by the wrong metric and loses recall (`sq`: "
-        "0.9206 → 0.8874), which is a property of that refine path rather than a result "
-        "worth publishing."
+        "**The pair is only measured where it can change something.** An uncompressed `f32` "
+        "index has nothing to recover: stage 1 already ranks those same vectors in the very "
+        "metric the rescore would use, so re-ranking the same candidate set cannot reorder "
+        "the true top-k. Measuring it produced a duplicate row at one to two thirds of the "
+        "throughput, so it is not measured at all. Milvus and Weaviate quantization rows "
+        "cannot reach refinement through their adapters yet (#125). LanceDB's refine path "
+        "re-ranks with L2 regardless of the index distance type, so on `lastfm-64-dot` its "
+        "refined row ranks by the wrong metric and loses 3.3 pt (0.9206 → 0.8874); both "
+        "measurements are kept, the higher-recall one is the row shown, and the divergence is "
+        "reported by `benchmarks/verify_results.py` rather than silently resolved. The same "
+        "gate fails the run on a quantized row whose refined recall drops, on a refined row "
+        "with no unrefined sibling, on `Row QPS` exceeding `Index QPS`, on engines measured at "
+        "different `n`/`dim`/`queries`/`k` for one dataset, on artifacts from two hosts, and "
+        "on an `f32` row whose refine changes anything at all — that last one can only mean "
+        "stage 1 and the rescore disagree about the metric."
     )
     sections.append("")
     sections.append(
@@ -1223,11 +1215,28 @@ def generate_summary(
 
         sections.append(
             "> [!NOTE]\n"
-            "> **Table Sort Order** (the four annotated columns, left to right):\n"
-            "> 1. **Index Precision:** uncompressed `f32` first, then the 8-bit compressed representations (`sq`, `tq8`).\n"
-            "> 2. **2nd-stage refine:** `False` first, so each index's direct answer is its first row.\n"
-            "> 3. **Recall@k:** descending.\n"
-            "> 4. **Row QPS:** descending, the tie-break between rows with equal recall. "
+            "> **One table per index precision.** `f32`, `sq` (uniform 8-bit scalar) and `tq8` "
+            "(8-bit polar lattice) are different representations with different error and "
+            "memory profiles, so each is ranked only against itself: an `f32` row is compared "
+            "with f32 rows, and the quantized tables are where `Index (MB)` and `Build (s)` "
+            "show what the compression buys.\n"
+            ">\n"
+            "> **BenoStreamDB is quantized once per dataset, by width.** TurboQuant's polar "
+            "lattice needs a power-of-two dimension and the engine does not pad, so `tq8` is "
+            "measured on the datasets whose width permits it (128, 256) and scalar "
+            "quantization on the rest (65, 100, 200, 784, 960). Measured out of domain, "
+            "`tq8` was slower on every such dataset — 642 vs 722 QPS on glove-200, 889 vs "
+            "1017 on lastfm — and faster where the width fits (868 vs 825 on sift, 643 vs "
+            "629 on nytimes). Competitor `sq` rows appear on every dataset because scalar "
+            "quantization has no such constraint.\n"
+            ">\n"
+            "> **One row per engine and index precision**, measured at that engine's best "
+            "configuration for the precision: where two-stage exact rescoring was also "
+            "measured, the row shown is whichever of the two achieved the higher recall.\n"
+            ">\n"
+            "> **Table Sort Order** (the two annotated columns):\n"
+            "> 1. **Recall@k:** descending.\n"
+            "> 2. **Row QPS:** descending, the tie-break between rows with equal recall. "
             "This is the full retrieval path, so the last key ranks what an application actually gets."
         )
         sections.append("")
@@ -1235,21 +1244,7 @@ def generate_summary(
         for ds in sorted(groups):
             sections.append(f"### Vector — `{ds}`")
             sections.append("")
-            sections.append(
-                # The two sort keys are the two right-hand columns, in the order
-                # `_sort_key` applies them, so the ordering is readable from the header
-                # alone: recall first, throughput as the tie-break. Precision is a
-                # property column, not a key -- sorting f32 ahead of compressed rows
-                # grouped the table by storage format instead of by what a reader is
-                # looking for, which is how accurate the row is.
-                "| Engine | Index Precision (f32 first) ▲ | 2nd-stage refine ▲ | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
-            )
-            sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
-            # Sort order, matching the four annotated columns left to right: precision
-            # tier, refine tier (unrefined first, so each index's direct answer leads),
-            # Recall@k descending, then Row QPS descending -- the full retrieval path,
-            # not the index-only rate, because that is what an application experiences.
-            # Engine name last so the order is total and a re-render is byte-stable.
+
             def _get_idx_prec(r):
                 eng = r.get("engine", "")
                 raw = str(r.get("index_type") or "-").lower()
@@ -1262,28 +1257,74 @@ def generate_summary(
                     return "tq8"
                 return "f32"
 
-            def _sort_key(r):
-                prec_tier = 0 if _get_idx_prec(r) == "f32" else 1
-                # Unrefined first, so each index's direct answer is the row the
-                # refined one is read against.
-                refine_tier = 0 if _record_refine(r) <= 1 else 1
-                rec = float(r.get("recall_at_k") or 0)
-                row_qps = _row_qps(r)
-                if not isinstance(row_qps, (int, float)):
-                    row_qps = 0.0
-                return (prec_tier, refine_tier, -rec, -row_qps, r.get("engine", ""))
+            # One row per engine and precision. Where two-stage refining was also
+            # measured, the row shown is whichever configuration reached the higher
+            # recall, with the faster full-row path breaking a tie. Two rows for one
+            # engine+precision would differ only in a flag, and what a reader wants is
+            # the best answer that engine gives at that precision -- not an inventory
+            # of the switches that were tried.
+            def _cell(r):
+                return (_eng_label(r.get("engine")), _get_idx_prec(r))
 
-            for r in sorted(groups[ds], key=_sort_key):
-                eng = r.get("engine", "")
-                idx = _get_idx_prec(r)
-                sections.append(
-                    f"| {_eng_label(eng)} | {idx} | {_refine_cell(r)} | "
-                    f"{r.get('recall_at_k')} | {_index_qps(r)} | "
-                    f"{_index_p50(r)} | {_index_p99(r)} | "
-                    f"{_row_qps(r)} | {_row_p50(r)} | {_row_p99(r)} | "
-                    f"{r.get('build_s')} | {r.get('index_mb')} |"
+            def _rank(r):
+                row_qps = _row_qps(r)
+                return (
+                    float(r.get("recall_at_k") or 0),
+                    row_qps if isinstance(row_qps, (int, float)) else 0.0,
                 )
-            sections.append("")
+
+            best: dict = {}
+            for r in groups[ds]:
+                incumbent = best.get(_cell(r))
+                if incumbent is None or _rank(r) >= _rank(incumbent):
+                    best[_cell(r)] = r
+
+            def _sort_key(r):
+                # Recall descending, then Row QPS descending -- the full retrieval path,
+                # not the index-only rate, because that is what an application
+                # experiences. Engine name last so the order is total and a re-render
+                # is byte-stable.
+                rec, row_qps = _rank(r)
+                return (-rec, -row_qps, r.get("engine", ""))
+
+            # Group by the precision value itself, not by "compressed or not": `sq` is a
+            # uniform 8-bit code and `tq8` is an 8-bit polar-lattice encoding, so ranking
+            # them in one list would compare two different error profiles. f32 leads, the
+            # rest follow alphabetically.
+            by_precision: dict = {}
+            for r in best.values():
+                by_precision.setdefault(_get_idx_prec(r), []).append(r)
+
+            titles = {
+                "f32": "Uncompressed (`f32`)",
+                "sq": "Scalar-quantized, uniform 8-bit (`sq`)",
+                "sq8": "Scalar-quantized, uniform 8-bit (`sq`)",
+                "tq8": "TurboQuant, 8-bit polar lattice (`tq8`)",
+                "tq4": "TurboQuant, 4-bit polar lattice (`tq4`)",
+                "pq": "Product-quantized (`pq`)",
+            }
+            order = sorted(by_precision, key=lambda p: (p != "f32", p))
+            for prec in order:
+                rows = by_precision[prec]
+                title = titles.get(prec, f"`{prec}`")
+                sections.append(f"#### {title}")
+                sections.append("")
+                sections.append(
+                    "| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | "
+                    "Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
+                )
+                sections.append("|---|---|---|---|---|---|---|---|---|---|---|")
+                for r in sorted(rows, key=_sort_key):
+                    eng = r.get("engine", "")
+                    idx = _get_idx_prec(r)
+                    sections.append(
+                        f"| {_eng_label(eng)} | {idx} | "
+                        f"{r.get('recall_at_k')} | {_index_qps(r)} | "
+                        f"{_index_p50(r)} | {_index_p99(r)} | "
+                        f"{_row_qps(r)} | {_row_p50(r)} | {_row_p99(r)} | "
+                        f"{r.get('build_s')} | {r.get('index_mb')} |"
+                    )
+                sections.append("")
 
     if graph:
         # Graph is covered in full (all engines, incl. Neo4j + GDS) by §2.

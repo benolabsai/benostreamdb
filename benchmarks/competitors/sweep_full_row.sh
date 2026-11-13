@@ -198,6 +198,43 @@ VECTOR_DATASETS=(
     gist-960-euclidean
 )
 
+# The vector width of each dataset, as the files actually store it.
+#
+# `lastfm-64-dot` is 65 wide in this HDF5, not 64 -- the name is the published
+# label, the array is the measurement. Guessing from the filename put a 65-wide
+# vector through width-dependent code paths, so the table is explicit.
+dataset_dim() {
+    case "$1" in
+        sift-128-euclidean) echo 128 ;;
+        nytimes-256-angular) echo 256 ;;
+        glove-100-angular) echo 100 ;;
+        glove-200-angular) echo 200 ;;
+        lastfm-64-dot) echo 65 ;;
+        fashion-mnist-784-euclidean | mnist-784-euclidean) echo 784 ;;
+        gist-960-euclidean) echo 960 ;;
+        *) echo 0 ;;
+    esac
+}
+
+# Exactly one quantized representation per dataset. TurboQuant's polar lattice
+# needs a power-of-two width and the engine does not pad, so on 100/200/65/784/960
+# it is not the applicable representation; measured anyway, it is slower on every
+# one of them (glove-200 642 vs 722 QPS, lastfm 889 vs 1017) and only wins where
+# the width fits (sift 868 vs 825, nytimes 643 vs 629). Scalar quantization is the
+# uniform 8-bit fallback and is what the table carries elsewhere.
+is_pow2() {
+    [ "$1" -gt 0 ] && [ $(( $1 & ($1 - 1) )) -eq 0 ]
+}
+
+# True when `$1` (an engine name) should be skipped for dataset `$2`.
+skip_quantized_engine() {
+    case "$1" in
+        benostreamdb_tq8) is_pow2 "$(dataset_dim "$2")" && return 1 || return 0 ;;
+        benostreamdb_sq) is_pow2 "$(dataset_dim "$2")" && return 0 || return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
 # The full row: every engine the compose stack serves, on every dataset.
 #
 # How the services are reached: `docker compose -f docker-compose.bench.yml
@@ -260,13 +297,14 @@ ROW_ENGINES=(
 # tracked as #125), and a `_rN` artifact that silently equals its unrefined twin
 # is worse than a missing column.
 #
-# LanceDB is absent for a different reason: its `refine_factor` re-ranks the
-# candidate set with L2 regardless of the index's distance type, so on the
-# dot-product dataset (lastfm-64-dot) the refined ranking uses the wrong metric and
-# reports *lower* recall than the unrefined index (sq: 0.9206 -> 0.8874). That is
-# the adapter's refine path, not a property of the engine, so the cell is not
-# measured rather than published with an explanation.
-REFINE_ENGINES=" benostreamdb_tq8 benostreamdb_sq "
+# LanceDB is included, with one caveat the report handles by construction: its
+# `refine_factor` re-ranks candidates with L2 regardless of the index distance
+# type, so on the dot-product dataset (lastfm-64-dot) the refined ranking uses the
+# wrong metric and reports *lower* recall than the unrefined index (sq: 0.9206 ->
+# 0.8874). Both measurements are kept and the report shows the better one per
+# engine and precision, so a refine that helps is visible and a refine that hurts
+# is not published as the engine's result.
+REFINE_ENGINES=" benostreamdb_tq8 benostreamdb_sq lancedb_sq "
 REFINE_FACTORS="${REFINE_FACTORS:-2}"
 
 # --- start the services every containerised section talks to ----------------
@@ -338,6 +376,10 @@ if section vector_row "competitors/results/*.json"; then
     # fashion-mnist ended up with no BenoStreamDB row while every competitor had one.
     for ds in "${VECTOR_DATASETS[@]}"; do
         for eng in "${ROW_ENGINES[@]}"; do
+            if skip_quantized_engine "$eng" "$ds"; then
+                echo "  skip $eng on $ds (dim $(dataset_dim "$ds"): one quantized representation per dataset)"
+                continue
+            fi
             step env ENGINE="$eng" DATASET="$ds" LIMIT=20000 QUERIES=500 \
                 docker compose -f "$HERE/docker-compose.bench.yml" \
                 --project-directory "$HERE" --profile run run --rm bench

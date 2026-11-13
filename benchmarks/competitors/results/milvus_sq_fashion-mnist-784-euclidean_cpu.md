@@ -3,7 +3,7 @@
 | Metric | Value |
 |---|---|
 | engine | milvus_sq |
-| index_type | ivf_sq8 |
+| index_type | hnsw_sq |
 | index_precision | sq |
 | dataset | fashion-mnist-784-euclidean |
 | workload | vector_ann |
@@ -13,17 +13,17 @@
 | index | m=16, ef_construction=200, ef_search=200, metric=l2 |
 | queries | 500 |
 | k | 10 |
-| build_s | 9.6 |
+| build_s | 10.109 |
 | index_mb | 62.72 |
-| recall_at_k | 0.9956 |
-| pure_index_qps | 597.4 |
+| recall_at_k | 0.9866 |
+| pure_index_qps | 591.7 |
 | refine_factor | 1 |
-| pure_p50_ms | 1.653 |
-| pure_p99_ms | 2.345 |
-| full_row_qps | 458.1 |
-| full_p50_ms | 2.156 |
-| full_p99_ms | 2.814 |
-| qps | 458.1 |
-| p50_ms | 2.156 |
-| p99_ms | 2.814 |
+| pure_p50_ms | 1.672 |
+| pure_p99_ms | 2.381 |
+| full_row_qps | 451.5 |
+| full_p50_ms | 2.198 |
+| full_p99_ms | 2.868 |
+| qps | 451.5 |
+| p50_ms | 2.198 |
+| p99_ms | 2.868 |
 | env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-42-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |

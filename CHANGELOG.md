@@ -200,6 +200,16 @@
 
 ### Benchmarks
 
+- **One quantized representation per dataset, chosen by width**
+  (`benchmarks/competitors/sweep_full_row.sh`). TurboQuant's polar lattice needs a
+  power-of-two dimension and the engine does not pad, so `tq8` is measured on the
+  datasets whose width permits it (128, 256) and scalar quantization on the rest
+  (65, 100, 200, 784, 960). Measured out of domain, `tq8` lost on every such
+  dataset — 642 vs 722 QPS on glove-200, 889 vs 1017 on lastfm — and won only
+  where the width fits (868 vs 825 on sift, 643 vs 629 on nytimes). The vector
+  section now emits one table per index precision, so `sq` and `tq8` rows are
+  never ranked against each other: they are different representations with
+  different error and memory profiles.
 - **New artifact invariant gate** ([`benchmarks/verify_results.py`](benchmarks/verify_results.py)):
   compares checked relationships rather than good numbers — refined recall against
   its unrefined sibling, `qps` against `pure_index_qps`, refined rows against a
@@ -208,19 +218,28 @@
   fails, and `sweep_full_row.sh` runs it as the final step before regeneration, so
   no command path publishes self-contradicting numbers. Documented in
   [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) §8.1.
-- **Refine reported as a boolean operating point, measured once.** Second-stage
-  rescoring is now measured at ×2 only and reported as a `2nd-stage refine`
-  `True`/`False` column; every quantized variant saturates there
-  (`tq8` 0.9766 → 0.9892, `sq` 0.9788 → 0.9902 on glove-100), so the ×4 point
-  cost another 20–25 % of throughput for no recall. Uncompressed `f32` indexes
-  are no longer refined at all: stage 1 already ranks those vectors in the metric
-  the rescore would use, so the refined row was a duplicate of the baseline at
-  one to two thirds of the throughput. The gate still fails if an `f32` refined
-  row ever changes recall, because that can only mean the two stages disagree
-  about the metric. LanceDB's refine is no longer measured: its `refine_factor`
+- **Refinement measured once, and reported as one row per index precision.**
+  Second-stage rescoring is measured at ×2 only — every quantized variant
+  saturates there (`tq8` 0.9766 → 0.9892, `sq` 0.9788 → 0.9902 on glove-100) —
+  and each engine now appears once per precision at whichever of its two
+  configurations reached the higher recall, instead of as a duplicate row with a
+  flag beside it. Uncompressed `f32` indexes are not refined at all: stage 1
+  already ranks those vectors in the metric the rescore would use, so the refined
+  row was a duplicate of the baseline at one to two thirds of the throughput. The
+  gate still fails if an `f32` refined row ever changes recall, because that can
+  only mean the two stages disagree about the metric. LanceDB's refine path
   re-ranks candidates with L2 regardless of the index distance type, so on
-  `lastfm-64-dot` it ranks by the wrong metric and loses 3.3 pt of recall
-  (`sq`: 0.9206 → 0.8874).
+  `lastfm-64-dot` its refined row loses 3.3 pt (`sq`: 0.9206 → 0.8874); both
+  measurements are kept, the higher-recall one is shown, and the gate reports the
+  divergence rather than resolving it silently.
+- **Milvus's quantized variant is `HNSW_SQ`, not `IVF_SQ8`**
+  (`benchmarks/competitors/run_competitor.py`). `IVF_SQ8` partitions on L2
+  centroids, which is a poor router for a dot-product metric: a true top-IP
+  neighbour lands in a cluster whose L2 centroid is far away, so a small `nprobe`
+  excludes it. Measured with `metric_type=IP`, that routing — not the quantizer —
+  was what the table reported: lastfm-64-dot 0.8608 → 0.9854, glove-100
+  0.7656 → 0.9616, sift 0.9324 → 0.9916. A graph keeps the metric in the
+  traversal, so only the 8-bit quantization error remains.
 
 ### CI
 

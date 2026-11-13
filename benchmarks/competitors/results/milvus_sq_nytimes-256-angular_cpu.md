@@ -3,7 +3,7 @@
 | Metric | Value |
 |---|---|
 | engine | milvus_sq |
-| index_type | ivf_sq8 |
+| index_type | hnsw_sq |
 | index_precision | sq |
 | dataset | nytimes-256-angular |
 | workload | vector_ann |
@@ -13,17 +13,17 @@
 | index | m=16, ef_construction=200, ef_search=200, metric=cosine |
 | queries | 500 |
 | k | 10 |
-| build_s | 9.23 |
+| build_s | 12.835 |
 | index_mb | 20.48 |
-| recall_at_k | 0.6862 |
-| pure_index_qps | 708.0 |
+| recall_at_k | 0.9408 |
+| pure_index_qps | 530.9 |
 | refine_factor | 1 |
-| pure_p50_ms | 1.395 |
-| pure_p99_ms | 1.807 |
-| full_row_qps | 544.4 |
-| full_p50_ms | 1.803 |
-| full_p99_ms | 2.485 |
-| qps | 544.4 |
-| p50_ms | 1.803 |
-| p99_ms | 2.485 |
+| pure_p50_ms | 1.858 |
+| pure_p99_ms | 2.594 |
+| full_row_qps | 433.1 |
+| full_p50_ms | 2.269 |
+| full_p99_ms | 3.054 |
+| qps | 433.1 |
+| p50_ms | 2.269 |
+| p99_ms | 3.054 |
 | env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-42-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |
