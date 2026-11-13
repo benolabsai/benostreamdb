@@ -273,11 +273,17 @@ jobs:
   # honest. The directories already separate the binding surface (`tests/python`)
   # from the full-engine suites (`tests/integration`), the top-level tests, and
   # the heavy stress set.
+  #
+  # The `catalog` shard targets one file instead of a directory: those tests start
+  # real servers (Unity Catalog, Polaris, Nessie, Hive Metastore, PostgreSQL) and
+  # the AWS Emulator, so their runtime is dominated by image pulls and must not
+  # eat the unit shard's budget.
   pytest:
     name: Python Tests (${{ matrix.shard }})
     needs: [python-wheel]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Ceiling for setup steps; the pytest step itself keeps the per-shard budget.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -286,7 +292,15 @@ jobs:
             target: tests/python
             # `test_prefilter` is a manual probe rather than a bounded test; the
             # old single job excluded it and that exclusion is preserved.
-            extra: "--ignore=tests/python/test_prefilter.py"
+            # The real-server suite has its own shard, so it is skipped here.
+            extra: >-
+              --ignore=tests/python/test_prefilter.py
+              --ignore=tests/python/test_catalog_real_services.py
+          - shard: catalog
+            target: tests/python/test_catalog_real_services.py
+            extra: ""
+            # Container pulls dominate; each test skips when Docker is absent.
+            timeout: 40
           - shard: integration
             target: tests/integration
             extra: ""
@@ -318,7 +332,33 @@ jobs:
       - name: Install wheel and test dependencies
         run: pip install "$(ls dist/benostreamdb-*.whl)[dev]"
 
+      - name: Warm the AWS Emulator cache
+        if: matrix.shard == 'catalog'
+        uses: actions/cache@v4
+        with:
+          # Reused across runs so the 176 MB AWS Emulator package is unpacked once.
+          path: ${{ runner.temp }}/aws-emulator-cache
+          key: aws-emulator-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/python/test_catalog_real_services.py') }}
+
+      - name: Pre-pull catalog container images
+        if: matrix.shard == 'catalog'
+        # A registry hiccup should not fail the shard: the tests pull on demand.
+        continue-on-error: true
+        run: |
+          for image in \
+            unitycatalog/unitycatalog:latest \
+            apache/polaris:latest \
+            ghcr.io/projectnessie/nessie:0.105.5 \
+            apache/hive:4.0.0 \
+            postgres:17; do
+            docker pull "$image" &
+          done
+          wait
+
       - name: Run pytest (${{ matrix.shard }})
+        timeout-minutes: ${{ matrix.timeout || 20 }}
+        env:
+          BSDB_AWS_EMULATOR_CACHE: ${{ runner.temp }}/aws-emulator-cache
         run: pytest -v ${{ matrix.target }} ${{ matrix.extra }}
 
   # Stable aggregate check. Branch protection and the release workflow gate on

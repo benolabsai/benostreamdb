@@ -1,7 +1,47 @@
-## [0.16.0] - 2026-11-12
+## [0.16.0] - 2026-11-13
 
 ### Added
 
+- **Iceberg REST base-path autodetection** (`src/core/catalog/rest.rs`,
+  `src/core/catalog/unity.rs`): the Unity client registers
+  `…/api/2.1/unity-catalog/iceberg` (open source) and
+  `…/api/2.1/unity-catalog/iceberg-rest` (Databricks) as probe candidates, probes
+  `GET /v1/config?warehouse=…` on each in order, and caches the winner for the life of
+  the client, so callers no longer have to know which flavour they are talking to. An
+  explicit `…/iceberg` or `…/iceberg-rest` URL is probed first, preserving custom mount
+  points. `warehouse` is always sent when known because the open-source server rejects
+  a bare `/v1/config` with `400 Must supply a proper catalog in warehouse property`.
+  Verified against `unitycatalog/unitycatalog:v0.7.0`.
+- **Real-service catalog conformance tests** (`tests/python/test_catalog_real_services.py`):
+  every networked catalog client is exercised end to end — create namespace, create
+  table, write, commit, reload, SQL count, drop — against the real server that
+  implements it: open-source Unity Catalog (`rest`, and `unity` in Iceberg REST mode
+  including base-path autodetection), Apache Polaris — the engine behind Snowflake Open
+  Catalog — through the OAuth2 `rest` path with `/v1/config` prefix discovery, Project
+  Nessie (`nessie`), Apache Hive Metastore standalone (`hive`), and PostgreSQL (`jdbc`).
+  Containers start on demand and every test skips when Docker is absent. The `glue`
+  Data Catalog client runs against the AWS Emulator (unpacked from its LTS `.deb`
+  without root, credentials and CA read from the per-run `$HOME/.aws/emulator/<port>`
+  directory). `s3tables` stays on the unit-test path: the emulator routes Glue's
+  `/iceberg` prefix to the Glue JSON-RPC surface (`400 missing x-amz-target`) and
+  answers `501` for S3 Tables' Iceberg REST mount, and our S3 Tables client only
+  speaks that mount.
+- **`BSDB_SSRF_ALLOW_HOSTS` — loopback-only SSRF override**
+  (`src/core/storage.rs`): the guard is always on, so the conformance tests needed a
+  deliberate way to reach a container on `127.0.0.1`. The variable takes a
+  comma-separated list of hosts; an entry is honoured only when it is loopback, so
+  private, link-local, and public addresses stay rejected even if listed, and every
+  accepted host logs a warning naming the variable. Documented in
+  [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) (the stale `BSDB_SSRF_GUARD` row,
+  which was never read by the code, is gone).
+- **Glue SDK errors now carry the modeled code and message**: `SdkError`'s `Display`
+  is just `service error`, which hid `AccessDenied` and friends; the adapters format
+  the `Debug` form instead (`src/core/catalog/glue.rs`).
+- **Nessie content fetch fixed for API v2** (`src/core/catalog/nessie.rs`):
+  `load_table` asked for `/api/v2/trees/{ref}/content?key=…`, an endpoint that no
+  longer exists, so every table read 404'd right after a successful `create_table`.
+  It now uses `/api/v2/trees/{ref}/contents/{keyElements}`. Found by running the client
+  against a real Nessie server.
 - **`e-means` coarse quantizer + SIMD residual fastscan** (`benostream-gpu-ann/src/e_means.rs`,
   `src/core/index/e_means.rs`): a k-means-family coarse quantizer with Meta scaling
   laws and attribution, plus residual-encoded IVF postings (`IvfIndex::use_residuals`
@@ -122,6 +162,20 @@
 
 ### Fixed
 
+- **Iceberg REST commits now conform to the spec** (`src/core/table/maintenance.rs`,
+  `src/core/catalog/rest.rs`): commits send `set-snapshot-ref` instead of the
+  non-standard `set-current-snapshot`, no longer assert `assert-ref-snapshot-id` before
+  the ref exists (catalogs return `-1` for "no current snapshot" and then fail the
+  requirement with `branch or tag main is missing`), and detect a catalog that refuses
+  the non-standard `set-metadata-location` action once, after which that catalog writes
+  the metadata files itself. The first two issues made every commit fail against the
+  open-source Unity Catalog (`500` then `409`); the third made them fail against Apache
+  Polaris, which reports the unknown action as a bare `WebApplicationException: HTTP 400
+  Bad Request`.
+- **`Table.write` no longer masks Arrow ingest errors** (`src/python/table.rs`,
+  `src/python/helpers.rs`): a `pyarrow.Table`/`RecordBatch` is ingested as Arrow
+  directly instead of silently falling back to the pandas path, which raised
+  `AttributeError: 'list' object has no attribute 'is_unique'` and hid the real failure.
 - **Sort orders were written with a non-spec `null-order`**
   (`src/core/manifest/types.rs`): Iceberg specifies `nulls-first` / `nulls-last`,
   but `#[serde(rename_all = "lowercase")]` emitted `nullsfirst` / `nullslast`.
@@ -243,6 +297,17 @@
 
 ### CI
 
+- **Real-server catalog tests get their own shard** (`.github/workflows/ci.yml`):
+  `tests/python/test_catalog_real_services.py` starts five containers and installs
+  the AWS Emulator, so its runtime is dominated by image pulls and it must not
+  compete with the unit shard's 20-minute budget (that shard was already cancelled
+  once at 19m34s). The new `catalog` matrix entry runs it alone with a 40-minute
+  step budget, pre-pulls the images in parallel (best effort — the tests pull on
+  demand if that step fails), and caches the 176 MB emulator package. The unit
+  shard now ignores the file so nothing runs twice, and the `Python Tests`
+  aggregator covers the new shard without changes. The job ceiling moved from 20
+  to 45 minutes because setup now includes image pulls; each shard keeps its own
+  step-level timeout, so the pytest bound is unchanged.
 - **Toolchain pinned to 1.100.0** (`rust-toolchain.toml`, `.github/workflows/*.yml`,
   `scripts/pre_release_check.sh`, `Cargo.toml`). The version was named in three
   places — the pin file, 19 `dtolnay/rust-toolchain@` pins, and the pre-release

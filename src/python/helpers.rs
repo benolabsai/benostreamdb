@@ -685,6 +685,23 @@ pub fn pyarrow_to_arrow_batches(py: Python<'_>, table: Py<PyAny>) -> PyResult<Ve
     Ok(batches)
 }
 
+/// True when `obj` is a `pyarrow.Table` or `pyarrow.RecordBatch`.
+///
+/// Used by ingest paths that would otherwise fall back to a pandas conversion,
+/// which cannot accept an Arrow object and fails with a secondary, misleading
+/// error that hides the real one.
+pub fn is_pyarrow_object(py: Python<'_>, obj: &Bound<'_, PyAny>) -> bool {
+    let Ok(pyarrow) = py.import("pyarrow") else {
+        return false;
+    };
+    ["Table", "RecordBatch"].iter().any(|name| {
+        pyarrow
+            .getattr(*name)
+            .ok()
+            .is_some_and(|cls| obj.is_instance(&cls).unwrap_or(false))
+    })
+}
+
 pub fn extract_schema(schema_obj: Bound<'_, PyAny>) -> PyResult<arrow::datatypes::SchemaRef> {
     use super::schema::PySchema;
 

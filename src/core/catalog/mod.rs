@@ -14,6 +14,31 @@ pub mod unity;
 use anyhow::Result;
 use async_trait::async_trait;
 
+/// HTTP client for catalog traffic.
+///
+/// `reqwest::Client::new()` has **no** timeout, so a catalog endpoint that
+/// accepts the TCP connection and then never answers blocks the calling thread
+/// forever. Called from Python through PyO3, that thread holds the GIL, so the
+/// whole interpreter freezes and no Python-level timeout (`pytest-timeout`,
+/// signal or thread) can interrupt it -- that is how the `unit` test shard sat
+/// at 7% until CI killed the job 19.5 minutes later.
+///
+/// Bound both the connect and the whole request. A stalled catalog now
+/// surfaces as an ordinary error instead of an indefinite hang.
+/// Override with `BSDB_CATALOG_TIMEOUT_SECS`.
+pub(crate) fn catalog_http_client() -> reqwest::Client {
+    let secs = std::env::var("BSDB_CATALOG_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(30);
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(secs))
+        .connect_timeout(std::time::Duration::from_secs(secs.min(10)))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 use arrow::datatypes::SchemaRef;
 pub use config::CatalogConfig;
 pub use policy::{
@@ -194,9 +219,10 @@ pub async fn create_catalog_async(
     catalog_type: CatalogType,
     config: std::collections::HashMap<String, String>,
 ) -> Result<Box<dyn Catalog>> {
-    // SSRF guard (opt-in via `BSDB_SSRF_GUARD=1`): catalog endpoints are
-    // user-supplied and fetched server-side. Reject internal/loopback hosts
-    // before constructing any client.
+    // SSRF guard (always on; `BSDB_SSRF_ALLOW_HOSTS` can allow specific
+    // loopback hosts for tests): catalog endpoints are user-supplied and
+    // fetched server-side. Reject internal/loopback hosts before constructing
+    // any client.
     if crate::core::storage::ssrf_guard_enabled() {
         for key in ["url", "uri", "oauth2-server-uri", "oauth2_server_uri"] {
             if let Some(v) = config.get(key) {

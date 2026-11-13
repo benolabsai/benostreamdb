@@ -723,11 +723,18 @@ impl Table {
                     "uuid": catalog_meta.table_uuid,
                 }));
             }
-            requirements.push(serde_json::json!({
-                "type": "assert-ref-snapshot-id",
-                "ref": "main",
-                "snapshot-id": catalog_meta.current_snapshot_id,
-            }));
+            // Only assert the ref once it exists. Catalogs signal "no current
+            // snapshot" either by omitting the field or by returning -1; both mean
+            // the ref is absent, and asserting a ref that does not exist yet makes
+            // conforming catalogs fail the commit with
+            // `branch or tag main is missing, expected -1`.
+            if let Some(id) = catalog_meta.current_snapshot_id.filter(|id| *id >= 0) {
+                requirements.push(serde_json::json!({
+                    "type": "assert-ref-snapshot-id",
+                    "ref": "main",
+                    "snapshot-id": id,
+                }));
+            }
 
             let updates = vec![
                 serde_json::json!({
@@ -738,8 +745,14 @@ impl Table {
                     "action": "add-snapshot",
                     "snapshot": snapshot,
                 }),
+                // `set-snapshot-ref` is the Iceberg REST action. The older
+                // `set-current-snapshot` name is not in the spec and conforming
+                // catalogs (e.g. the open-source Unity Catalog) reject the whole
+                // commit when they see it.
                 serde_json::json!({
-                    "action": "set-current-snapshot",
+                    "action": "set-snapshot-ref",
+                    "ref-name": "main",
+                    "type": "branch",
                     "snapshot-id": snapshot.snapshot_id,
                 }),
             ];

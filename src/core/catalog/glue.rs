@@ -74,7 +74,9 @@ impl GlueCatalogClient {
                     );
                 }
             }
-            anyhow::anyhow!("Failed to get Glue table for commit: {}", e)
+            // `SdkError::ServiceError`'s Display is just "service error"; Debug
+            // carries the modeled error code and message.
+            anyhow::anyhow!("Failed to get Glue table for commit: {e:?}")
         })?;
 
         let existing_table = resp
@@ -157,7 +159,7 @@ impl GlueCatalogClient {
                     );
                 }
             }
-            anyhow::anyhow!("Failed to update Glue table: {}", e)
+            anyhow::anyhow!("Failed to update Glue table: {e:?}")
         })?;
 
         Ok(())
@@ -217,7 +219,7 @@ impl Catalog for GlueCatalogClient {
             {
                 Ok(())
             }
-            Err(e) => Err(anyhow!("Failed to create Glue database: {}", e)),
+            Err(e) => Err(anyhow!("Failed to create Glue database: {e:?}")),
         }
     }
 
@@ -352,7 +354,7 @@ impl Catalog for GlueCatalogClient {
                         );
                     }
                 }
-                anyhow::anyhow!("Failed to create Glue table: {}", e)
+                anyhow::anyhow!("Failed to create Glue table: {e:?}")
             },
         )?;
 
@@ -454,7 +456,7 @@ impl Catalog for GlueCatalogClient {
                         );
                     }
                 }
-                anyhow::anyhow!("Failed to get Glue table: {}", e)
+                anyhow::anyhow!("Failed to get Glue table: {e:?}")
             },
         )?;
 

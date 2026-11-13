@@ -67,9 +67,27 @@ world-readable env file.
 
 #### SSRF guard
 
+The guard is **always on**. It rejects external URIs and custom object-store
+endpoints (`AWS_ENDPOINT_URL`, `AZURE_STORAGE_ENDPOINT`, `AZURE_ENDPOINT`,
+`GOOGLE_STORAGE_ENDPOINT`, `GOOGLE_ENDPOINT`, `GCS_ENDPOINT`) whose host is
+loopback, private, or link-local. It runs at both trust boundaries: catalog
+creation (`create_catalog_async` in `src/core/catalog/mod.rs`) and object-store
+construction (`create_object_store` in `src/core/storage.rs`). `file://` and
+`memory://` are always allowed.
+
 | Variable | Description | Default |
 |:---|:---|:---|
-| `BSDB_SSRF_GUARD` | Enable the SSRF guard. When set to `1`/`true`/`yes`, external URIs and custom object-store endpoints (`AWS_ENDPOINT_URL`, `AZURE_STORAGE_ENDPOINT`, `AZURE_ENDPOINT`, `GOOGLE_STORAGE_ENDPOINT`, `GOOGLE_ENDPOINT`, `GCS_ENDPOINT`) that resolve to loopback, private, or link-local addresses are rejected. Off by default so local catalogs (`http://localhost:8181`) keep working; enable it in production. | off |
+| `BSDB_SSRF_ALLOW_HOSTS` | Test-only escape hatch: comma-separated list of **loopback** hosts the guard may reach, e.g. `127.0.0.1,localhost,::1`. An entry that is not loopback (a private, link-local, or public address) is ignored, so the override can never reach an internal network. Every accepted host logs a warning naming this variable. Intended for integration tests that point a client at a local container. | unset |
+
+```bash
+# Point the Glue client at the AWS Emulator on loopback (test only).
+export BSDB_SSRF_ALLOW_HOSTS=127.0.0.1
+export AWS_ENDPOINT_URL=https://127.0.0.1:9297
+```
+
+Do not set `BSDB_SSRF_ALLOW_HOSTS` in production: it exists so the conformance
+suite in `tests/python/test_catalog_real_services.py` can talk to a container,
+and it is scoped to loopback for that reason.
 
 ### Embeddings
 

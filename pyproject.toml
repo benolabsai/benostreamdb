@@ -43,6 +43,10 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    # Backstop for tests that block on a native call or a socket. Without it a
+    # hang silently consumes the whole CI job budget: the `unit` shard sat at 7%
+    # for 19.5 minutes and was killed, with no test named in the log.
+    "pytest-timeout>=2.3",
     "maturin>=1.7",
     "boto3>=1.26.0",
     "pyiceberg[sql-sqlite]>=0.6.0",
@@ -56,6 +60,14 @@ dev = [
 # Hardware acceleration extras
 all_gpu = []
 src = ["maturin>=1.7"]
+
+# A hang must fail fast and name the test, instead of being reported as a
+# cancelled job with no stack. `thread` method works even when the block is
+# inside a native extension call; 180s is far above any legitimate test runtime
+# here (the whole shard should be a few minutes) and well below the job timeout.
+[tool.pytest.ini_options]
+timeout = 180
+timeout_method = "thread"
 
 [project.urls]
 Homepage = "https://github.com/benolabsai/benostreamdb"

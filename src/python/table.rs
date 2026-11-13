@@ -971,24 +971,17 @@ impl PyTable {
             })
             .map_err(|e: anyhow::Error| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
         } else {
-            // Fallback to Table/DataFrame handling
-            let obj: Py<PyAny> = data.unbind();
-
             let context_clone = device.as_ref().map(|c| c.clone_ref(py));
-            // Let's try arrow first as it's lighter
-            if self
-                .write_arrow(
-                    py,
-                    obj.clone_ref(py),
-                    context_clone.as_ref().map(|c| c.clone_ref(py)),
-                )
-                .is_ok()
-            {
-                Ok(())
-            } else {
-                // Try pandas
-                self.write_pandas(py, obj, context_clone)
+
+            // A pyarrow Table / RecordBatch can only be ingested as Arrow. Retrying it as
+            // pandas would raise a secondary, misleading error (e.g. `AttributeError: 'list'
+            // object has no attribute 'is_unique'`) that hides the real failure.
+            if is_pyarrow_object(py, &data) {
+                return self.write_arrow(py, data.unbind(), context_clone);
             }
+
+            // Fallback to DataFrame handling
+            self.write_pandas(py, data.unbind(), context_clone)
         }
     }
 

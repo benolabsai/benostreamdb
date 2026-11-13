@@ -53,10 +53,22 @@ struct CachedToken {
     expires_at: Instant,
 }
 
+/// Update action that pins the table at a caller-written metadata file.
+///
+/// This is **not** part of the Apache Iceberg REST spec (`set-location` is the
+/// standard action, and it names the table base directory, not a metadata
+/// file). Databricks Unity and several hosted catalogs accept it; conforming
+/// servers such as the open-source Unity Catalog reject it and write the new
+/// metadata file themselves. Support is detected once per client and cached.
+const METADATA_LOCATION_ACTION: &str = "set-metadata-location";
+
 /// REST Catalog client implementing Iceberg REST Catalog specification
 #[derive(Clone)]
 pub struct RestCatalogClient {
-    base_url: String,
+    /// Active Iceberg REST base URL. Mutable so the config probe can cache the winner.
+    base_url: Arc<RwLock<String>>,
+    /// Ordered fallback base URLs used only if `/v1/config` 404s on the primary.
+    probe_candidates: Vec<String>,
     client: Client,
     prefix: Arc<RwLock<String>>,
     prefix_explicit: bool,
@@ -68,6 +80,18 @@ pub struct RestCatalogClient {
     auth: Option<RestCatalogAuth>,
     token_cache: Arc<RwLock<Option<CachedToken>>>,
     aws_credentials: Arc<RwLock<Option<SharedCredentialsProvider>>>,
+    /// `Some(true)` when the catalog accepts [`METADATA_LOCATION_ACTION`],
+    /// `Some(false)` when it rejected it and manages metadata itself.
+    metadata_location_action_supported: Arc<RwLock<Option<bool>>>,
+}
+
+/// Outcome of probing one candidate `/v1/config` endpoint.
+enum ConfigProbe {
+    Hit(CatalogConfigResponse),
+    /// The mount point isn't there (400/404/405/501); another candidate may serve it.
+    Missing(anyhow::Error),
+    /// The endpoint answered but refused the request (auth, 5xx) — surface it if nothing hits.
+    Refused(anyhow::Error),
 }
 
 // Request structures
@@ -224,8 +248,10 @@ impl RestCatalogClient {
             .is_some_and(|p| !p.trim_matches('/').is_empty());
         let clean_prefix = prefix.unwrap_or_default().trim_matches('/').to_string();
         Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            client: Client::new(),
+            base_url: Arc::new(RwLock::new(base_url.trim_end_matches('/').to_string())),
+            probe_candidates: Vec::new(),
+            // Bounded timeout: an unresponsive catalog must not block forever.
+            client: super::catalog_http_client(),
             prefix: Arc::new(RwLock::new(clean_prefix)),
             prefix_explicit,
             warehouse: None,
@@ -236,6 +262,7 @@ impl RestCatalogClient {
             auth,
             token_cache: Arc::new(RwLock::new(None)),
             aws_credentials: Arc::new(RwLock::new(None)),
+            metadata_location_action_supported: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -282,6 +309,27 @@ impl RestCatalogClient {
                 service: service.into(),
             }),
         )
+    }
+
+    /// Attach ordered fallback Iceberg REST base URLs.
+    ///
+    /// The primary [`base_url`](Self::new) is probed first, then each candidate in order.
+    /// The first mount point that answers `GET /v1/config` is cached as the active base,
+    /// so the probe cost is paid at most once per client. Different deployments mount
+    /// Iceberg REST at different paths (open-source `unitycatalog/unitycatalog` uses
+    /// `.../unity-catalog/iceberg`, Databricks Unity uses `.../unity-catalog/iceberg-rest`).
+    pub fn with_base_url_candidates(mut self, candidates: Vec<String>) -> Self {
+        self.probe_candidates = candidates
+            .into_iter()
+            .map(|c| c.trim_end_matches('/').to_string())
+            .filter(|c| !c.is_empty())
+            .collect();
+        self
+    }
+
+    /// The currently active Iceberg REST base URL (the probe winner once discovered).
+    pub async fn base_url(&self) -> String {
+        self.base_url.read().await.clone()
     }
 
     /// Attach a catalog `warehouse` identifier (e.g., S3 Tables bucket ARN) and optionally
@@ -475,25 +523,100 @@ impl RestCatalogClient {
     }
 
     /// Fetch Iceberg REST `/v1/config` overrides and defaults, updating active prefix unless overridden.
+    ///
+    /// The primary base URL is tried first, then any configured fallbacks (see
+    /// [`Self::with_base_url_candidates`]). A candidate that answers `2xx` wins and is cached
+    /// as the active base, so the probe cost is paid once per client.
+    ///
+    /// `warehouse` is always included when one is known: the open-source Unity Catalog server
+    /// rejects a bare `/v1/config` with `400 Must supply a proper catalog in warehouse
+    /// property`.
     pub async fn fetch_config(&self, warehouse: Option<&str>) -> Result<CatalogConfigResponse> {
-        let wh = warehouse.or(self.warehouse.as_deref());
-        let url = match wh {
-            Some(w) if !w.trim().is_empty() => {
-                format!(
-                    "{}/v1/config?warehouse={}",
-                    self.base_url,
-                    encode_segment(w)
-                )
-            }
-            _ => format!("{}/v1/config", self.base_url),
-        };
+        let wh = warehouse
+            .or(self.warehouse.as_deref())
+            .map(str::trim)
+            .filter(|w| !w.is_empty());
 
-        let resp = self.send_request(Method::GET, &url, None).await?;
-        if !resp.status().is_success() {
-            return Err(error_from_response(resp, "GET /v1/config").await);
+        let mut bases: Vec<String> = Vec::with_capacity(self.probe_candidates.len() + 1);
+        bases.push(self.base_url.read().await.clone());
+        for cand in &self.probe_candidates {
+            if !bases.contains(cand) {
+                bases.push(cand.clone());
+            }
         }
 
-        let cfg: CatalogConfigResponse = resp.json().await?;
+        let mut refused: Option<anyhow::Error> = None;
+        let mut missing: Option<anyhow::Error> = None;
+
+        for base in bases {
+            match self.probe_config_from(&base, wh).await {
+                ConfigProbe::Hit(cfg) => {
+                    {
+                        let mut active = self.base_url.write().await;
+                        if *active != base {
+                            tracing::info!(
+                                from = %*active,
+                                to = %base,
+                                "Iceberg REST /v1/config base path selected"
+                            );
+                            *active = base;
+                        }
+                    }
+                    self.apply_config(&cfg).await;
+                    return Ok(cfg);
+                }
+                ConfigProbe::Missing(err) => missing = Some(err),
+                ConfigProbe::Refused(err) => {
+                    if refused.is_none() {
+                        refused = Some(err);
+                    }
+                }
+            }
+        }
+
+        Err(refused.or(missing).unwrap_or_else(|| {
+            anyhow!("Iceberg REST discovery failed: no candidate base URL configured")
+        }))
+    }
+
+    /// Probe a single candidate base URL for `/v1/config`.
+    async fn probe_config_from(&self, base: &str, warehouse: Option<&str>) -> ConfigProbe {
+        let url = match warehouse {
+            Some(w) => format!("{base}/v1/config?warehouse={}", encode_segment(w)),
+            None => format!("{base}/v1/config"),
+        };
+
+        let resp = match self.send_request(Method::GET, &url, None).await {
+            Ok(resp) => resp,
+            // Transport-level failure is about the host, not the path — do not retry siblings.
+            Err(err) => return ConfigProbe::Refused(err),
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            let err = error_from_response(resp, "GET /v1/config").await;
+            let missing = matches!(
+                status,
+                reqwest::StatusCode::BAD_REQUEST
+                    | reqwest::StatusCode::NOT_FOUND
+                    | reqwest::StatusCode::METHOD_NOT_ALLOWED
+                    | reqwest::StatusCode::NOT_IMPLEMENTED
+            );
+            return if missing {
+                ConfigProbe::Missing(err)
+            } else {
+                ConfigProbe::Refused(err)
+            };
+        }
+
+        match resp.json::<CatalogConfigResponse>().await {
+            Ok(cfg) => ConfigProbe::Hit(cfg),
+            Err(err) => ConfigProbe::Refused(err.into()),
+        }
+    }
+
+    /// Apply a `/v1/config` response to the routing prefix and merged defaults.
+    async fn apply_config(&self, cfg: &CatalogConfigResponse) {
         if !self.prefix_explicit {
             if let Some(pfx) = cfg
                 .overrides
@@ -517,12 +640,13 @@ impl RestCatalogClient {
             }
         }
         *self.config_discovered.write().await = true;
-
-        Ok(cfg)
     }
 
     async fn ensure_config_discovered(&self) -> Result<()> {
-        if !self.discover_on_first_use || *self.config_discovered.read().await {
+        // Autodetection always needs one probe, even when discovery wasn't requested.
+        if (!self.discover_on_first_use && self.probe_candidates.is_empty())
+            || *self.config_discovered.read().await
+        {
             return Ok(());
         }
         let _guard = self.discover_gate.lock().await;
@@ -535,11 +659,12 @@ impl RestCatalogClient {
 
     /// Build full URL with optional prefix
     async fn build_url(&self, path: &str) -> String {
+        let base = self.base_url.read().await.clone();
         let pfx = self.prefix.read().await;
         if pfx.is_empty() {
-            format!("{}/v1{}", self.base_url, path)
+            format!("{base}/v1{}", path)
         } else {
-            format!("{}/v1/{}{}", self.base_url, pfx.trim_matches('/'), path)
+            format!("{base}/v1/{}{}", pfx.trim_matches('/'), path)
         }
     }
 
@@ -559,19 +684,85 @@ impl RestCatalogClient {
             ))
             .await;
 
-        let req = UpdateTableRequest {
-            updates,
-            requirements,
-        };
-        let body = serde_json::to_value(&req)?;
+        let mut updates = updates;
+        if *self.metadata_location_action_supported.read().await == Some(false) {
+            drop_metadata_location_action(&mut updates);
+        }
 
-        let resp = self.send_request(Method::POST, &url, Some(&body)).await?;
+        let resp = self
+            .post_commit(&url, &updates, requirements.as_deref())
+            .await?;
+        if resp.status().is_success() {
+            if has_metadata_location_action(&updates) {
+                *self.metadata_location_action_supported.write().await = Some(true);
+            }
+            return Ok(());
+        }
+
+        let status = resp.status();
+        let err = error_from_response(resp, "commit_table").await;
+        let text = err.to_string();
+        // Conforming catalogs reject the unknown action with different wording:
+        // Unity says "Cannot convert metadata update action to json", while Polaris
+        // maps it to a bare `WebApplicationException: HTTP 400 Bad Request`.
+        let is_protocol_mismatch = (status == reqwest::StatusCode::BAD_REQUEST
+            || status == reqwest::StatusCode::INTERNAL_SERVER_ERROR)
+            && (text.contains("metadata update action")
+                || text.contains("WebApplicationException")
+                || text.contains("HTTP 400 Bad Request"));
+        if !is_protocol_mismatch || !has_metadata_location_action(&updates) {
+            return Err(err);
+        }
+
+        // The catalog implements the Iceberg REST spec, which has no
+        // `set-metadata-location` action: it writes the next metadata file itself
+        // from the snapshot updates. Retry once without the action and remember
+        // the verdict so later commits skip the doomed first attempt.
+        // Bind before logging: holding a guard inside the macro would leak its
+        // non-`Sync` temporary across the awaits below.
+        let catalog_base = self.base_url.read().await.clone();
+        tracing::info!(
+            catalog = %catalog_base,
+            action = METADATA_LOCATION_ACTION,
+            "Iceberg REST catalog rejects the action; letting the catalog manage metadata files"
+        );
+        *self.metadata_location_action_supported.write().await = Some(false);
+        drop_metadata_location_action(&mut updates);
+
+        let resp = self
+            .post_commit(&url, &updates, requirements.as_deref())
+            .await?;
         if !resp.status().is_success() {
             return Err(error_from_response(resp, "commit_table").await);
         }
-
         Ok(())
     }
+
+    /// POST a `CommitTableRequest` and hand back the raw response.
+    async fn post_commit(
+        &self,
+        url: &str,
+        updates: &[serde_json::Value],
+        requirements: Option<&[serde_json::Value]>,
+    ) -> Result<reqwest::Response> {
+        let body = serde_json::to_value(UpdateTableRequest {
+            updates: updates.to_vec(),
+            requirements: requirements.map(|r| r.to_vec()),
+        })?;
+        self.send_request(Method::POST, url, Some(&body)).await
+    }
+}
+
+/// True when the update list carries the non-standard metadata-location action.
+fn has_metadata_location_action(updates: &[serde_json::Value]) -> bool {
+    updates
+        .iter()
+        .any(|u| u.get("action").and_then(|a| a.as_str()) == Some(METADATA_LOCATION_ACTION))
+}
+
+/// Remove the non-standard metadata-location action from an update list.
+fn drop_metadata_location_action(updates: &mut Vec<serde_json::Value>) {
+    updates.retain(|u| u.get("action").and_then(|a| a.as_str()) != Some(METADATA_LOCATION_ACTION));
 }
 
 #[async_trait]

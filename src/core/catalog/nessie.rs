@@ -387,7 +387,8 @@ impl NessieClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             token: None,
-            client: Client::new(),
+            // Bounded timeout: an unresponsive catalog must not block forever.
+            client: super::catalog_http_client(),
         }
     }
 
@@ -395,7 +396,8 @@ impl NessieClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.filter(|t| !t.trim().is_empty()),
-            client: Client::new(),
+            // Bounded timeout: an unresponsive catalog must not block forever.
+            client: super::catalog_http_client(),
         }
     }
 
@@ -418,16 +420,23 @@ impl NessieClient {
         } else {
             format!("{namespace}@{hash}")
         };
+        // Nessie API v2 addresses a single keyed content as
+        // `/trees/{ref}/contents/{keyElements}` — plural, with the key as path
+        // segments. The older `/content?key=…` form no longer exists and answers
+        // 404 on every request, which made `load_table` fail after a successful
+        // `create_table`.
+        let key_path = table_name
+            .split('.')
+            .map(urlencoding::encode)
+            .collect::<Vec<_>>()
+            .join("/");
         let url = format!(
-            "{}/api/v2/trees/{}/content",
+            "{}/api/v2/trees/{}/contents/{}",
             self.base_url,
-            urlencoding::encode(&ref_with_hash)
+            urlencoding::encode(&ref_with_hash),
+            key_path
         );
-        let query = [("key", table_name)];
-        let resp = self
-            .prepare(self.client.get(&url).query(&query))
-            .send()
-            .await?;
+        let resp = self.prepare(self.client.get(&url)).send().await?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(catalog_not_found_error(

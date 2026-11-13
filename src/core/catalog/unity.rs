@@ -123,14 +123,30 @@ impl UnityCatalogClient {
         Self {
             base_url: trimmed,
             token,
-            client: Client::new(),
+            // Bounded timeout: an unresponsive catalog must not block forever.
+            client: super::catalog_http_client(),
             iceberg_rest: None,
             default_catalog: "main".to_string(),
         }
     }
 
-    /// Create a Unity Catalog client configured for Databricks Unity Iceberg REST
-    /// (`/api/2.1/unity-catalog/iceberg-rest`).
+    /// Create a Unity Catalog client configured for Unity Iceberg REST.
+    ///
+    /// The Iceberg REST mount point is not standardized across Unity deployments:
+    ///
+    /// | deployment | Iceberg REST base |
+    /// |---|---|
+    /// | open-source `unitycatalog/unitycatalog` | `{root}/api/2.1/unity-catalog/iceberg` |
+    /// | Databricks Unity | `{root}/api/2.1/unity-catalog/iceberg-rest` |
+    ///
+    /// Both are registered as probe candidates (open-source first) and the first one that
+    /// answers `GET /v1/config` is cached by [`RestCatalogClient`], so callers do not need to
+    /// know which flavour they are talking to. An explicit `base_url` that already ends in
+    /// `/iceberg` or `/iceberg-rest` is probed first, preserving custom mount points.
+    ///
+    /// `warehouse` defaults to `main` and is always sent on `/v1/config`; the open-source
+    /// server rejects a bare `/v1/config` with `400 Must supply a proper catalog in
+    /// warehouse property`.
     pub fn new_iceberg_rest(
         base_url: String,
         token: String,
@@ -138,30 +154,59 @@ impl UnityCatalogClient {
         prefix: Option<String>,
     ) -> Self {
         let trimmed = base_url.trim_end_matches('/').to_string();
-        let rest_base = if trimmed.ends_with("/iceberg-rest") || trimmed.ends_with("/iceberg") {
-            trimmed
+        let explicit_rest = trimmed.ends_with("/iceberg-rest") || trimmed.ends_with("/iceberg");
+        let root = if let Some(stripped) = trimmed.strip_suffix("/iceberg-rest") {
+            stripped.to_string()
+        } else if let Some(stripped) = trimmed.strip_suffix("/iceberg") {
+            stripped.to_string()
         } else {
-            format!("{trimmed}/api/2.1/unity-catalog/iceberg-rest")
+            trimmed.clone()
         };
+
+        let mut candidates: Vec<String> = Vec::with_capacity(3);
+        if explicit_rest {
+            candidates.push(trimmed.clone());
+        }
+        candidates.push(format!("{root}/api/2.1/unity-catalog/iceberg"));
+        candidates.push(format!("{root}/api/2.1/unity-catalog/iceberg-rest"));
 
         let effective_warehouse = warehouse
             .as_deref()
             .map(str::trim)
             .filter(|w| !w.is_empty())
             .map(str::to_string)
-            .or_else(|| prefix.clone());
-        let discover = effective_warehouse.is_some() && prefix.is_none();
+            .or_else(|| {
+                prefix
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "main".to_string());
+        let discover = prefix.is_none();
 
         let rest_client =
-            RestCatalogClient::with_bearer_token(rest_base.clone(), prefix, token.clone())
-                .with_warehouse(effective_warehouse.clone(), discover);
+            RestCatalogClient::with_bearer_token(candidates[0].clone(), prefix, token.clone())
+                .with_warehouse(Some(effective_warehouse.clone()), discover)
+                .with_base_url_candidates(candidates);
 
         Self {
-            base_url: rest_base,
+            base_url: root,
             token,
-            client: Client::new(),
+            // Bounded timeout: an unresponsive catalog must not block forever.
+            client: super::catalog_http_client(),
             iceberg_rest: Some(rest_client),
-            default_catalog: effective_warehouse.unwrap_or_else(|| "main".to_string()),
+            default_catalog: effective_warehouse,
+        }
+    }
+
+    /// The Iceberg REST base URL actually in use, once `/v1/config` autodetection has run.
+    ///
+    /// Returns `None` for a standard (non-Iceberg-REST) Unity client.
+    pub async fn resolved_iceberg_rest_base(&self) -> Option<String> {
+        match &self.iceberg_rest {
+            Some(rest) => Some(rest.base_url().await),
+            None => None,
         }
     }
 

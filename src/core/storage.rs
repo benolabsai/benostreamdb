@@ -25,6 +25,71 @@ pub fn ssrf_guard_enabled() -> bool {
     true
 }
 
+/// Comma-separated list of **loopback** hosts the guard may allow.
+///
+/// This is a deliberate, test-only escape hatch: integration tests need to point
+/// a client at a container listening on `127.0.0.1` (AWS Emulator, Unity
+/// Catalog, Polaris, Nessie, …). Only loopback addresses can ever be allowed —
+/// private, link-local, and public hosts stay rejected even if listed — so the
+/// override cannot be used to reach an internal network from CI. Every accepted
+/// host logs a warning naming this variable.
+pub const SSRF_ALLOW_HOSTS_ENV: &str = "BSDB_SSRF_ALLOW_HOSTS";
+
+static SSRF_ALLOW_WARNED: std::sync::Once = std::sync::Once::new();
+
+/// Canonical form used for both the allow list and the host under test.
+fn normalize_host(host: &str) -> String {
+    host.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase()
+}
+
+/// Split, trim, and canonicalize a `BSDB_SSRF_ALLOW_HOSTS` value.
+fn parse_allowed_hosts(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(normalize_host)
+        .filter(|host| !host.is_empty())
+        .collect()
+}
+
+/// Whether `host` may bypass the guard, given the parsed allow list.
+///
+/// A host must be both *listed* and *loopback*; listing a private or public host
+/// has no effect.
+fn allow_host(host: &str, allow: &[String]) -> bool {
+    if allow.is_empty() {
+        return false;
+    }
+    let normalized = normalize_host(host);
+    let loopback = match normalized.as_str() {
+        "localhost" => true,
+        other => other
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false),
+    };
+    loopback && allow.iter().any(|entry| entry == &normalized)
+}
+
+/// Whether `host` is loopback and explicitly allowed by the environment.
+fn is_allowlisted_loopback(host: &str) -> bool {
+    let Ok(raw) = std::env::var(SSRF_ALLOW_HOSTS_ENV) else {
+        return false;
+    };
+    if !allow_host(host, &parse_allowed_hosts(&raw)) {
+        return false;
+    }
+    SSRF_ALLOW_WARNED.call_once(|| {
+        tracing::warn!(
+            env = SSRF_ALLOW_HOSTS_ENV,
+            hosts = %raw,
+            "SSRF guard: loopback hosts explicitly allowed (test-only override)"
+        );
+    });
+    true
+}
+
 /// Reject URIs whose host is a private, loopback, or link-local address.
 ///
 /// Basic SSRF (Server-Side Request Forgery) guard applied at the trust
@@ -36,6 +101,12 @@ pub fn validate_external_uri(uri: &str) -> Result<()> {
         Some(h) => h,
         None => return Ok(()), // no host → nothing to check (e.g. `memory://`)
     };
+    // Test-only escape hatch; see `SSRF_ALLOW_HOSTS_ENV`.
+    if let Some(host_str) = url.host_str() {
+        if is_allowlisted_loopback(host_str) {
+            return Ok(());
+        }
+    }
     match host {
         url::Host::Domain(d) => {
             if d == "localhost" {
@@ -285,6 +356,48 @@ mod tests {
     fn test_invalid_uri() {
         let result = create_object_store("not a valid uri://");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_allowed_hosts_normalizes_and_drops_empties() {
+        assert_eq!(
+            parse_allowed_hosts(" 127.0.0.1 , LOCALHOST,, ::1 "),
+            vec![
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                "::1".to_string()
+            ]
+        );
+        assert!(parse_allowed_hosts("  ,  ").is_empty());
+    }
+
+    #[test]
+    fn test_allow_host_requires_listed_and_loopback() {
+        let allow = parse_allowed_hosts("127.0.0.1,localhost,10.0.0.5,example.com,[::1]");
+        // Listed and loopback.
+        assert!(allow_host("127.0.0.1", &allow));
+        assert!(allow_host("LOCALHOST", &allow));
+        assert!(allow_host("[::1]", &allow));
+        // Loopback but not listed.
+        assert!(!allow_host("127.0.0.2", &allow));
+        // Listed but not loopback — the override must never reach these.
+        assert!(!allow_host("10.0.0.5", &allow));
+        assert!(!allow_host("example.com", &allow));
+        assert!(!allow_host("8.8.8.8", &allow));
+        // Empty list disables the override entirely.
+        assert!(!allow_host("127.0.0.1", &[]));
+    }
+
+    #[test]
+    fn test_ssrf_guard_rejects_loopback_by_default() {
+        // No `BSDB_SSRF_ALLOW_HOSTS` set in this test binary's environment.
+        if std::env::var(SSRF_ALLOW_HOSTS_ENV).is_ok() {
+            return;
+        }
+        assert!(validate_external_uri("http://127.0.0.1:9297").is_err());
+        assert!(validate_external_uri("http://localhost:8080").is_err());
+        assert!(validate_external_uri("http://10.1.2.3/x").is_err());
+        assert!(validate_external_uri("https://example.com/x").is_ok());
     }
 
     #[test]
