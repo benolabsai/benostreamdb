@@ -506,6 +506,18 @@ jobs:
           distribution: temurin
           java-version: ${{ matrix.java }}
 
+      # Without this every connector run re-resolved the whole Maven graph from
+      # Central on a cold `~/.m2`, which is slow and maximally exposed to a
+      # repository hiccup. The Trino bands share the key because they differ only
+      # in the `trino.version` property, not in the dependency set.
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: m2-${{ runner.os }}-${{ matrix.connector }}-${{ hashFiles('trino-benostreamdb/pom.xml', 'spark-benostreamdb/pom.xml') }}
+          restore-keys: |
+            m2-${{ runner.os }}-${{ matrix.connector }}-
+
       - name: Build native library with JNI exports
         # `--features java` is required: without it src/core/ffi.rs is not
         # compiled and the bridge fails at the first native call.
@@ -526,12 +538,63 @@ jobs:
       - name: Run Trino connector tests
         if: matrix.connector == 'trino'
         working-directory: trino-benostreamdb
-        run: mvn -B test ${{ matrix.mvn-args }}
+        shell: bash
+        run: |
+          # Maven Central periodically answers a metadata request with a 5xx, which
+          # Maven reports as "Could not find artifact ... in central". That is what
+          # failed the Trino 484 band: `plexus-utils:3.5.1` (a dependency of the
+          # `trino-maven-plugin` build extension) and `junit-bom:6.1.3` (the
+          # imported BOM) were reported missing while both resolved fine for the
+          # 482 band in the same run and both return 200 from Central. The
+          # "Unknown packaging: trino-plugin" and missing JUnit versions were
+          # downstream of those two failures, not separate problems.
+          #
+          # Retry only when the log shows a repository failure, so a genuine SPI or
+          # test failure still fails fast instead of being retried three times.
+          set -o pipefail
+          log="${RUNNER_TEMP}/mvn-trino.log"
+          for attempt in 1 2 3; do
+            if mvn -B \
+                 -Dmaven.wagon.http.retryHandler.count=5 \
+                 -Dmaven.wagon.httpconnectionManager.ttlSeconds=120 \
+                 test ${{ matrix.mvn-args }} 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if grep -qE "Could not (find|transfer|resolve) artifact|Non-resolvable|Unresolveable build extension" "$log"; then
+              echo "::warning::Maven repository resolution failed (attempt ${attempt}); retrying"
+              sleep 20
+              continue
+            fi
+            echo "mvn failed for a non-resolution reason; not retrying"
+            exit 1
+          done
+          exit 1
 
       - name: Run Spark connector tests
         if: matrix.connector == 'spark'
         working-directory: spark-benostreamdb
-        run: mvn -B clean test ${{ matrix.mvn-args }}
+        shell: bash
+        run: |
+          # Same repository-flake handling as the Trino step: retry a Central
+          # resolution failure, fail fast on a real build or test failure.
+          set -o pipefail
+          log="${RUNNER_TEMP}/mvn-spark.log"
+          for attempt in 1 2 3; do
+            if mvn -B \
+                 -Dmaven.wagon.http.retryHandler.count=5 \
+                 -Dmaven.wagon.httpconnectionManager.ttlSeconds=120 \
+                 clean test ${{ matrix.mvn-args }} 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if grep -qE "Could not (find|transfer|resolve) artifact|Non-resolvable|Unresolveable build extension" "$log"; then
+              echo "::warning::Maven repository resolution failed (attempt ${attempt}); retrying"
+              sleep 20
+              continue
+            fi
+            echo "mvn failed for a non-resolution reason; not retrying"
+            exit 1
+          done
+          exit 1
 
   #########################
   # Cross-engine Iceberg conformance — the upstream `apache/iceberg-rust` reader
