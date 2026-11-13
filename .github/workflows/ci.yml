@@ -208,10 +208,15 @@ jobs:
   #########################
   # Python tests
   #########################
-  pytest:
-    name: Python Tests
+  # The suite outgrew a single 20-minute job: the Rust build, the Vulkan install
+  # and the wheel build were all charged to the same budget as the tests, so the
+  # tests themselves had only a few minutes of it. Build the wheel once here,
+  # then fan the tests out into independent shards that run in parallel, each
+  # with its own timeout and no per-job build cost.
+  python-wheel:
+    name: Python Wheel
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Maximize build space
         run: |
@@ -250,18 +255,89 @@ jobs:
           done
           exit 1
 
-      - name: Install maturin and build
+      - name: Build wheel
         run: |
           pip install maturin
           maturin build --features python
-          pip install "$(ls target/wheels/benostreamdb-*.whl)[dev]"
 
-      - name: Run Python Tests (pytest)
+      - name: Upload wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-wheel
+          path: target/wheels/benostreamdb-*.whl
+          if-no-files-found: error
+          overwrite: true
+
+  # Test shards. Directory-based on purpose: the suite has no pytest markers, so
+  # a marker split would mean annotating ~100 files and keeping those annotations
+  # honest. The directories already separate the binding surface (`tests/python`)
+  # from the full-engine suites (`tests/integration`), the top-level tests, and
+  # the heavy stress set.
+  pytest:
+    name: Python Tests (${{ matrix.shard }})
+    needs: [python-wheel]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: unit
+            target: tests/python
+            # `test_prefilter` is a manual probe rather than a bounded test; the
+            # old single job excluded it and that exclusion is preserved.
+            extra: "--ignore=tests/python/test_prefilter.py"
+          - shard: integration
+            target: tests/integration
+            extra: ""
+          - shard: root
+            # `tests/` minus every subdirectory == the top-level `tests/*.py`
+            # files that the old job collected alongside everything else.
+            target: tests/
+            extra: >-
+              --ignore=tests/python --ignore=tests/integration
+              --ignore=tests/stress --ignore=tests/performance
+              --ignore=tests/benchmarks
+          - shard: stress
+            target: tests/stress
+            extra: ""
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: python-wheel
+          path: dist
+
+      - name: Install wheel and test dependencies
+        run: pip install "$(ls dist/benostreamdb-*.whl)[dev]"
+
+      - name: Run pytest (${{ matrix.shard }})
+        run: pytest -v ${{ matrix.target }} ${{ matrix.extra }}
+
+  # Stable aggregate check. Branch protection and the release workflow gate on
+  # the job name "Python Tests"; keeping one aggregator with that exact name means
+  # the sharded matrix can change without the required check disappearing.
+  python-tests:
+    name: Python Tests
+    needs: [pytest]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify every shard passed
+        if: needs.pytest.result != 'success'
         run: |
-          pytest -v tests/ \
-            --ignore=tests/performance \
-            --ignore=tests/benchmarks \
-            --ignore=tests/python/test_prefilter.py
+          echo "One or more Python test shards did not pass: ${{ needs.pytest.result }}"
+          exit 1
+      - name: All shards passed
+        if: needs.pytest.result == 'success'
+        run: echo "All Python test shards passed."
 
   #########################
   # Dependency security audit
