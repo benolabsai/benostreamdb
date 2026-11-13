@@ -297,6 +297,17 @@
 
 ### CI
 
+- **`test_ffi_vector` no longer fails the unit shard** (`tests/python/test_ffi_vector.py`):
+  it loaded `./target/debug/libbenostreamdb.so` unconditionally, but that cdylib is a
+  local `cargo build` artifact and is not part of the wheel CI installs, so the shard
+  died with `OSError: cannot open shared object file`. It now skips when the artifact
+  is absent (and still loads it where it exists) — the same treatment as the other
+  local-only probe, `test_prefilter.py`.
+- **Nessie v2 mock follows the client's `/contents/{keyElements}` path**
+  (`tests/test_catalog_conformance.rs`): the client moved off the removed
+  `/content?key=` endpoint, but the in-test mock still served it, so
+  `nessie_rest_v2_mock_conformance` failed under `cargo test --tests --workspace`
+  (the coverage and Rust Tests jobs) while `--lib` runs stayed green.
 - **Real-server catalog tests get their own shard** (`.github/workflows/ci.yml`):
   `tests/python/test_catalog_real_services.py` starts five containers and installs
   the AWS Emulator, so its runtime is dominated by image pulls and it must not
