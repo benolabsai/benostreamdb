@@ -738,20 +738,29 @@ impl Table {
             if let Some(ref vps) = vector_filters {
                 if vps.len() == 1 {
                     let vp = &vps[0];
-                    if let Ok(Some(index)) = self.ensure_cluster_index(&vp.column).await {
-                        if let crate::core::index::VectorValue::Float32(q) = &vp.query {
-                            let probes = vp
-                                .probes
-                                .unwrap_or_else(|| default_probes(index.centroids.len()));
-                            let scored = index.search(q, vp.k, probes, vp.ef_search)?;
-                            tracing::info!(
-                                column = %vp.column,
-                                probes = probes,
-                                hits = scored.len(),
-                                "cluster_index: served query from the table-level artifact"
-                            );
-                            let results = self.fetch_results_by_id(scored, columns).await?;
-                            return Ok(futures::stream::iter(results.into_iter().map(Ok)).boxed());
+                    // The cluster index answers from the coarse quantizer alone — a
+                    // flat scan of the probed clusters with no exact re-rank. Taking
+                    // it while the caller asked for refinement would silently drop
+                    // the refinement (and make the refined operating point look
+                    // identical to the unrefined one), so fall through instead.
+                    if vp.refine_factor.unwrap_or(1) <= 1 {
+                        if let Ok(Some(index)) = self.ensure_cluster_index(&vp.column).await {
+                            if let crate::core::index::VectorValue::Float32(q) = &vp.query {
+                                let probes = vp
+                                    .probes
+                                    .unwrap_or_else(|| default_probes(index.centroids.len()));
+                                let scored = index.search(q, vp.k, probes, vp.ef_search)?;
+                                tracing::info!(
+                                    column = %vp.column,
+                                    probes = probes,
+                                    hits = scored.len(),
+                                    "cluster_index: served query from the table-level artifact"
+                                );
+                                let results = self.fetch_results_by_id(scored, columns).await?;
+                                return Ok(
+                                    futures::stream::iter(results.into_iter().map(Ok)).boxed()
+                                );
+                            }
                         }
                     }
                 }
@@ -1616,9 +1625,13 @@ impl Table {
             .cloned();
 
         // Table-level cluster index fast path (see `read_expr_stream_async`).
-        // Restricted to unfiltered queries with no delete files.
+        // Restricted to unfiltered queries with no delete files, and to unrefined
+        // queries: the artifact answers from the coarse quantizer with no exact
+        // re-rank, so taking it for a refined request would silently discard the
+        // refinement and report the refined operating point as identical to the
+        // unrefined one.
         let has_deletes = all_entries.iter().any(|e| !e.delete_files.is_empty());
-        if filter.is_none() && !has_deletes {
+        if filter.is_none() && !has_deletes && params.refine_factor.unwrap_or(1) <= 1 {
             if let Ok(Some(index)) = self.ensure_cluster_index(&params.column).await {
                 if let crate::core::index::VectorValue::Float32(q) = &params.query {
                     let probes = params

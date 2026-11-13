@@ -1063,7 +1063,13 @@ impl PyTable {
     ///
     /// Returns:
     ///     PyArrow Table with columns `segment_id`, `row_id`, `score`
-    #[pyo3(signature = (column, query, k, metric=None, ef_search=None))]
+    ///
+    /// `refine_factor` enables the same two-stage exact rescoring the row-returning
+    /// path uses, so a benchmark can time the index *at a refined operating point*.
+    /// Without it, a "pure index" measurement of a refined run silently times the
+    /// unrefined traversal instead, and the report shows refinement looking faster
+    /// than no refinement — which is what happened before this parameter existed.
+    #[pyo3(signature = (column, query, k, metric=None, ef_search=None, refine_factor=None))]
     fn vector_search_scored(
         &self,
         py: Python<'_>,
@@ -1072,6 +1078,7 @@ impl PyTable {
         k: usize,
         metric: Option<String>,
         ef_search: Option<usize>,
+        refine_factor: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
         use crate::core::index::{VectorMetric, VectorValue};
         use crate::core::planner::VectorSearchParams;
@@ -1086,6 +1093,10 @@ impl PyTable {
 
         if let Some(ef) = ef_search {
             params = params.with_ef_search(ef);
+        }
+
+        if let Some(rf) = refine_factor {
+            params = params.with_refine_factor(rf);
         }
 
         let results = py
