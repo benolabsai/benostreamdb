@@ -311,17 +311,12 @@ def main() -> None:
     q = min(args.queries, len(test))
     k = args.k
 
-    # Recall: full search + row fetch (Arrow, to avoid pandas overhead).
-    latencies = []
-    hits = 0.0
-    for i in range(q):
-        query_list = test[i].tolist()
+    def _vector_filter(i: int) -> dict:
         vf = {
             "column": "embedding",
-            "query": query_list,
+            "query": test[i].tolist(),
             "k": k,
             "ef_search": args.ef_search,
-            "refine_factor": args.refine_factor,
         }
         if args.refine_factor > 1:
             # Two-stage exact rescoring: ask the graph for k*factor candidates, then
@@ -329,28 +324,60 @@ def main() -> None:
             # Parquet. The engine's `effective_refine` is `refine_factor.unwrap_or(1)`,
             # so 1 means "off" and this key must be absent, not 1.
             vf["refine_factor"] = args.refine_factor
-        t1 = time.perf_counter()
-        # Project only `id`: the harness uses nothing else, and fetching the
-        # embedding column would read the whole (multi-hundred-MB) row group.
-        res = table.to_arrow(vector_filter=vf, columns=["id"])
-        latencies.append(time.perf_counter() - t1)
+        return vf
+
+    def _index_query(i: int) -> None:
+        table._inner.vector_search_scored(
+            "embedding",
+            test[i].tolist(),
+            k,
+            metric,
+            args.ef_search,
+            args.refine_factor if args.refine_factor > 1 else None,
+        )
+
+    # `id` plus the vector column: the competitor harness hydrates exactly this
+    # payload for its "row" path (pgvector selects `id, embedding`; faiss and
+    # hnswlib index the embedding slice out of the in-memory array). Fetching only
+    # `id` here, as this loop used to, made our row path look cheaper than every
+    # engine it is compared against — a narrow integer column against 784 floats.
+    projection = ["id", "embedding"]
+
+    # Warm both paths before either is timed; see the note in run_competitor.py.
+    # Two back-to-back loops with no warm-up let the second one report higher
+    # throughput than the first even when it does strictly more work.
+    for i in range(min(50, q)):
+        table.to_arrow(vector_filter=_vector_filter(i), columns=projection)
+        _index_query(i)
+
+    latencies = []
+    pure_latencies = []
+    hits = 0.0
+    for i in range(q):
+        # Alternate which path is measured first so neither systematically
+        # inherits a warm/cold advantage within the loop.
+        if i % 2 == 0:
+            t1 = time.perf_counter()
+            res = table.to_arrow(vector_filter=_vector_filter(i), columns=projection)
+            latencies.append(time.perf_counter() - t1)
+            t1 = time.perf_counter()
+            _index_query(i)
+            pure_latencies.append(time.perf_counter() - t1)
+        else:
+            t1 = time.perf_counter()
+            _index_query(i)
+            pure_latencies.append(time.perf_counter() - t1)
+            t1 = time.perf_counter()
+            res = table.to_arrow(vector_filter=_vector_filter(i), columns=projection)
+            latencies.append(time.perf_counter() - t1)
         got = set(res.column("id").to_pylist()) if "id" in res.column_names else set()
-        truth = set(neighbors[i][:k].tolist())
-        hits += len(got & truth) / k
+        hits += len(got & set(neighbors[i][:k].tolist())) / k
 
     recall = hits / q
     total_s = sum(latencies)
     qps = q / total_s if total_s > 0 else 0.0
     p50 = float(np.percentile(latencies, 50) * 1000)
     p99 = float(np.percentile(latencies, 99) * 1000)
-
-    # Pure index latency (no Parquet I/O) — the comparable ANN-Benchmarks number.
-    pure_latencies = []
-    for i in range(q):
-        query_list = test[i].tolist()
-        t1 = time.perf_counter()
-        _ = table._inner.vector_search_scored("embedding", query_list, k, metric, args.ef_search)
-        pure_latencies.append(time.perf_counter() - t1)
     pure_qps = q / sum(pure_latencies) if sum(pure_latencies) > 0 else 0.0
     pure_p50 = float(np.percentile(pure_latencies, 50) * 1000)
     pure_p99 = float(np.percentile(pure_latencies, 99) * 1000)

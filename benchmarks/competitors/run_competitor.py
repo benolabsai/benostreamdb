@@ -1135,21 +1135,45 @@ def run_vector(adapter: VectorAdapter, args) -> dict:
     q = min(args.queries, len(test))
     k = args.k
 
+    # Warm both paths before either is timed.
+    #
+    # The two loops used to run back to back with no warm-up: the index-only pass
+    # paid first-touch page faults on the freshly built index plus the CPU's
+    # frequency ramp, and the full-row pass inherited an already-warm process. The
+    # result was a row pass reporting *higher* throughput than the index-only pass
+    # it contains (faiss: 3448 index QPS vs 6848 row QPS), which cannot happen —
+    # `search_full_row` is `search` plus a payload lookup.
+    warmup = min(50, q)
+    for i in range(warmup):
+        batch = test[i : i + 1]
+        adapter.search(handle, batch, k, args.ef_search, metric)
+        adapter.search_full_row(handle, batch, k, args.ef_search, metric)
+
     pure_latencies = []
+    full_latencies = []
     hits = 0.0
+    # Alternate which path is measured first within the loop, so any residual drift
+    # (thermal, allocator warmth, page-cache growth) lands on both columns instead
+    # of systematically favouring whichever ran second.
     for i in range(q):
-        t1 = time.perf_counter()
-        ids = adapter.search(handle, test[i : i + 1], k, args.ef_search, metric)
-        pure_latencies.append(time.perf_counter() - t1)
+        batch = test[i : i + 1]
+        if i % 2 == 0:
+            t1 = time.perf_counter()
+            ids = adapter.search(handle, batch, k, args.ef_search, metric)
+            pure_latencies.append(time.perf_counter() - t1)
+            t1 = time.perf_counter()
+            _ = adapter.search_full_row(handle, batch, k, args.ef_search, metric)
+            full_latencies.append(time.perf_counter() - t1)
+        else:
+            t1 = time.perf_counter()
+            _ = adapter.search_full_row(handle, batch, k, args.ef_search, metric)
+            full_latencies.append(time.perf_counter() - t1)
+            t1 = time.perf_counter()
+            ids = adapter.search(handle, batch, k, args.ef_search, metric)
+            pure_latencies.append(time.perf_counter() - t1)
         got = set(int(x) for x in ids[0].tolist())
         truth_i = set(int(x) for x in neighbors[i][:k].tolist())
         hits += len(got & truth_i) / k
-
-    full_latencies = []
-    for i in range(q):
-        t1 = time.perf_counter()
-        _ = adapter.search_full_row(handle, test[i : i + 1], k, args.ef_search, metric)
-        full_latencies.append(time.perf_counter() - t1)
 
     recall = hits / q
     pure_total = sum(pure_latencies) or 1e-9
@@ -1175,16 +1199,23 @@ def run_vector(adapter: VectorAdapter, args) -> dict:
         "index_mb": round(adapter.index_bytes(handle) / 1e6, 2),
         "recall_at_k": round(recall, 4),
         "pure_index_qps": round(q / pure_total, 1),
-        # Recorded for every engine so the report's Refine column is meaningful:
+        # Recorded for every engine so the report's refine column is meaningful:
         # engines with no refinement concept (faiss, hnswlib, pgvector, opensearch)
-        # carry 1, i.e. "off", and are reported as an em dash.
+        # carry 1, i.e. "off", and the report prints False.
         "refine_factor": int(os.environ.get("REFINE_FACTOR", "1") or 1),
         "pure_p50_ms": round(pure_p50, 3),
         "pure_p99_ms": round(pure_p99, 3),
+        # `full_row_qps` is kept as an explicit alias because older artifacts were
+        # written with it, but `qps` is the field the report reads for Row QPS and
+        # it must be the row-path rate. It used to be `q / pure_total` -- the
+        # index-only rate -- while `p50_ms`/`p99_ms` beside it came from the row
+        # loop, so every competitor's "Row QPS" was the index-only throughput
+        # printed next to row-path latencies, and was bit-identical to
+        # `pure_index_qps` (faiss on sift: 9554.2 in both columns).
         "full_row_qps": round(q / full_total, 1),
         "full_p50_ms": round(full_p50, 3),
         "full_p99_ms": round(full_p99, 3),
-        "qps": round(q / pure_total, 1),
+        "qps": round(q / full_total, 1),
         "p50_ms": round(full_p50, 3),
         "p99_ms": round(full_p99, 3),
     }

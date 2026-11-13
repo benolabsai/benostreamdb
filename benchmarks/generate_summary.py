@@ -246,38 +246,34 @@ def _record_refine(record: dict) -> int:
 
 
 def _refine_cell(record: dict) -> str:
-    """`—` when refinement is off, `×N` when the point used two-stage rescoring.
+    """`True` when the point used second-stage rescoring, `False` otherwise.
 
-    Separate from the label so the column is present for every engine: a refined
-    row is a different operating point, not a different engine.
+    A boolean rather than the factor: the measurement is "did exact f32 rescoring
+    recover the quantized index's recall loss", and every variant saturates at
+    ×2, so separate `×2` and `×4` rows implied a tuning curve the data does not
+    contain. It also removes the misreading that a flat ×1/×2/×4 sequence on an
+    uncompressed index is a broken feature, when it is the only correct result.
     """
-    rf = _record_refine(record)
-    return f"×{rf}" if rf > 1 else "—"
+    return "True" if _record_refine(record) > 1 else "False"
 
 
-def _eng_label(engine, refine_factor=None) -> str:
+def _eng_label(engine) -> str:
     """Bold BenoStreamDB rows so they stand out in every table.
 
     The vector quantization suffix (`_tq8`/`_pq`/`_sq`) is dropped from the
     engine name because the Index Precision column already carries it, so the
     quantized variants read as plain `benostreamdb` and `lancedb`.
 
-    A refined measurement is labelled distinctly: `refine_factor` is recorded in
-    the artifact, and without it a refined row would be indistinguishable from its
-    unrefined sibling (same engine, same dataset, same device) — and would be
-    dropped outright by the duplicate collapse below.
+    The refinement factor is deliberately *not* part of the label. It is already
+    the next column over; repeating it in the engine name said the same thing
+    twice and made the row harder to scan. The duplicate collapse still separates
+    the two operating points because `refine_factor` is part of its key.
     """
     name = str(engine)
     for suffix in ("_tq8", "_pq", "_sq", "_flat"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
             break
-    try:
-        rf = int(refine_factor or 1)
-    except (TypeError, ValueError):
-        rf = 1
-    if rf > 1:
-        name = f"{name}+refine×{rf}"
     return f"**{name}**" if name.startswith("benostreamdb") else name
 
 
@@ -528,7 +524,11 @@ def _row_p99(record: dict) -> float | str:
     return "-"
 
 
-def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None = None) -> None:
+def generate_summary(
+    allow_mixed_sessions: bool = False,
+    ledger_path: str | None = None,
+    verify_invariants: bool = True,
+) -> None:
     os.makedirs(RESULTS_DIR, exist_ok=True)
     report_path = os.path.join(RESULTS_DIR, "BENCHMARK_REPORT.md")
 
@@ -1048,6 +1048,51 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
     )
     sections.append("")
     sections.append(
+        "**What each QPS column pays.** `Index QPS` times the index query alone: every "
+        "engine returns identifiers and scores — `segment_id`/`row_id`/`score` for "
+        "BenoStreamDB, ids plus distances for the competitors — and reads no payload. "
+        "`Row QPS` times the same query followed by payload hydration, and the "
+        "projection is the same on both sides: `id` and the vector column. A "
+        "competitor's row is therefore a 784-float embedding and so is ours, rather "
+        "than one side fetching a narrow identifier and the other a full vector. "
+        "When refinement is enabled it is applied inside both columns."
+    )
+    sections.append("")
+    sections.append(
+        "**`2nd-stage refine` is a boolean, not a tuning curve.** `True` means the query "
+        "asked the graph for `2k` candidates and re-ranked them by exact f32 distance read "
+        "from the column's Parquet; `False` means the index answered directly. The second "
+        "stage exists because quantization is lossy: an `sq`/`tq8` index ranks by codes, so "
+        "its top-k can exclude vectors whose true distance would have qualified. Rescoring "
+        "the `2k` candidates against the uncompressed payload recovers most of that — `tq8` "
+        "on glove-100 moves 0.9766 → 0.9892 and `sq` 0.9788 → 0.9902, both within 0.1 pt of "
+        "the unquantized index — and costs the extra gather-and-distance pass, so `Index "
+        "QPS` and `Row QPS` drop by roughly a quarter. That is the whole trade: one factor, "
+        "because every variant saturates at ×2 and ×4 only buys a slower query."
+    )
+    sections.append("")
+    sections.append(
+        "**Only quantized indexes are refined, and only BenoStreamDB's, so `True` appears on "
+        "its `sq` and `tq8` rows.** An uncompressed index has nothing to recover: stage 1 "
+        "already ranks those same f32 vectors in the very metric the rescore would use, so "
+        "re-ranking the same candidate set cannot reorder the true top-k. Measuring it "
+        "produced a duplicate row at one to two thirds of the throughput, so it is not "
+        "measured at all — on an f32 row `False` means the index answered directly, which is "
+        "the only configuration that can help. The invariants are enforced rather than "
+        "trusted: `benchmarks/verify_results.py` fails the run on a quantized row whose "
+        "refined recall drops, on a refined row with no unrefined sibling, on `Row QPS` "
+        "exceeding `Index QPS`, on engines measured at different `n`/`dim`/`queries`/`k` for "
+        "one dataset, on artifacts from two hosts, and on an f32 row whose refine changes "
+        "anything at all — that last one can only mean stage 1 and the rescore disagree "
+        "about the metric. Two engines are not refined here: Milvus and Weaviate because "
+        "their adapters cannot reach refinement yet (#125), and LanceDB because its "
+        "`refine_factor` re-ranks the candidate set with L2 regardless of the index distance "
+        "type — on `lastfm-64-dot` that ranks by the wrong metric and loses recall (`sq`: "
+        "0.9206 → 0.8874), which is a property of that refine path rather than a result "
+        "worth publishing."
+    )
+    sections.append("")
+    sections.append(
         "**Recall comparability.** All engines (BenoStreamDB and external competitors) "
         "are evaluated against metric-correct ground truth computed via brute force using the "
         "dataset's declared metric (cosine distance for `glove-*` and `nytimes-256`, Euclidean L2 "
@@ -1178,10 +1223,12 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
 
         sections.append(
             "> [!NOTE]\n"
-            "> **Table Sort Order:**\n"
-            "> 1. **Index Precision:** Uncompressed `f32` first, followed by 8-bit compressed (`sq`, `tq8`).\n"
-            "> 2. **Recall Tier:** `Recall > 0.95` (`True` first, `False` second).\n"
-            "> 3. **Traversal Throughput:** `Index QPS` descending."
+            "> **Table Sort Order** (the four annotated columns, left to right):\n"
+            "> 1. **Index Precision:** uncompressed `f32` first, then the 8-bit compressed representations (`sq`, `tq8`).\n"
+            "> 2. **2nd-stage refine:** `False` first, so each index's direct answer is its first row.\n"
+            "> 3. **Recall@k:** descending.\n"
+            "> 4. **Row QPS:** descending, the tie-break between rows with equal recall. "
+            "This is the full retrieval path, so the last key ranks what an application actually gets."
         )
         sections.append("")
 
@@ -1189,21 +1236,20 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
             sections.append(f"### Vector — `{ds}`")
             sections.append("")
             sections.append(
-                # The three sort keys are adjacent and in the order `_sort_key` applies
-                # them, so the sort is readable from the header alone: precision tier,
-                # then the recall pass, then traversal throughput. Everything after them
-                # is comparison data, not a key.
-                # "Index Precision" alone made the arrow read as ascending precision,
-                # which is the inverse of the key: the tier is 0 for f32 and 1 for any
-                # quantized representation, so uncompressed rows come first and the
-                # arrow is stating that compression tier, not numeric precision.
-                "| Engine | Index Precision (f32 first) ▲ | Recall > 0.95 ▼ | Index QPS ▼ | Refine | Recall@k | Index p50 (ms) | Index p99 (ms) | Row QPS | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
+                # The two sort keys are the two right-hand columns, in the order
+                # `_sort_key` applies them, so the ordering is readable from the header
+                # alone: recall first, throughput as the tie-break. Precision is a
+                # property column, not a key -- sorting f32 ahead of compressed rows
+                # grouped the table by storage format instead of by what a reader is
+                # looking for, which is how accurate the row is.
+                "| Engine | Index Precision (f32 first) ▲ | 2nd-stage refine ▲ | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
             )
-            sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
-            # Sort order:
-            # 1. Index Precision: f32 first (tier 0), compressed second (tier 1)
-            # 2. Recall > 0.95: True first (tier 0), False second (tier 1)
-            # 3. Index QPS: descending
+            sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+            # Sort order, matching the four annotated columns left to right: precision
+            # tier, refine tier (unrefined first, so each index's direct answer leads),
+            # Recall@k descending, then Row QPS descending -- the full retrieval path,
+            # not the index-only rate, because that is what an application experiences.
+            # Engine name last so the order is total and a re-render is byte-stable.
             def _get_idx_prec(r):
                 eng = r.get("engine", "")
                 raw = str(r.get("index_type") or "-").lower()
@@ -1217,21 +1263,22 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
                 return "f32"
 
             def _sort_key(r):
-                idx = _get_idx_prec(r)
-                prec_tier = 0 if idx == "f32" else 1
+                prec_tier = 0 if _get_idx_prec(r) == "f32" else 1
+                # Unrefined first, so each index's direct answer is the row the
+                # refined one is read against.
+                refine_tier = 0 if _record_refine(r) <= 1 else 1
                 rec = float(r.get("recall_at_k") or 0)
-                rec_tier = 0 if rec > 0.95 else 1
-                qps = _index_qps(r) or 0
-                return (prec_tier, rec_tier, -qps)
+                row_qps = _row_qps(r)
+                if not isinstance(row_qps, (int, float)):
+                    row_qps = 0.0
+                return (prec_tier, refine_tier, -rec, -row_qps, r.get("engine", ""))
 
             for r in sorted(groups[ds], key=_sort_key):
                 eng = r.get("engine", "")
                 idx = _get_idx_prec(r)
-                rec = float(r.get("recall_at_k") or 0)
-                rec_pass = "True" if rec > 0.95 else "False"
                 sections.append(
-                    f"| {_eng_label(eng, _record_refine(r))} | {idx} | {rec_pass} | {_index_qps(r)} | "
-                    f"{_refine_cell(r)} | {r.get('recall_at_k')} | "
+                    f"| {_eng_label(eng)} | {idx} | {_refine_cell(r)} | "
+                    f"{r.get('recall_at_k')} | {_index_qps(r)} | "
                     f"{_index_p50(r)} | {_index_p99(r)} | "
                     f"{_row_qps(r)} | {_row_p50(r)} | {_row_p99(r)} | "
                     f"{r.get('build_s')} | {r.get('index_mb')} |"
@@ -1275,6 +1322,24 @@ def generate_summary(allow_mixed_sessions: bool = False, ledger_path: str | None
     for wl, engine, config, layer in COMPETITOR_CONFIG:
         sections.append(f"| {wl} | {engine} | {config} | {layer} |")
     sections.append("")
+
+    # Refuse to publish numbers that contradict each other. Every defect this
+    # benchmark has shipped was a broken *relationship* between two artifacts
+    # (refined recall below unrefined, row QPS above index QPS, a refined row with
+    # no baseline), not a single wrong number, so the checks live in one place and
+    # run here as well as in the sweep. Nothing is written when they fail.
+    if verify_invariants:
+        from verify_results import verify as _verify_vector_results
+
+        failures = _verify_vector_results()
+        if failures:
+            print(
+                f"ERROR: {failures} vector-artifact invariant failure(s); "
+                "report not written. Run `python benchmarks/verify_results.py` "
+                "for the detail.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
 
     content = _sort_tables_by_qps("\n".join(sections)) + "\n"
     with open(report_path, "w", encoding="utf-8") as f:
@@ -1323,6 +1388,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="session ledger path (default: benchmarks/results/session.json)",
     )
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help=(
+            "write the report even when the vector artifacts contradict each other "
+            "(archaeology on an old results directory; never for a published report)"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -1331,4 +1404,5 @@ if __name__ == "__main__":
     generate_summary(
         allow_mixed_sessions=arguments.allow_mixed_sessions,
         ledger_path=arguments.ledger,
+        verify_invariants=not arguments.skip_verify,
     )

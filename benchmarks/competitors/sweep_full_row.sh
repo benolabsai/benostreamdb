@@ -210,38 +210,64 @@ VECTOR_DATASETS=(
 # weaviate / milvus / opensearch / faiss / hnswlib / lancedb. Results land in the
 # bind-mounted `/results` as `<engine>_<dataset>_<device>.json`.
 
+# Every engine §3 measures, including the quantized competitor variants. This list
+# has to be complete on its own: `ONLY=vector_row` quarantines all of
+# `competitors/results/*.json` before writing, so any engine missing here would be
+# quarantined and never re-measured — which is how the quantized competitor rows
+# vanished once already. `lancedb_sq` is also the one competitor whose refinement
+# does something, and it has to be present to be refined.
 ROW_ENGINES=(
     benostreamdb
     benostreamdb_tq8
     benostreamdb_sq
     faiss
+    faiss_sq
     hnswlib
     lancedb
-    # lancedb_sq belongs here as well as in §3: it is the one competitor whose
-    # refinement actually does something (it re-ranks from the scalar-quantized
-    # codes), and leaving it out of this loop while listing it in REFINE_ENGINES
-    # meant the Refine column was populated for four engines and empty for the
-    # fifth it was written for.
     lancedb_sq
     pgvector
     qdrant
+    qdrant_sq
     weaviate
+    weaviate_sq
     milvus
+    milvus_sq
     opensearch
 )
 
-# Engines that implement two-stage exact rescoring (retrieve k*factor, re-rank by
-# exact distance). These get extra operating points from the same run, because the
-# refined point is a *different* row of the report, not a different engine: it
-# trades query throughput for recall, and the trade-off is only visible when both
-# points are measured on the same machine in the same session.
+# Engines that implement two-stage exact rescoring (retrieve k*factor candidates,
+# re-rank by exact f32 distance from the payload). Each refined record is a second
+# row of the report, not a second engine: it trades query throughput for recall,
+# and the trade-off is only readable when both points come from the same session.
+#
+# One factor, not a curve. Every quantized variant saturates at ×2 — `tq8` on
+# glove-100 goes 0.9766 -> 0.9892, `sq` 0.9788 -> 0.9902, and on nytimes both
+# reach 0.9854 — so ×4 costs another 20-25% of throughput and buys no recall.
+# Measuring it produced an extra row per engine per dataset that invited exactly
+# the wrong conclusion (a flat f32 curve read as "refine does not work"). The
+# report therefore carries a boolean: was this point measured with second-stage
+# refinement or not.
+#
+# Only quantized indexes are refined. An uncompressed index has nothing to
+# recover: stage 1 already ranks the same f32 vectors in the same metric that the
+# rescore would use, so re-ranking the same candidates cannot reorder the top-k.
+# Measuring it produced a duplicate row at lower throughput, which reads as a
+# broken feature instead of the only correct result. Quantization is what creates
+# the loss that a second stage can undo.
 #
 # Milvus and Weaviate are deliberately absent: their quantization variants are not
 # reachable through the adapter yet (Milvus needs HNSW_SQ/HNSW_PQ + `refine`,
 # tracked as #125), and a `_rN` artifact that silently equals its unrefined twin
 # is worse than a missing column.
-REFINE_ENGINES=" benostreamdb benostreamdb_tq8 benostreamdb_sq lancedb lancedb_sq "
-REFINE_FACTORS="${REFINE_FACTORS:-2 4}"
+#
+# LanceDB is absent for a different reason: its `refine_factor` re-ranks the
+# candidate set with L2 regardless of the index's distance type, so on the
+# dot-product dataset (lastfm-64-dot) the refined ranking uses the wrong metric and
+# reports *lower* recall than the unrefined index (sq: 0.9206 -> 0.8874). That is
+# the adapter's refine path, not a property of the engine, so the cell is not
+# measured rather than published with an explanation.
+REFINE_ENGINES=" benostreamdb_tq8 benostreamdb_sq "
+REFINE_FACTORS="${REFINE_FACTORS:-2}"
 
 # --- start the services every containerised section talks to ----------------
 if [ "$DRY_RUN" != "1" ] && [ -n "$ENGINE_SERVICES" ]; then
@@ -412,6 +438,13 @@ if [ "${#FAILED[@]}" -ne 0 ]; then
 fi
 
 echo
-echo "=== regenerating the report"
+echo "=== verifying that the artifacts do not contradict each other"
 cd "$ROOT_DIR" || exit 1
+"$PYTHON" benchmarks/verify_results.py || {
+    echo "artifact invariants failed; the report was not regenerated" >&2
+    exit 1
+}
+
+echo
+echo "=== regenerating the report"
 "$PYTHON" benchmarks/generate_summary.py

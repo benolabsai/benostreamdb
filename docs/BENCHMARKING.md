@@ -493,9 +493,39 @@ The narrative report is [`benchmarks/results/BENCHMARK_REPORT.md`](https://githu
 
 ```bash
 python benchmarks/session_provenance.py verify          # exit 1 on mixed sessions
+python benchmarks/verify_results.py                     # exit 1 on self-contradicting artifacts
 python benchmarks/generate_summary.py                   # refuses on mixed sessions
 python benchmarks/generate_summary.py --allow-mixed-sessions   # historical report
 ```
+
+### 8.1 Artifact invariants
+
+Every defect this benchmark has published was a broken relationship between two
+artifacts, never a single wrong number: a refined row below its unrefined
+sibling, a row-path QPS above the index-only QPS it contains, a refined row with
+no baseline, engines measured at different `n`/`dim`/`queries`/`k` on one
+dataset, a `qps` field carrying the index-only rate. Those are checkable without
+re-measuring, so [`benchmarks/verify_results.py`](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/verify_results.py)
+checks them and exits non-zero on a violation:
+
+| Check | Invariant |
+|---|---|
+| `comparability` | every engine on one dataset reports the same `n`, `dim`, `queries`, `k` |
+| `unique cell` | one artifact per `(dataset, device, engine, refine factor)` |
+| `row <= index` | `qps <= pure_index_qps * 1.02` — the row path hydrates the payload |
+| `row measured` | `qps != pure_index_qps` — two columns, two measurements |
+| `timing plausible` | `qps >= 0`, `p50 >= 0`, `p99 >= p50` |
+| `refine baseline` | every refined row has an unrefined sibling |
+| `refine noop (f32)` | refined recall equals unrefined on an uncompressed index |
+| `refine monotone` | refined recall does not drop below unrefined on a quantized index |
+| `refine effective` | a quantized variant's refine actually moves recall, unless it is already at the ceiling |
+| `machine state` | one `cpu_model` per device across artifacts |
+
+`generate_summary.py` runs the same checks before writing anything and refuses to
+emit a report when they fail; `sweep_full_row.sh` runs them as its final gate, so
+there is no command path that publishes unverified numbers. `--skip-verify` on the
+generator exists for archaeology on an old results directory and must not be used
+for a report that anyone reads.
 
 The generator writes the machine-state fingerprint, the calibration envelope and
 a per-section session table into the report header, so a reader never has to

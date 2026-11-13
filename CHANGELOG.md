@@ -198,6 +198,30 @@
   three remaining `entries` references in `src/core/manifest/manager/schema.rs`
   are documented as legacy/empty-by-design rather than left as silent traps.
 
+### Benchmarks
+
+- **New artifact invariant gate** ([`benchmarks/verify_results.py`](benchmarks/verify_results.py)):
+  compares checked relationships rather than good numbers — refined recall against
+  its unrefined sibling, `qps` against `pure_index_qps`, refined rows against a
+  missing baseline, `n`/`dim`/`queries`/`k` across engines on one dataset, and the
+  host fingerprint. `generate_summary.py` refuses to write a report when a check
+  fails, and `sweep_full_row.sh` runs it as the final step before regeneration, so
+  no command path publishes self-contradicting numbers. Documented in
+  [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md) §8.1.
+- **Refine reported as a boolean operating point, measured once.** Second-stage
+  rescoring is now measured at ×2 only and reported as a `2nd-stage refine`
+  `True`/`False` column; every quantized variant saturates there
+  (`tq8` 0.9766 → 0.9892, `sq` 0.9788 → 0.9902 on glove-100), so the ×4 point
+  cost another 20–25 % of throughput for no recall. Uncompressed `f32` indexes
+  are no longer refined at all: stage 1 already ranks those vectors in the metric
+  the rescore would use, so the refined row was a duplicate of the baseline at
+  one to two thirds of the throughput. The gate still fails if an `f32` refined
+  row ever changes recall, because that can only mean the two stages disagree
+  about the metric. LanceDB's refine is no longer measured: its `refine_factor`
+  re-ranks candidates with L2 regardless of the index distance type, so on
+  `lastfm-64-dot` it ranks by the wrong metric and loses 3.3 pt of recall
+  (`sq`: 0.9206 → 0.8874).
+
 ### CI
 
 - **Toolchain pinned to 1.100.0** (`rust-toolchain.toml`, `.github/workflows/*.yml`,
