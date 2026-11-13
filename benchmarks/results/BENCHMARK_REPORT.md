@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-11-13 02:17:26 UTC
+- **Generated At**: 2026-11-13 02:24:03 UTC
 - **Engine version**: 0.16.0
 - **Platform**: Linux-7.0.0-42-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
@@ -394,7 +394,7 @@ All vector index traversals are evaluated under a standardized 8-core CPU envelo
 
 **Out-of-core architecture vs. pure in-memory monolithic graphs.** Competitor rows (FAISS `IndexHNSWFlat`, HNSWlib, Qdrant, pgvector) build a single, monolithic in-memory HNSW graph where 100% of vectors and edge pointers reside permanently in host RAM. On small synthetic benchmark slices (20k vectors), this global connectivity yields ~1.0000 recall because beam search traverses the entire dataset with zero boundary cuts. At production scale (50M+ vectors), however, monolithic graphs require 250–512 GB of expensive cloud RAM to prevent out-of-memory crashes. In contrast, BenoStreamDB is architected as an out-of-core streaming lakehouse engine: vectors are committed to immutable Apache Iceberg Parquet files, partitioned into Voronoi cells via IVF centroids, and indexed into modular Puffin sidecar sub-graphs compressed 4× with TurboQuant (TQ8). Coarse centroids page only active clusters into memory during query evaluation, strictly bounding RAM usage (e.g. 8–16 GB) regardless of total dataset volume. The minor recall delta on high-dimensional Euclidean/angular datasets (0.95–0.99 vs 1.00) reflects the natural boundary-pruning effect of Voronoi partitioning and lossy 8-bit quantization—an intentional trade-off that eliminates dedicated vector database clusters and slashes enterprise infrastructure costs.
 
-**Index-Only vs. Full-Row Retrieval & Table Ordering.** The tables below disaggregate performance into two distinct query stages: **Index Traversal** (pure graph beam-search returning candidate vector IDs: `Index QPS`, `Index p50`, `Index p99`) and **Row Retrieval** (end-to-end vector search plus columnar payload deserialization: `Row QPS`, `Row p50`, `Row p99`). For in-process engines like BenoStreamDB, full-row retrieval hydrates directly into zero-copy PyArrow RecordBatches from Apache Iceberg Parquet files. Each dataset table is ordered by **Index Precision (`f32` first, compressed second)**, then by **Recall > 0.95 (True first, False second)**, and finally by **Index QPS descending**.
+**Index-Only vs. Full-Row Retrieval & Table Ordering.** The tables below disaggregate performance into two distinct query stages: **Index Traversal** (pure graph beam-search returning candidate vector IDs: `Index QPS`, `Index p50`, `Index p99`) and **Row Retrieval** (end-to-end vector search plus columnar payload deserialization: `Row QPS`, `Row p50`, `Row p99`). For in-process engines like BenoStreamDB, full-row retrieval hydrates directly into zero-copy PyArrow RecordBatches from Apache Iceberg Parquet files. Each dataset table is grouped by **Index Precision (`f32` first, compressed second)** and ordered within each precision by **Row QPS descending** — the full retrieval path, which is what an application actually gets.
 
 **Index Precision & Quantization Formats.** The **Index Precision** column reports the data representation stored *inside the index graph nodes* during beam-search distance computation, which is distinct from the raw ingested dataset format (which is 100% `float32` across all engines):
 - `f32`: Uncompressed 32-bit IEEE float (4 bytes per dimension). Used by FAISS (`IndexHNSWFlat`), HNSWlib, pgvector, Weaviate, OpenSearch, LanceDB (`HnswFlat`), and BenoStreamDB (`hnsw`). Distance evaluations execute exact floating-point arithmetic. HNSWlib is Malkov's reference C++ implementation and exclusively evaluates uncompressed `float32` (it contains no vector compression or quantization features).
@@ -410,235 +410,233 @@ Full-row retrieval hydrates the uncompressed `float32` payload directly from sto
 >
 > **One row per engine and index precision**, measured at that engine's best configuration for the precision: where two-stage exact rescoring was also measured, the row shown is whichever of the two achieved the higher recall.
 >
-> **Table Sort Order** (the two annotated columns):
-> 1. **Recall@k:** descending.
-> 2. **Row QPS:** descending, the tie-break between rows with equal recall. This is the full retrieval path, so the last key ranks what an application actually gets.
+> **Table Sort Order**: **Row QPS descending** (the annotated column). This is the full retrieval path — search plus payload hydration — so it ranks what an application actually gets. Recall is reported alongside but is no longer a sort key, because a row with high recall that is 10x slower is not the row a reader should see first.
 
 ### Vector — `fashion-mnist-784-euclidean`
 
 #### Uncompressed (`f32`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
 | faiss | f32 | 1.0 | 5483.0 | 0.173 | 0.351 | 5318.2 | 0.175 | 0.364 | 0.72 | 65.6 |
 | hnswlib | f32 | 1.0 | 5384.2 | 0.179 | 0.365 | 2277.7 | 0.427 | 0.604 | 1.529 | 65.69 |
 | pgvector | f32 | 1.0 | 920.1 | 1.062 | 1.633 | 855.0 | 1.149 | 1.687 | 11.141 | 166.35 |
 | weaviate | f32 | 1.0 | 887.3 | 1.115 | 1.463 | 620.5 | 1.592 | 2.191 | 5.075 | 62.72 |
 | qdrant | f32 | 1.0 | 715.1 | 1.36 | 1.994 | 523.2 | 1.879 | 2.556 | 2.939 | 62.72 |
+| **benostreamdb** | **f32** | **0.9976** | **831.4** | **1.189** | **1.649** | **507.0** | **1.951** | **2.512** | **2.705** | **194.96** |
 | milvus | f32 | 1.0 | 590.2 | 1.654 | 2.38 | 457.9 | 2.141 | 3.166 | 10.493 | 62.72 |
 | opensearch | f32 | 1.0 | 478.3 | 2.068 | 2.789 | 344.4 | 2.876 | 3.791 | 6.258 | 153.75 |
 | lancedb | f32 | 1.0 | 347.2 | 2.829 | 3.746 | 311.2 | 3.073 | 4.283 | 2.79 | 128.71 |
-| **benostreamdb** | f32 | 0.9976 | 831.4 | 1.189 | 1.649 | 507.0 | 1.951 | 2.512 | 2.705 | 194.96 |
 
 #### Scalar-quantized, uniform 8-bit (`sq`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
+| faiss | sq | 0.9864 | 6882.7 | 0.143 | 0.217 | 6667.9 | 0.148 | 0.222 | 0.555 | 18.57 |
 | weaviate | sq | 1.0 | 863.2 | 1.146 | 1.584 | 604.3 | 1.635 | 2.208 | 5.089 | 15.68 |
-| lancedb | sq | 1.0 | 371.2 | 2.614 | 3.619 | 334.7 | 2.829 | 3.988 | 1.972 | 81.67 |
-| **benostreamdb** | sq | 0.9976 | 583.6 | 1.689 | 2.191 | 342.5 | 2.882 | 3.501 | 5.098 | 147.93 |
 | qdrant | sq | 0.9922 | 828.8 | 1.183 | 1.635 | 588.9 | 1.694 | 2.19 | 2.958 | 15.68 |
 | milvus | sq | 0.9866 | 591.7 | 1.672 | 2.381 | 451.5 | 2.198 | 2.868 | 10.109 | 62.72 |
-| faiss | sq | 0.9864 | 6882.7 | 0.143 | 0.217 | 6667.9 | 0.148 | 0.222 | 0.555 | 18.57 |
+| **benostreamdb** | **sq** | **0.9976** | **583.6** | **1.689** | **2.191** | **342.5** | **2.882** | **3.501** | **5.098** | **147.93** |
+| lancedb | sq | 1.0 | 371.2 | 2.614 | 3.619 | 334.7 | 2.829 | 3.988 | 1.972 | 81.67 |
 
 ### Vector — `gist-960-euclidean`
 
 #### Uncompressed (`f32`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
+| faiss | f32 | 0.9916 | 3117.9 | 0.311 | 0.585 | 3100.3 | 0.305 | 0.603 | 1.347 | 79.68 |
+| hnswlib | f32 | 0.992 | 2439.4 | 0.394 | 0.72 | 1400.7 | 0.7 | 1.041 | 3.051 | 79.77 |
+| weaviate | f32 | 0.9908 | 668.2 | 1.493 | 2.128 | 472.0 | 2.125 | 2.807 | 6.431 | 76.8 |
+| **benostreamdb** | **f32** | **0.9776** | **728.3** | **1.334** | **2.531** | **463.6** | **2.106** | **3.893** | **3.251** | **237.25** |
+| milvus | f32 | 0.9948 | 494.0 | 1.99 | 2.859 | 393.3 | 2.518 | 3.436 | 11.706 | 76.8 |
+| qdrant | f32 | 0.9974 | 537.9 | 1.826 | 2.513 | 363.4 | 2.751 | 3.454 | 4.1 | 76.8 |
 | pgvector | f32 | 0.9988 | 351.6 | 2.883 | 3.84 | 315.4 | 3.197 | 4.238 | 25.017 | 247.28 |
 | lancedb | f32 | 0.9986 | 286.3 | 3.437 | 4.536 | 259.7 | 3.707 | 5.088 | 4.236 | 156.75 |
-| qdrant | f32 | 0.9974 | 537.9 | 1.826 | 2.513 | 363.4 | 2.751 | 3.454 | 4.1 | 76.8 |
-| milvus | f32 | 0.9948 | 494.0 | 1.99 | 2.859 | 393.3 | 2.518 | 3.436 | 11.706 | 76.8 |
 | opensearch | f32 | 0.9946 | 234.3 | 4.241 | 5.545 | 138.6 | 7.164 | 8.683 | 17.963 | 352.86 |
-| hnswlib | f32 | 0.992 | 2439.4 | 0.394 | 0.72 | 1400.7 | 0.7 | 1.041 | 3.051 | 79.77 |
-| faiss | f32 | 0.9916 | 3117.9 | 0.311 | 0.585 | 3100.3 | 0.305 | 0.603 | 1.347 | 79.68 |
-| weaviate | f32 | 0.9908 | 668.2 | 1.493 | 2.128 | 472.0 | 2.125 | 2.807 | 6.431 | 76.8 |
-| **benostreamdb** | f32 | 0.9776 | 728.3 | 1.334 | 2.531 | 463.6 | 2.106 | 3.893 | 3.251 | 237.25 |
 
 #### Scalar-quantized, uniform 8-bit (`sq`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| lancedb | sq | 0.9984 | 286.3 | 3.436 | 4.526 | 266.6 | 3.576 | 4.971 | 2.576 | 99.15 |
-| weaviate | sq | 0.9922 | 661.4 | 1.53 | 2.033 | 463.1 | 2.133 | 2.87 | 6.408 | 19.2 |
-| milvus | sq | 0.9838 | 479.4 | 2.052 | 2.827 | 374.8 | 2.618 | 3.612 | 11.043 | 76.8 |
 | faiss | sq | 0.9812 | 3790.5 | 0.268 | 0.377 | 3712.2 | 0.272 | 0.38 | 0.949 | 22.09 |
-| **benostreamdb** | sq | 0.9776 | 503.9 | 1.966 | 2.531 | 300.8 | 3.298 | 4.037 | 5.38 | 179.67 |
+| weaviate | sq | 0.9922 | 661.4 | 1.53 | 2.033 | 463.1 | 2.133 | 2.87 | 6.408 | 19.2 |
 | qdrant | sq | 0.9562 | 699.9 | 1.41 | 1.871 | 438.9 | 2.262 | 2.873 | 3.989 | 19.2 |
+| milvus | sq | 0.9838 | 479.4 | 2.052 | 2.827 | 374.8 | 2.618 | 3.612 | 11.043 | 76.8 |
+| **benostreamdb** | **sq** | **0.9776** | **503.9** | **1.966** | **2.531** | **300.8** | **3.298** | **4.037** | **5.38** | **179.67** |
+| lancedb | sq | 0.9984 | 286.3 | 3.436 | 4.526 | 266.6 | 3.576 | 4.971 | 2.576 | 99.15 |
 
 ### Vector — `glove-100-angular`
 
 #### Uncompressed (`f32`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| qdrant | f32 | 1.0 | 928.7 | 1.042 | 1.482 | 834.0 | 1.173 | 1.625 | 0.78 | 8.0 |
-| opensearch | f32 | 0.994 | 255.5 | 3.901 | 5.113 | 232.4 | 4.274 | 5.83 | 8.489 | 47.06 |
-| **benostreamdb** | f32 | 0.9906 | 1687.2 | 0.58 | 0.862 | 1014.0 | 0.954 | 1.405 | 1.349 | 30.51 |
-| pgvector | f32 | 0.9848 | 697.1 | 1.448 | 1.862 | 679.1 | 1.482 | 2.012 | 6.648 | 24.85 |
-| milvus | f32 | 0.9848 | 595.0 | 1.643 | 2.481 | 480.8 | 2.037 | 3.019 | 9.101 | 8.0 |
 | faiss | f32 | 0.9826 | 7054.8 | 0.14 | 0.206 | 6884.5 | 0.144 | 0.206 | 0.411 | 10.88 |
 | hnswlib | f32 | 0.976 | 7478.5 | 0.13 | 0.23 | 5534.5 | 0.174 | 0.283 | 0.601 | 10.97 |
-| lancedb | f32 | 0.975 | 363.1 | 2.718 | 3.372 | 339.7 | 2.822 | 3.473 | 0.818 | 19.27 |
+| **benostreamdb** | **f32** | **0.9906** | **1687.2** | **0.58** | **0.862** | **1014.0** | **0.954** | **1.405** | **1.349** | **30.51** |
+| qdrant | f32 | 1.0 | 928.7 | 1.042 | 1.482 | 834.0 | 1.173 | 1.625 | 0.78 | 8.0 |
 | weaviate | f32 | 0.9748 | 824.9 | 1.201 | 1.741 | 774.6 | 1.279 | 1.888 | 4.202 | 8.0 |
+| pgvector | f32 | 0.9848 | 697.1 | 1.448 | 1.862 | 679.1 | 1.482 | 2.012 | 6.648 | 24.85 |
+| milvus | f32 | 0.9848 | 595.0 | 1.643 | 2.481 | 480.8 | 2.037 | 3.019 | 9.101 | 8.0 |
+| lancedb | f32 | 0.975 | 363.1 | 2.718 | 3.372 | 339.7 | 2.822 | 3.473 | 0.818 | 19.27 |
+| opensearch | f32 | 0.994 | 255.5 | 3.901 | 5.113 | 232.4 | 4.274 | 5.83 | 8.489 | 47.06 |
 
 #### Scalar-quantized, uniform 8-bit (`sq`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| qdrant | sq | 1.0 | 956.2 | 1.013 | 1.422 | 801.9 | 1.225 | 1.648 | 0.794 | 2.0 |
-| **benostreamdb** | sq | 0.9902 | 1386.4 | 0.716 | 0.917 | 613.9 | 1.602 | 1.992 | 1.841 | 24.51 |
-| lancedb | sq | 0.9804 | 298.3 | 3.345 | 4.037 | 289.9 | 3.352 | 4.034 | 0.774 | 13.28 |
-| weaviate | sq | 0.9756 | 886.5 | 1.11 | 1.594 | 827.1 | 1.203 | 1.71 | 4.239 | 2.0 |
 | faiss | sq | 0.9704 | 2135.2 | 0.481 | 0.583 | 2119.4 | 0.483 | 0.569 | 1.914 | 4.88 |
+| weaviate | sq | 0.9756 | 886.5 | 1.11 | 1.594 | 827.1 | 1.203 | 1.71 | 4.239 | 2.0 |
+| qdrant | sq | 1.0 | 956.2 | 1.013 | 1.422 | 801.9 | 1.225 | 1.648 | 0.794 | 2.0 |
+| **benostreamdb** | **sq** | **0.9902** | **1386.4** | **0.716** | **0.917** | **613.9** | **1.602** | **1.992** | **1.841** | **24.51** |
 | milvus | sq | 0.9616 | 474.9 | 2.065 | 2.895 | 394.5 | 2.475 | 3.547 | 13.752 | 8.0 |
+| lancedb | sq | 0.9804 | 298.3 | 3.345 | 4.037 | 289.9 | 3.352 | 4.034 | 0.774 | 13.28 |
 
 ### Vector — `glove-200-angular`
 
 #### Uncompressed (`f32`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| qdrant | f32 | 1.0 | 759.2 | 1.288 | 1.708 | 598.2 | 1.65 | 2.184 | 1.246 | 16.0 |
-| opensearch | f32 | 0.9832 | 111.0 | 8.765 | 14.332 | 102.0 | 9.529 | 13.94 | 12.869 | 178.78 |
-| pgvector | f32 | 0.9644 | 563.5 | 1.781 | 2.348 | 543.1 | 1.864 | 2.551 | 8.67 | 42.27 |
-| **benostreamdb** | f32 | 0.9578 | 1510.4 | 0.641 | 1.038 | 964.3 | 1.008 | 1.472 | 5.501 | 54.56 |
-| milvus | f32 | 0.9566 | 555.4 | 1.735 | 2.791 | 452.5 | 2.131 | 3.151 | 9.755 | 16.0 |
 | faiss | f32 | 0.9494 | 4925.8 | 0.196 | 0.337 | 4842.1 | 0.199 | 0.333 | 0.572 | 18.88 |
 | hnswlib | f32 | 0.9462 | 4692.4 | 0.196 | 0.457 | 3353.9 | 0.279 | 0.598 | 0.857 | 18.97 |
+| **benostreamdb** | **f32** | **0.9578** | **1510.4** | **0.641** | **1.038** | **964.3** | **1.008** | **1.472** | **5.501** | **54.56** |
 | weaviate | f32 | 0.9456 | 727.1 | 1.363 | 1.918 | 653.1 | 1.529 | 2.099 | 4.619 | 16.0 |
+| qdrant | f32 | 1.0 | 759.2 | 1.288 | 1.708 | 598.2 | 1.65 | 2.184 | 1.246 | 16.0 |
+| pgvector | f32 | 0.9644 | 563.5 | 1.781 | 2.348 | 543.1 | 1.864 | 2.551 | 8.67 | 42.27 |
+| milvus | f32 | 0.9566 | 555.4 | 1.735 | 2.791 | 452.5 | 2.131 | 3.151 | 9.755 | 16.0 |
 | lancedb | f32 | 0.9434 | 347.7 | 2.848 | 3.57 | 323.6 | 2.979 | 3.778 | 1.161 | 35.25 |
+| opensearch | f32 | 0.9832 | 111.0 | 8.765 | 14.332 | 102.0 | 9.529 | 13.94 | 12.869 | 178.78 |
 
 #### Scalar-quantized, uniform 8-bit (`sq`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| qdrant | sq | 1.0 | 836.4 | 1.17 | 1.597 | 650.8 | 1.512 | 2.06 | 1.255 | 4.0 |
-| **benostreamdb** | sq | 0.9574 | 971.9 | 1.015 | 1.466 | 513.6 | 1.919 | 2.482 | 12.325 | 42.56 |
-| weaviate | sq | 0.9472 | 740.1 | 1.348 | 1.783 | 670.0 | 1.49 | 1.95 | 4.616 | 4.0 |
-| lancedb | sq | 0.9448 | 281.6 | 3.522 | 4.334 | 270.8 | 3.587 | 4.398 | 1.031 | 23.26 |
-| milvus | sq | 0.9438 | 559.4 | 1.732 | 2.778 | 448.3 | 2.175 | 3.1 | 10.627 | 16.0 |
 | faiss | sq | 0.9402 | 5662.0 | 0.175 | 0.262 | 5529.9 | 0.181 | 0.258 | 0.659 | 6.89 |
+| weaviate | sq | 0.9472 | 740.1 | 1.348 | 1.783 | 670.0 | 1.49 | 1.95 | 4.616 | 4.0 |
+| qdrant | sq | 1.0 | 836.4 | 1.17 | 1.597 | 650.8 | 1.512 | 2.06 | 1.255 | 4.0 |
+| **benostreamdb** | **sq** | **0.9574** | **971.9** | **1.015** | **1.466** | **513.6** | **1.919** | **2.482** | **12.325** | **42.56** |
+| milvus | sq | 0.9438 | 559.4 | 1.732 | 2.778 | 448.3 | 2.175 | 3.1 | 10.627 | 16.0 |
+| lancedb | sq | 0.9448 | 281.6 | 3.522 | 4.334 | 270.8 | 3.587 | 4.398 | 1.031 | 23.26 |
 
 ### Vector — `lastfm-64-dot`
 
 #### Uncompressed (`f32`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| qdrant | f32 | 1.0 | 997.7 | 0.968 | 1.376 | 895.2 | 1.089 | 1.559 | 0.649 | 5.2 |
-| lancedb | f32 | 0.9978 | 399.7 | 2.487 | 2.965 | 373.1 | 2.567 | 3.169 | 0.598 | 13.6 |
+| hnswlib | f32 | 0.991 | 19470.8 | 0.052 | 0.08 | 11787.3 | 0.083 | 0.13 | 0.252 | 8.17 |
 | faiss | f32 | 0.9964 | 14453.8 | 0.068 | 0.13 | 4442.9 | 0.071 | 0.136 | 0.214 | 8.08 |
 | pgvector | f32 | 0.996 | 1186.7 | 0.832 | 1.214 | 1156.3 | 0.857 | 1.128 | 6.309 | 18.51 |
-| milvus | f32 | 0.9954 | 688.9 | 1.414 | 1.925 | 551.0 | 1.785 | 2.462 | 8.814 | 5.2 |
-| hnswlib | f32 | 0.991 | 19470.8 | 0.052 | 0.08 | 11787.3 | 0.083 | 0.13 | 0.252 | 8.17 |
+| **benostreamdb** | **f32** | **0.9722** | **1957.1** | **0.503** | **0.687** | **1150.0** | **0.857** | **1.137** | **5.612** | **22.08** |
 | weaviate | f32 | 0.9904 | 1232.1 | 0.8 | 1.078 | 1135.3 | 0.863 | 1.236 | 3.875 | 5.2 |
-| **benostreamdb** | f32 | 0.9722 | 1957.1 | 0.503 | 0.687 | 1150.0 | 0.857 | 1.137 | 5.612 | 22.08 |
+| qdrant | f32 | 1.0 | 997.7 | 0.968 | 1.376 | 895.2 | 1.089 | 1.559 | 0.649 | 5.2 |
 | opensearch | f32 | 0.9662 | 779.1 | 1.279 | 1.557 | 660.4 | 1.499 | 1.882 | 3.658 | 32.26 |
+| milvus | f32 | 0.9954 | 688.9 | 1.414 | 1.925 | 551.0 | 1.785 | 2.462 | 8.814 | 5.2 |
+| lancedb | f32 | 0.9978 | 399.7 | 2.487 | 2.965 | 373.1 | 2.567 | 3.169 | 0.598 | 13.6 |
 
 #### Scalar-quantized, uniform 8-bit (`sq`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| qdrant | sq | 1.0 | 1000.1 | 0.971 | 1.354 | 891.3 | 1.093 | 1.441 | 0.654 | 1.3 |
-| weaviate | sq | 0.9914 | 1230.7 | 0.794 | 1.113 | 1140.4 | 0.854 | 1.174 | 2.936 | 1.3 |
-| milvus | sq | 0.9854 | 687.0 | 1.438 | 1.823 | 548.1 | 1.795 | 2.432 | 8.739 | 5.2 |
 | faiss | sq | 0.9826 | 9625.9 | 0.102 | 0.167 | 9421.4 | 0.104 | 0.167 | 0.469 | 4.18 |
-| **benostreamdb** | sq | 0.9726 | 1684.7 | 0.585 | 0.773 | 680.0 | 1.449 | 1.844 | 5.867 | 18.18 |
+| weaviate | sq | 0.9914 | 1230.7 | 0.794 | 1.113 | 1140.4 | 0.854 | 1.174 | 2.936 | 1.3 |
+| qdrant | sq | 1.0 | 1000.1 | 0.971 | 1.354 | 891.3 | 1.093 | 1.441 | 0.654 | 1.3 |
+| **benostreamdb** | **sq** | **0.9726** | **1684.7** | **0.585** | **0.773** | **680.0** | **1.449** | **1.844** | **5.867** | **18.18** |
+| milvus | sq | 0.9854 | 687.0 | 1.438 | 1.823 | 548.1 | 1.795 | 2.432 | 8.739 | 5.2 |
 | lancedb | sq | 0.9206 | 400.9 | 2.476 | 2.917 | 376.1 | 2.55 | 3.192 | 0.644 | 7.89 |
 
 ### Vector — `mnist-784-euclidean`
 
 #### Uncompressed (`f32`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
+| faiss | f32 | 0.9998 | 4490.0 | 0.213 | 0.432 | 4389.8 | 0.218 | 0.421 | 1.035 | 65.6 |
 | hnswlib | f32 | 1.0 | 3822.2 | 0.259 | 0.5 | 1956.7 | 0.501 | 0.779 | 2.048 | 65.69 |
 | pgvector | f32 | 1.0 | 756.0 | 1.304 | 2.061 | 720.7 | 1.345 | 2.226 | 13.432 | 166.35 |
-| opensearch | f32 | 1.0 | 390.9 | 2.567 | 3.407 | 296.4 | 3.377 | 4.537 | 6.609 | 137.34 |
-| faiss | f32 | 0.9998 | 4490.0 | 0.213 | 0.432 | 4389.8 | 0.218 | 0.421 | 1.035 | 65.6 |
 | weaviate | f32 | 0.9998 | 832.0 | 1.205 | 1.602 | 590.4 | 1.667 | 2.364 | 4.329 | 62.72 |
-| qdrant | f32 | 0.9998 | 586.6 | 1.667 | 2.51 | 283.9 | 2.098 | 43.1 | 4.748 | 62.72 |
 | milvus | f32 | 0.9996 | 564.8 | 1.701 | 2.89 | 437.7 | 2.214 | 3.796 | 10.305 | 62.72 |
+| **benostreamdb** | **f32** | **0.9894** | **646.1** | **1.505** | **2.283** | **419.6** | **2.325** | **3.185** | **2.694** | **194.93** |
+| opensearch | f32 | 1.0 | 390.9 | 2.567 | 3.407 | 296.4 | 3.377 | 4.537 | 6.609 | 137.34 |
 | lancedb | f32 | 0.9996 | 320.1 | 3.061 | 4.179 | 292.5 | 3.273 | 4.559 | 2.834 | 128.83 |
-| **benostreamdb** | f32 | 0.9894 | 646.1 | 1.505 | 2.283 | 419.6 | 2.325 | 3.185 | 2.694 | 194.93 |
+| qdrant | f32 | 0.9998 | 586.6 | 1.667 | 2.51 | 283.9 | 2.098 | 43.1 | 4.748 | 62.72 |
 
 #### Scalar-quantized, uniform 8-bit (`sq`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
+| faiss | sq | 0.9916 | 5714.3 | 0.172 | 0.3 | 5539.3 | 0.178 | 0.309 | 0.781 | 18.57 |
 | weaviate | sq | 0.9998 | 835.4 | 1.193 | 1.663 | 600.1 | 1.642 | 2.324 | 5.345 | 15.68 |
+| milvus | sq | 0.9912 | 525.9 | 1.826 | 2.952 | 412.6 | 2.327 | 3.713 | 10.547 | 62.72 |
+| **benostreamdb** | **sq** | **0.9894** | **456.0** | **2.188** | **2.78** | **342.7** | **2.922** | **3.613** | **4.754** | **147.9** |
 | lancedb | sq | 0.9996 | 368.8 | 2.643 | 3.606 | 331.6 | 2.859 | 4.111 | 2.121 | 81.79 |
 | qdrant | sq | 0.9918 | 648.5 | 1.476 | 2.282 | 309.5 | 1.893 | 42.739 | 2.938 | 15.68 |
-| faiss | sq | 0.9916 | 5714.3 | 0.172 | 0.3 | 5539.3 | 0.178 | 0.309 | 0.781 | 18.57 |
-| milvus | sq | 0.9912 | 525.9 | 1.826 | 2.952 | 412.6 | 2.327 | 3.713 | 10.547 | 62.72 |
-| **benostreamdb** | sq | 0.9894 | 456.0 | 2.188 | 2.78 | 342.7 | 2.922 | 3.613 | 4.754 | 147.9 |
 
 ### Vector — `nytimes-256-angular`
 
 #### Uncompressed (`f32`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| qdrant | f32 | 0.999 | 767.8 | 1.273 | 1.8 | 573.6 | 1.712 | 2.329 | 1.35 | 20.48 |
-| **benostreamdb** | f32 | 0.9854 | 1155.7 | 0.843 | 1.197 | 756.7 | 1.28 | 1.898 | 1.887 | 68.03 |
-| opensearch | f32 | 0.9786 | 94.8 | 10.38 | 14.673 | 87.3 | 11.288 | 15.571 | 15.242 | 219.38 |
-| milvus | f32 | 0.9458 | 505.6 | 1.939 | 2.73 | 406.9 | 2.399 | 3.361 | 11.37 | 20.48 |
-| pgvector | f32 | 0.9452 | 503.1 | 1.971 | 2.529 | 476.6 | 2.096 | 2.655 | 9.985 | 50.92 |
-| lancedb | f32 | 0.9274 | 348.7 | 2.855 | 3.495 | 323.7 | 2.99 | 3.704 | 1.32 | 44.25 |
-| weaviate | f32 | 0.9252 | 694.7 | 1.449 | 1.983 | 621.0 | 1.593 | 2.119 | 4.845 | 20.48 |
 | faiss | f32 | 0.924 | 3621.4 | 0.27 | 0.39 | 3558.9 | 0.273 | 0.413 | 0.666 | 23.36 |
 | hnswlib | f32 | 0.924 | 3963.7 | 0.234 | 0.436 | 2879.9 | 0.334 | 0.524 | 1.21 | 23.45 |
+| **benostreamdb** | **f32** | **0.9854** | **1155.7** | **0.843** | **1.197** | **756.7** | **1.28** | **1.898** | **1.887** | **68.03** |
+| weaviate | f32 | 0.9252 | 694.7 | 1.449 | 1.983 | 621.0 | 1.593 | 2.119 | 4.845 | 20.48 |
+| qdrant | f32 | 0.999 | 767.8 | 1.273 | 1.8 | 573.6 | 1.712 | 2.329 | 1.35 | 20.48 |
+| pgvector | f32 | 0.9452 | 503.1 | 1.971 | 2.529 | 476.6 | 2.096 | 2.655 | 9.985 | 50.92 |
+| milvus | f32 | 0.9458 | 505.6 | 1.939 | 2.73 | 406.9 | 2.399 | 3.361 | 11.37 | 20.48 |
+| lancedb | f32 | 0.9274 | 348.7 | 2.855 | 3.495 | 323.7 | 2.99 | 3.704 | 1.32 | 44.25 |
+| opensearch | f32 | 0.9786 | 94.8 | 10.38 | 14.673 | 87.3 | 11.288 | 15.571 | 15.242 | 219.38 |
 
 #### Scalar-quantized, uniform 8-bit (`sq`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
+| faiss | sq | 0.9262 | 4691.8 | 0.214 | 0.254 | 4574.6 | 0.22 | 0.27 | 0.843 | 8.01 |
+| weaviate | sq | 0.9266 | 692.8 | 1.449 | 1.861 | 620.9 | 1.616 | 2.151 | 3.932 | 5.12 |
 | qdrant | sq | 0.9988 | 783.0 | 1.245 | 1.668 | 556.0 | 1.757 | 2.472 | 1.466 | 5.12 |
 | milvus | sq | 0.9408 | 530.9 | 1.858 | 2.594 | 433.1 | 2.269 | 3.054 | 12.835 | 20.48 |
-| weaviate | sq | 0.9266 | 692.8 | 1.449 | 1.861 | 620.9 | 1.616 | 2.151 | 3.932 | 5.12 |
 | lancedb | sq | 0.9264 | 289.0 | 3.449 | 4.195 | 277.9 | 3.494 | 4.366 | 1.123 | 28.85 |
-| faiss | sq | 0.9262 | 4691.8 | 0.214 | 0.254 | 4574.6 | 0.22 | 0.27 | 0.843 | 8.01 |
 
 #### TurboQuant, 8-bit polar lattice (`tq8`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | tq8 | 0.9854 | 873.5 | 1.131 | 1.447 | 483.6 | 2.036 | 2.515 | 1.499 | 52.67 |
+| **benostreamdb** | **tq8** | **0.9854** | **873.5** | **1.131** | **1.447** | **483.6** | **2.036** | **2.515** | **1.499** | **52.67** |
 
 ### Vector — `sift-128-euclidean`
 
 #### Uncompressed (`f32`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
 | faiss | f32 | 1.0 | 9913.2 | 0.099 | 0.167 | 9551.2 | 0.102 | 0.165 | 0.302 | 13.12 |
 | hnswlib | f32 | 1.0 | 8998.1 | 0.101 | 0.258 | 5951.6 | 0.158 | 0.324 | 0.398 | 13.21 |
+| **benostreamdb** | **f32** | **0.997** | **1923.7** | **0.515** | **0.634** | **1109.1** | **0.894** | **1.115** | **0.995** | **37.24** |
 | pgvector | f32 | 1.0 | 993.3 | 0.997 | 1.61 | 985.2 | 0.998 | 1.59 | 5.311 | 29.23 |
 | weaviate | f32 | 1.0 | 932.7 | 1.066 | 1.375 | 866.8 | 1.153 | 1.546 | 3.993 | 10.24 |
 | qdrant | f32 | 1.0 | 854.5 | 1.145 | 1.588 | 586.2 | 1.266 | 2.674 | 0.908 | 10.24 |
+| opensearch | f32 | 0.9998 | 632.5 | 1.583 | 2.1 | 580.3 | 1.717 | 2.193 | 3.543 | 28.39 |
 | milvus | f32 | 1.0 | 598.8 | 1.624 | 2.465 | 470.8 | 2.065 | 2.969 | 8.616 | 10.24 |
 | lancedb | f32 | 1.0 | 369.7 | 2.663 | 3.487 | 339.3 | 2.781 | 4.087 | 0.741 | 23.86 |
-| opensearch | f32 | 0.9998 | 632.5 | 1.583 | 2.1 | 580.3 | 1.717 | 2.193 | 3.543 | 28.39 |
-| **benostreamdb** | f32 | 0.997 | 1923.7 | 0.515 | 0.634 | 1109.1 | 0.894 | 1.115 | 0.995 | 37.24 |
 
 #### Scalar-quantized, uniform 8-bit (`sq`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
+| faiss | sq | 0.9916 | 11190.6 | 0.091 | 0.115 | 10809.9 | 0.093 | 0.12 | 0.322 | 5.44 |
 | weaviate | sq | 1.0 | 905.7 | 1.094 | 1.574 | 828.1 | 1.196 | 1.636 | 4.036 | 2.56 |
 | qdrant | sq | 1.0 | 936.8 | 1.036 | 1.666 | 646.8 | 1.1 | 2.607 | 0.959 | 2.56 |
-| lancedb | sq | 1.0 | 313.9 | 3.152 | 4.038 | 301.1 | 3.178 | 4.125 | 0.691 | 16.18 |
-| faiss | sq | 0.9916 | 11190.6 | 0.091 | 0.115 | 10809.9 | 0.093 | 0.12 | 0.322 | 5.44 |
 | milvus | sq | 0.9916 | 632.1 | 1.534 | 2.396 | 502.8 | 1.932 | 2.794 | 8.789 | 10.24 |
+| lancedb | sq | 1.0 | 313.9 | 3.152 | 4.038 | 301.1 | 3.178 | 4.125 | 0.691 | 16.18 |
 
 #### TurboQuant, 8-bit polar lattice (`tq8`)
 
-| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
+| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | tq8 | 0.997 | 1301.5 | 0.761 | 0.971 | 611.3 | 1.608 | 2.005 | 1.313 | 29.56 |
+| **benostreamdb** | **tq8** | **0.997** | **1301.5** | **0.761** | **0.971** | **611.3** | **1.608** | **2.005** | **1.313** | **29.56** |
 
 ## 10. Competitor Configurations (frame of reference)
 

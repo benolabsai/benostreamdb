@@ -1128,8 +1128,9 @@ def generate_summary(
         "(pure graph beam-search returning candidate vector IDs: `Index QPS`, `Index p50`, `Index p99`) and "
         "**Row Retrieval** (end-to-end vector search plus columnar payload deserialization: `Row QPS`, `Row p50`, `Row p99`). "
         "For in-process engines like BenoStreamDB, full-row retrieval hydrates directly into zero-copy PyArrow RecordBatches "
-        "from Apache Iceberg Parquet files. Each dataset table is ordered by **Index Precision (`f32` first, compressed second)**, "
-        "then by **Recall > 0.95 (True first, False second)**, and finally by **Index QPS descending**."
+        "from Apache Iceberg Parquet files. Each dataset table is grouped by **Index Precision "
+        "(`f32` first, compressed second)** and ordered within each precision by "
+        "**Row QPS descending** — the full retrieval path, which is what an application actually gets."
     )
     sections.append("")
     sections.append(
@@ -1234,10 +1235,10 @@ def generate_summary(
             "configuration for the precision: where two-stage exact rescoring was also "
             "measured, the row shown is whichever of the two achieved the higher recall.\n"
             ">\n"
-            "> **Table Sort Order** (the two annotated columns):\n"
-            "> 1. **Recall@k:** descending.\n"
-            "> 2. **Row QPS:** descending, the tie-break between rows with equal recall. "
-            "This is the full retrieval path, so the last key ranks what an application actually gets."
+            "> **Table Sort Order**: **Row QPS descending** (the annotated column). "
+            "This is the full retrieval path — search plus payload hydration — so it ranks what an "
+            "application actually gets. Recall is reported alongside but is no longer a sort key, "
+            "because a row with high recall that is 10x slower is not the row a reader should see first."
         )
         sections.append("")
 
@@ -1280,12 +1281,15 @@ def generate_summary(
                     best[_cell(r)] = r
 
             def _sort_key(r):
-                # Recall descending, then Row QPS descending -- the full retrieval path,
-                # not the index-only rate, because that is what an application
-                # experiences. Engine name last so the order is total and a re-render
-                # is byte-stable.
-                rec, row_qps = _rank(r)
-                return (-rec, -row_qps, r.get("engine", ""))
+                # Row QPS descending only -- the full retrieval path (search plus
+                # payload hydration), not the index-only rate, because that is what an
+                # application actually experiences. Recall is still reported in its own
+                # column but does not order the table. A row with no full-row
+                # measurement sorts last. Engine name is the final key so the order is
+                # total and a re-render is byte-stable.
+                row_qps = _row_qps(r)
+                q = float(row_qps) if isinstance(row_qps, (int, float)) else float("-inf")
+                return (-q, r.get("engine", ""))
 
             # Group by the precision value itself, not by "compressed or not": `sq` is a
             # uniform 8-bit code and `tq8` is an 8-bit polar-lattice encoding, so ranking
@@ -1310,20 +1314,35 @@ def generate_summary(
                 sections.append(f"#### {title}")
                 sections.append("")
                 sections.append(
-                    "| Engine | Index Precision | Recall@k ▼ | Index QPS | Index p50 (ms) | "
+                    "| Engine | Index Precision | Recall@k | Index QPS | Index p50 (ms) | "
                     "Index p99 (ms) | Row QPS ▼ | Row p50 (ms) | Row p99 (ms) | Build (s) | Index (MB) |"
                 )
                 sections.append("|---|---|---|---|---|---|---|---|---|---|---|")
                 for r in sorted(rows, key=_sort_key):
                     eng = r.get("engine", "")
                     idx = _get_idx_prec(r)
-                    sections.append(
-                        f"| {_eng_label(eng)} | {idx} | "
-                        f"{r.get('recall_at_k')} | {_index_qps(r)} | "
-                        f"{_index_p50(r)} | {_index_p99(r)} | "
-                        f"{_row_qps(r)} | {_row_p50(r)} | {_row_p99(r)} | "
-                        f"{r.get('build_s')} | {r.get('index_mb')} |"
-                    )
+                    cells = [
+                        _eng_label(eng),
+                        idx,
+                        r.get("recall_at_k"),
+                        _index_qps(r),
+                        _index_p50(r),
+                        _index_p99(r),
+                        _row_qps(r),
+                        _row_p50(r),
+                        _row_p99(r),
+                        r.get("build_s"),
+                        r.get("index_mb"),
+                    ]
+                    # Bold the entire BenoStreamDB row, not just the engine cell: the
+                    # numbers are what the reader compares against the competitors, and
+                    # bolding only the name left them visually detached from it.
+                    if str(eng).startswith("benostreamdb"):
+                        cells = [
+                            f"**{str(c).strip('*')}**" if i == 0 else f"**{c}**"
+                            for i, c in enumerate(cells)
+                        ]
+                    sections.append("| " + " | ".join(str(c) for c in cells) + " |")
                 sections.append("")
 
     if graph:
