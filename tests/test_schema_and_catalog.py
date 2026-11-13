@@ -111,9 +111,14 @@ def test_jdbc_catalog_operations():
         # Now, table_exists should return True!
         assert catalog.table_exists("my_namespace", "my_table") is True
 
-        # load_table should load it successfully and return a PyTable!
+        # load_table returns the *raw* Rust table. `benostreamdb.Table` is the
+        # Python wrapper from `__init__.py` (it stores the Rust table as
+        # `_inner`), so the two are different classes and
+        # `isinstance(table, bsdb.Table)` can never be true. There is also no
+        # `bsdb.PyTable` -- the Rust struct is `PyTable` but the pyclass is
+        # registered as `Table` in the extension module.
         table = catalog.load_table("my_namespace", "my_table")
-        assert isinstance(table, bsdb.PyTable)
+        assert isinstance(table, bsdb.benostreamdb.Table)
         assert table.table_uri() == f"file://{test_loc}"
     finally:
         # Clean up
