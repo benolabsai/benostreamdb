@@ -218,6 +218,46 @@ if grep -nE 'Developer Preview \(v[0-9]+\.[0-9]+\.[0-9]+\)' "${REPO_ROOT}/README
 fi
 echo "PASS: README banner is version-free."
 
+# 13. Manifest TOML validity
+#
+# Every tool that walks the tree parses these manifests itself: pytest during
+# rootdir discovery, maturin for the build backend, pip for resolution. A stray
+# byte on line 1 of a pyproject therefore fails inside a test run or a wheel
+# build, far from the edit that caused it. 0.16.1 shipped exactly that defect,
+# with three manifests prefixed by a fragment of shell text, and the failure
+# surfaced as "Expected '=' after a key" from pytest. Parse them here instead.
+echo ""
+echo "--> Checking that connector manifests parse as TOML..."
+if ! "${PY_BIN}" - <<'PY'
+import pathlib, sys, tomllib
+
+bad = []
+for p in ["pyproject.toml", "dbt-benostreamdb/pyproject.toml",
+          "contrib/benostreamdb-search/pyproject.toml",
+          "server/flight_sql/pyproject.toml",
+          "contrib/benostreamdb-mcp/pyproject.toml"]:
+    path = pathlib.Path(p)
+    if not path.exists():
+        bad.append(f"{p}: missing")
+        continue
+    try:
+        tomllib.loads(path.read_text())
+    except Exception as exc:
+        bad.append(f"{p}: {exc}")
+    else:
+        first = path.read_text().splitlines()[0] if path.read_text() else ""
+        if first != "[build-system]":
+            bad.append(f'{p}: line 1 is {first!r}, expected "[build-system]"')
+if bad:
+    print("\n".join("  - " + b for b in bad))
+    sys.exit(1)
+print("PASS: connector manifests parse and start at [build-system].")
+PY
+then
+    echo "FAIL: malformed connector manifest (see above)."
+    exit 1
+fi
+
 # 11. Git Status & Uncommitted Check
 echo ""
 echo "--> [10/10] Checking for unformatted or uncommitted modifications..."

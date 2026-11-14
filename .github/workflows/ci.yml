@@ -121,10 +121,24 @@ jobs:
           m = re.search(r'benostreamdb>=([^",\s]+)', (root / "dbt-benostreamdb/pyproject.toml").read_text())
           if not m or m.group(1) != v:
               errs.append("dbt-benostreamdb/pyproject.toml: benostreamdb>= floor is not " + v)
+          # Every tool that walks the tree parses these files itself: pytest for
+          # rootdir discovery, maturin for the build backend, pip for resolution.
+          # A stray byte on line 1 therefore fails somewhere far from the edit, so
+          # validate the manifests directly while the signal is still local.
+          import tomllib
+          for p in ["pyproject.toml", "dbt-benostreamdb/pyproject.toml",
+                    "contrib/benostreamdb-search/pyproject.toml",
+                    "server/flight_sql/pyproject.toml",
+                    "contrib/benostreamdb-mcp/pyproject.toml"]:
+              try:
+                  tomllib.loads((root / p).read_text())
+              except Exception as e:
+                  errs.append(p + ": not valid TOML: " + str(e))
           if errs:
               print("\n".join("  - " + e for e in errs))
               sys.exit(1)
           print("all derived version copies match")
+          print("all connector manifests parse as TOML")
           PY
 
   #########################
