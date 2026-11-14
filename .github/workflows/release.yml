@@ -810,6 +810,29 @@ jobs:
             fi
           done
           exit "$failed"
+      # The connector matrices publish band-keyed artefacts
+      # (`spark-benostream-spark-4.0-java-17.jar`, `trino-benostream-484.zip`) —
+      # names that carry the *tooling* version, not ours. The download page offers
+      # one default build per connector under a name that carries the release
+      # version, so derive those aliases here and the two can never disagree.
+      - name: Add version-stamped connector aliases
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for pair in \
+            "spark-benostream-spark-4.0-java-17.jar:spark-benostream-${version}.jar" \
+            "trino-benostream-484.zip:trino-benostream-${version}.zip"; do
+            src="${pair%%:*}"
+            dst="${pair##*:}"
+            if [ -f "connector-artifacts/${src}" ]; then
+              cp "connector-artifacts/${src}" "connector-artifacts/${dst}"
+              echo "alias: ${dst} -> ${src}"
+            else
+              echo "::warning::connector artifact ${src} missing; no ${dst} alias"
+            fi
+          done
+          ls -1 connector-artifacts | tail -10
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
