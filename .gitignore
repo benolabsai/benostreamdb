@@ -34,6 +34,8 @@ python/**/*.dylib
 .continue/
 .qwen/
 .agents/
+AGENTS.md
+.clinerules
 
 # ── Compiled native binaries / debug symbols ────────────────────────────────
 *.dylib

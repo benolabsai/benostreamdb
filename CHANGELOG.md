@@ -1,3 +1,26 @@
+## [0.16.1] - 2026-11-13
+
+### Fixed
+
+- **The published README still announced `Developer Preview (v0.15.1)`**
+  (`README.md`): a crate's README is frozen into the `.crate` tarball at publish
+  time — `benostreamdb-0.16.0.crate` really does contain the stale banner, and
+  PyPI's long description works the same way — so crates.io showed the previous
+  preview number on the 0.16.0 page with no way to edit it in place. The banner is
+  now version-free, and `scripts/pre_release_check.sh` fails the release if a
+  pinned `Developer Preview (vX.Y.Z)` reappears, so this cannot ship again.
+
+### Added
+
+- **Version-stamped connector aliases in GitHub releases**
+  (`.github/workflows/release.yml`): the connector matrices publish band-keyed
+  artefacts (`spark-benostream-spark-4.0-java-17.jar`, `trino-benostream-484.zip`)
+  whose names carry the *tooling* version, which is why the website's download page
+  had been pointing at files that never existed. The release job now derives
+  `spark-benostream-<version>.jar` and `trino-benostream-<version>.zip` from those
+  before the release is created, warning rather than failing if a source file is
+  renamed. The 0.16.0 release was backfilled with the same two aliases.
+
 ## [0.16.0] - 2026-11-13
 
 ### Added

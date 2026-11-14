@@ -202,6 +202,22 @@ if [[ -f "${REPO_ROOT}/tests/python/test_vector_string_conformance.py" ]]; then
 fi
 echo "PASS: Python regression tests passed."
 
+# 12. Published-README guard
+#
+# A crate's README is frozen into the .crate tarball at publish time and cannot be
+# edited afterwards, and PyPI behaves the same way for the long description. A
+# pinned "Developer Preview (vX.Y.Z)" banner therefore goes stale on crates.io the
+# moment the next release ships, and the only way to correct it is another release.
+echo ""
+echo "--> Checking that the README banner carries no pinned version..."
+if grep -nE 'Developer Preview \(v[0-9]+\.[0-9]+\.[0-9]+\)' "${REPO_ROOT}/README.md"; then
+    echo "FAIL: README.md pins a version in the Developer Preview banner."
+    echo "      Remove the number: the published README cannot be edited after a"
+    echo "      release, and the version already lives in CHANGELOG.md."
+    exit 1
+fi
+echo "PASS: README banner is version-free."
+
 # 11. Git Status & Uncommitted Check
 echo ""
 echo "--> [10/10] Checking for unformatted or uncommitted modifications..."
