@@ -7,7 +7,7 @@
 
 **Links:** [Docs](https://www.benostreamdb.org) · [Benchmarks](https://github.com/benolabsai/benostreamdb/blob/main/benchmarks/results/BENCHMARK_REPORT.md) · [Changelog](https://github.com/benolabsai/benostreamdb/blob/main/CHANGELOG.md) · [Beno Labs](https://www.benolabsai.com)
 
-> ⚠️ **Developer Preview (v0.15.1)**
+> ⚠️ **Developer Preview**
 > BenoStreamDB is an early-stage database engine intended for evaluation, benchmarking, and community feedback. 
 > - **API & Storage Mutability:** APIs, configuration schemas, and secondary index sidecar on-disk layouts may evolve between preview releases.
 > - **Workload Suitability:** Not yet recommended for irreplaceable production data or mission-critical workloads requiring enterprise high-availability SLAs. Always back up authoritative data and pin versions.
